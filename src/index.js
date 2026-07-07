@@ -415,6 +415,55 @@ function summarizeChannel(channel) {
   return channel.name ? `#${channel.name}` : `channel ${channel.id}`;
 }
 
+function normalizeMemberLookup(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function getMemberNames(member) {
+  const names = [
+    member.displayName,
+    member.nickname,
+    member.user?.username ?? member.username,
+    member.user?.globalName,
+  ];
+
+  return names.filter((name) => typeof name === "string" && name.trim());
+}
+
+function textReferencesMember(text, member) {
+  const lower = text.toLowerCase();
+  const compact = normalizeMemberLookup(text);
+
+  if (member.id && new RegExp(`<@!?${member.id}>`).test(text)) return true;
+
+  return getMemberNames(member).some((name) => {
+    const trimmed = name.trim().toLowerCase();
+    if (normalizeMemberLookup(trimmed).length < 3) return false;
+
+    return lower.includes(`@${trimmed}`)
+      || lower.includes(trimmed)
+      || compact.includes(normalizeMemberLookup(trimmed));
+  });
+}
+
+function findMemberByTextReference(message, text) {
+  let best = null;
+  let bestScore = 0;
+
+  for (const member of message.guild.members.cache.values()) {
+    if (member.user.bot) continue;
+    if (!textReferencesMember(text, member)) continue;
+
+    const score = Math.max(...getMemberNames(member).map((name) => normalizeMemberLookup(name).length));
+    if (score > bestScore) {
+      best = member;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
 function findMentionedMemberForPlan(message, text) {
   const mentionIds = [...text.matchAll(/<@!?(\d+)>/g)].map((match) => match[1]);
   for (const id of mentionIds) {
@@ -422,7 +471,9 @@ function findMentionedMemberForPlan(message, text) {
     if (member && !member.user.bot) return member;
   }
 
-  return message.mentions.members.find((member) => !member.user.bot) ?? message.mentions.members.first();
+  return message.mentions.members.find((member) => !member.user.bot)
+    ?? findMemberByTextReference(message, text)
+    ?? message.mentions.members.first();
 }
 
 function planLocalModerationTool(message) {
@@ -438,7 +489,7 @@ function planModerationToolFromText(message, rawText) {
   const normalized = normalizeText(text);
   const member = findMentionedMemberForPlan(message, text);
 
-  if (/^(ban|banish)\b/.test(normalized)) {
+  if (/\b(ban|banish)\b/.test(normalized) && !/\bsoft\s*ban\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to ban by mentioning them." };
     return {
       tool: "ban_member",
@@ -449,7 +500,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^soft\s*ban\b/.test(normalized)) {
+  if (/\bsoft\s*ban\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to softban by mentioning them." };
     return {
       tool: "softban_member",
@@ -461,7 +512,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^kick\b/.test(normalized)) {
+  if (/\bkick\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to kick by mentioning them." };
     return {
       tool: "kick_member",
@@ -472,7 +523,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(nickname|nick|rename)\b/.test(normalized)) {
+  if (/\b(nickname|nick|rename)\b/.test(normalized)) {
     if (!member) return { error: "Tell me whose nickname to change by mentioning them." };
     const nickname = extractNickname(text);
     if (!nickname) return { error: "Tell me the new nickname in quotes or after the mention." };
@@ -486,7 +537,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(add|give|grant)\b.*\brole\b|\brole\b.*\b(to|add|give|grant)\b/.test(normalized)) {
+  if (/\b(add|give|grant)\b.*\brole\b|\brole\b.*\b(to|add|give|grant)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who should get the role by mentioning them." };
     const role = findRoleByNameOrMention(message, text);
     if (!role) return { error: "Tell me which role to add by mentioning it or quoting its name." };
@@ -501,7 +552,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(remove|take)\b.*\brole\b|\brole\b.*\b(from|remove|take)\b/.test(normalized)) {
+  if (/\b(remove|take)\b.*\brole\b|\brole\b.*\b(from|remove|take)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who should lose the role by mentioning them." };
     const role = findRoleByNameOrMention(message, text);
     if (!role) return { error: "Tell me which role to remove by mentioning it or quoting its name." };
@@ -516,7 +567,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(timeout|mute)\b/.test(normalized)) {
+  if (/\b(timeout|mute)\b/.test(normalized) && !/\b(untimeout|unmute|remove timeout|remove mute)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to timeout by mentioning them." };
     const durationMs = Math.min(parseDurationMs(text), 28 * 24 * 60 * 60 * 1000);
     return {
@@ -529,7 +580,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(disconnect|voice kick)\b/.test(normalized)) {
+  if (/\b(disconnect|voice kick)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to disconnect by mentioning them." };
     return {
       tool: "disconnect_member",
@@ -540,7 +591,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^move\b/.test(normalized)) {
+  if (/\bmove\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to move by mentioning them." };
     const channel = findVoiceChannelByNameOrMention(message, text);
     if (!channel) return { error: "Tell me which voice channel to move them to." };
@@ -555,7 +606,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(untimeout|unmute|remove timeout|remove mute)\b/.test(normalized)) {
+  if (/\b(untimeout|unmute|remove timeout|remove mute)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to remove timeout from by mentioning them." };
     return {
       tool: "untimeout_member",
@@ -566,7 +617,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(warn|warning)\b/.test(normalized)) {
+  if (/\b(warn|warning)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to warn by mentioning them." };
     return {
       tool: "warn_member",
@@ -577,7 +628,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(slowmode|set slowmode)\b/.test(normalized)) {
+  if (/\b(slowmode|set slowmode)\b/.test(normalized)) {
     const channel = getTextChannelTarget(message, text);
     if (!channel || !("setRateLimitPerUser" in channel)) return { error: "I can only set slowmode in a text channel." };
     const seconds = parseSlowmodeSeconds(text);
@@ -592,7 +643,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(lock|lockdown)\b/.test(normalized)) {
+  if (/\b(lock|lockdown)\b/.test(normalized)) {
     const channel = getTextChannelTarget(message, text);
     if (!channel || !("permissionOverwrites" in channel)) return { error: "I can only lock a guild text channel." };
     return {
@@ -605,7 +656,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(unlock|open channel)\b/.test(normalized)) {
+  if (/\b(unlock|open channel)\b/.test(normalized)) {
     const channel = getTextChannelTarget(message, text);
     if (!channel || !("permissionOverwrites" in channel)) return { error: "I can only unlock a guild text channel." };
     return {
@@ -618,7 +669,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^delete channel\b/.test(normalized)) {
+  if (/\bdelete channel\b/.test(normalized)) {
     const channel = findChannelByNameOrMention(message, text);
     if (!channel) return { error: "I could not find that channel." };
     return {
@@ -630,7 +681,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(delete|purge)\b/.test(normalized) && /<@!?\d+>/.test(normalized) && /\bmessages?\b/.test(normalized)) {
+  if (/\b(delete|purge)\b/.test(normalized) && (/<@!?\d+>/.test(normalized) || member) && /\bmessages?\b/.test(normalized)) {
     if (!member) return { error: "Tell me whose messages to delete by mentioning them." };
     const count = parseMessageCount(text);
     return {
@@ -644,7 +695,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  const purgeMatch = normalized.match(/^(purge|delete)\s+(\d{1,2})(\s+messages?)?/);
+  const purgeMatch = normalized.match(/\b(purge|delete)\s+(\d{1,2})(\s+messages?)?/);
   if (purgeMatch) {
     const count = Math.max(1, Math.min(Number(purgeMatch[2]), 99));
     return {
@@ -656,7 +707,7 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  if (/^(create|make|new)\b.*\b(text\s+)?channel\b/.test(normalized)) {
+  if (/\b(create|make|new)\b.*\b(text\s+)?channel\b/.test(normalized)) {
     const channelName = extractNewChannelName(text);
     if (!channelName) return { error: "Tell me the channel name in quotes." };
     return {
@@ -776,6 +827,10 @@ async function collectRecentMessages(message) {
 
 async function collectServerContext(message) {
   const mentioned = getMentionContext(message);
+  const memberCandidates = message.guild.members.cache
+    .filter((member) => !member.user.bot)
+    .map(summarizeMember)
+    .slice(0, 100);
   const channels = message.guild.channels.cache
     .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)
     .sort((a, b) => a.rawPosition - b.rawPosition)
@@ -802,12 +857,33 @@ async function collectServerContext(message) {
     mentionedMembers: [...(message.mentions.members?.values() ?? [])]
       .filter((member) => !member.user.bot)
       .map(summarizeMember),
+    memberCandidates,
     mentionedChannels: mentioned.channels,
     mentionedRoles: mentioned.roles,
     availableChannels: channels,
     availableRoles: roles,
     recentMessages: await collectRecentMessages(message),
   };
+}
+
+function resolveMemberForPlan(message, plan, allowedMembers) {
+  const targetId = String(plan.targetId ?? "");
+  const allowed = allowedMembers.find((candidate) => candidate.id === targetId);
+  if (allowed) return allowed;
+
+  const cached = targetId ? message.guild.members.cache.get(targetId) : null;
+  if (cached && !cached.user.bot && textReferencesMember(message.content, cached)) {
+    return summarizeMember(cached);
+  }
+
+  const targetName = typeof plan.targetName === "string" ? plan.targetName.trim() : "";
+  if (targetName) {
+    const named = findMemberByTextReference(message, targetName);
+    if (named) return summarizeMember(named);
+  }
+
+  const referenced = findMemberByTextReference(message, message.content);
+  return referenced ? summarizeMember(referenced) : null;
 }
 
 function validateAiPlan(message, plan, serverContext = null) {
@@ -839,8 +915,8 @@ function validateAiPlan(message, plan, serverContext = null) {
     "delete_user_messages",
   ].includes(tool.name)) {
     const allowedMembers = context.members ?? context.mentionedMembers ?? [];
-    const member = allowedMembers.find((candidate) => candidate.id === String(plan.targetId));
-    if (!member) return { error: "Mention the member so I can target the right person." };
+    const member = resolveMemberForPlan(message, plan, allowedMembers);
+    if (!member) return { error: "I know the action, but I could not resolve the member. Use a real Discord mention or their exact server name." };
 
     const result = {
       ...base,
@@ -948,11 +1024,11 @@ async function makePlannerMessages(message) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|create_text_channel\",\"targetId\":\"member id when needed\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"channelName\":\"new channel name when needed\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
-        "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|create_text_channel\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"channelName\":\"new channel name when needed\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
         "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member and move_member for voice moderation, create_text_channel for new text channels, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
-        "Member-targeting tools require a mentioned member.",
+        "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
         "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
         "Every returned tool is only a plan. Duck will show an Administrator-only confirmation prompt before execution.",
         "If the request is not a moderation action, return {\"tool\":\"none\"}.",
@@ -1003,6 +1079,7 @@ function makePlannerResponseFormat(kind) {
               ],
             },
             targetId: { type: "string" },
+            targetName: { type: "string" },
             channelId: { type: "string" },
             roleId: { type: "string" },
             channelName: { type: "string" },
@@ -1525,9 +1602,23 @@ async function cancelAction(interaction, actionId) {
   await interaction.update({ content: "Cancelled. I did not run the moderation tool.", components: [] });
 }
 
-function makeDuckHelp() {
+function makeDuckHelp(content = "") {
+  const normalized = normalizeText(content);
+
+  if (/^(hey|hi|hello|yo|sup)\b/.test(normalized)) {
+    return [
+      "Hey. I am here.",
+      "Give me a moderation request like `duck warn @user spam` or `duck timeout @user 10m flooding`.",
+      "I only prepare actions. An Administrator must confirm before I do anything.",
+    ].join("\n");
+  }
+
+  if (/\b(joking|jk|nevermind|never mind|cancel|ignore|nah)\b/.test(normalized)) {
+    return "Got it. I will not do anything unless there is a planned action and an Administrator confirms it.";
+  }
+
   return [
-    "Duck is online. Mention me, reply to me, or say `duck` with a moderation request.",
+    "I heard you, but I do not see a clear moderation action yet.",
     "Examples: `duck warn @user spam`, `duck timeout @user 10m flooding`, `duck purge 25`, `duck lock #general`.",
     "I only prepare actions. An Administrator must confirm before I do anything.",
   ].join("\n");
@@ -1557,9 +1648,9 @@ async function isReplyToDuck(message, client) {
 async function getDuckInvocation(message, client) {
   const botMention = new RegExp(`<@!?${client.user.id}>`, "g");
   const mentionedDuck = botMention.test(message.content);
-  const startsWithDuck = /^duck(?:\b|[\s,.:;!?-]|$)/i.test(message.content.trim());
+  const saysDuck = /\bduck\b/i.test(message.content);
   const repliedToDuck = await isReplyToDuck(message, client);
-  const invoked = mentionedDuck || startsWithDuck || repliedToDuck;
+  const invoked = mentionedDuck || saysDuck || repliedToDuck;
 
   if (!invoked) {
     return { invoked: false, content: message.content };
@@ -1567,7 +1658,7 @@ async function getDuckInvocation(message, client) {
 
   const content = message.content
     .replace(botMention, " ")
-    .replace(/^duck(?:\b|[\s,.:;!?-]|$)/i, " ")
+    .replace(/\bduck\b/i, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -1691,7 +1782,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!inConfiguredChannel && !invocation.invoked) return;
 
     if (invocation.invoked && !invocation.content) {
-      await message.reply({ content: makeDuckHelp(), allowedMentions: { repliedUser: false } });
+      await message.reply({ content: makeDuckHelp(invocation.content), allowedMentions: { repliedUser: false } });
       return;
     }
 
@@ -1702,7 +1793,7 @@ client.on(Events.MessageCreate, async (message) => {
     const plan = await planModerationRequest(planningMessage);
     if (!plan) {
       if (invocation.invoked) {
-        await message.reply({ content: makeDuckHelp(), allowedMentions: { repliedUser: false } });
+        await message.reply({ content: makeDuckHelp(invocation.content), allowedMentions: { repliedUser: false } });
       }
       return;
     }
