@@ -295,6 +295,17 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
+const UTILITY_COMMANDS = [
+  "`duck userinfo @user` / `duck whois @user`",
+  "`duck avatar @user`",
+  "`duck serverinfo`",
+  "`duck channelinfo #channel`",
+  "`duck roleinfo @role`",
+  "`duck warnings @user`",
+  "`duck ping`",
+  "`duck botinfo`",
+];
+
 const TOOL_REQUIREMENTS = {
   ban_member: PermissionsBitField.Flags.BanMembers,
   kick_member: PermissionsBitField.Flags.KickMembers,
@@ -3491,6 +3502,7 @@ function makeDuckHelp(content = "") {
 
   return [
     "I heard you, but I do not see a clear moderation action yet.",
+    makeUtilityHelp(),
     "Examples: `duck warn @user spam`, `duck timeout @user 10m flooding`, `duck purge 25`, `duck lock #general`.",
     "I only prepare actions. An Administrator must confirm before I do anything.",
   ].join("\n");
@@ -3581,6 +3593,215 @@ async function makeRecentHistoryResponse(message) {
     `Recent activity in #${targetChannel.name}:`,
     ...lines,
   ].join("\n");
+}
+
+function discordTimestamp(date) {
+  if (!date) return "unknown";
+  return `<t:${Math.floor(date.getTime() / 1000)}:f>`;
+}
+
+function formatBoolean(value) {
+  return value ? "yes" : "no";
+}
+
+function findUtilityMemberTarget(message, text, fallbackToRequester = true) {
+  const mentioned = message.mentions.members.first();
+  if (mentioned) return mentioned;
+
+  const named = findMemberByTextReference(message, text);
+  if (named) return named;
+
+  return fallbackToRequester ? message.member : null;
+}
+
+function channelTypeName(type) {
+  const names = {
+    [ChannelType.GuildText]: "text",
+    [ChannelType.GuildVoice]: "voice",
+    [ChannelType.GuildCategory]: "category",
+    [ChannelType.GuildAnnouncement]: "announcement",
+    [ChannelType.AnnouncementThread]: "announcement thread",
+    [ChannelType.PublicThread]: "public thread",
+    [ChannelType.PrivateThread]: "private thread",
+    [ChannelType.GuildStageVoice]: "stage voice",
+    [ChannelType.GuildForum]: "forum",
+    [ChannelType.GuildMedia]: "media",
+  };
+  return names[type] || `type ${type}`;
+}
+
+function formatMemberInfo(member) {
+  const warnings = getMemberWarnings(member.guild.id, member.id);
+  const roles = member.roles.cache
+    .filter((role) => role.id !== member.guild.id)
+    .sort((a, b) => b.position - a.position)
+    .map((role) => `@${role.name}`);
+  const roleText = roles.length ? roles.slice(0, 15).join(", ") : "none";
+  const extraRoles = roles.length > 15 ? ` (+${roles.length - 15} more)` : "";
+
+  return [
+    `User info for ${member.displayName}, ${member.user.username}`,
+    `ID: ${member.id}`,
+    `Mention: <@${member.id}>`,
+    `Bot: ${formatBoolean(member.user.bot)}`,
+    `Account created: ${discordTimestamp(member.user.createdAt)}`,
+    `Joined server: ${discordTimestamp(member.joinedAt)}`,
+    `Highest role: ${member.roles.highest?.id === member.guild.id ? "none" : `@${member.roles.highest.name}`}`,
+    `Roles (${roles.length}): ${roleText}${extraRoles}`,
+    `Stored warnings: ${warnings.length}`,
+    `Avatar: ${member.user.displayAvatarURL({ size: 1024 })}`,
+  ].join("\n");
+}
+
+function formatServerInfo(guild) {
+  const textChannels = guild.channels.cache.filter((channel) => channel.type === ChannelType.GuildText).size;
+  const voiceChannels = guild.channels.cache.filter((channel) => channel.type === ChannelType.GuildVoice).size;
+  const categories = guild.channels.cache.filter((channel) => channel.type === ChannelType.GuildCategory).size;
+
+  return [
+    `Server info for ${guild.name}`,
+    `ID: ${guild.id}`,
+    `Owner ID: ${guild.ownerId}`,
+    `Created: ${discordTimestamp(guild.createdAt)}`,
+    `Members: ${guild.memberCount}`,
+    `Channels: ${guild.channels.cache.size} total (${textChannels} text, ${voiceChannels} voice, ${categories} categories)`,
+    `Roles: ${guild.roles.cache.filter((role) => role.id !== guild.id).size}`,
+    `Boost tier: ${guild.premiumTier ?? 0}`,
+    `Boosts: ${guild.premiumSubscriptionCount ?? 0}`,
+    `Icon: ${guild.iconURL({ size: 1024 }) || "none"}`,
+  ].join("\n");
+}
+
+function formatChannelInfo(channel) {
+  const overwrites = "permissionOverwrites" in channel ? channel.permissionOverwrites.cache.size : 0;
+  const topic = "topic" in channel && channel.topic ? channel.topic : null;
+  const slowmode = "rateLimitPerUser" in channel ? channel.rateLimitPerUser : null;
+
+  const lines = [
+    `Channel info for ${channel.name ? `#${channel.name}` : channel.id}`,
+    `ID: ${channel.id}`,
+    `Type: ${channelTypeName(channel.type)}`,
+    `Created: ${discordTimestamp(channel.createdAt)}`,
+    `Category: ${channel.parent?.name ?? "none"}`,
+    `Position: ${channel.rawPosition ?? "unknown"}`,
+    `Permission overwrites: ${overwrites}`,
+  ];
+
+  if (slowmode != null) lines.push(`Slowmode: ${slowmode} second${slowmode === 1 ? "" : "s"}`);
+  if (topic) lines.push(`Topic: ${topic.slice(0, 500)}`);
+
+  return lines.join("\n");
+}
+
+function formatRoleInfo(role) {
+  const memberCount = role.guild.members.cache.filter((member) => member.roles.cache.has(role.id)).size;
+  const permissions = role.permissions.toArray();
+  const permissionText = permissions.length ? permissions.slice(0, 20).join(", ") : "none";
+  const extraPermissions = permissions.length > 20 ? ` (+${permissions.length - 20} more)` : "";
+
+  return [
+    `Role info for @${role.name}`,
+    `ID: ${role.id}`,
+    `Mention: <@&${role.id}>`,
+    `Created: ${discordTimestamp(role.createdAt)}`,
+    `Members: ${memberCount}`,
+    `Position: ${role.position}`,
+    `Color: ${role.hexColor}`,
+    `Hoisted: ${formatBoolean(role.hoist)}`,
+    `Mentionable: ${formatBoolean(role.mentionable)}`,
+    `Managed: ${formatBoolean(role.managed)}`,
+    `Permissions: ${permissionText}${extraPermissions}`,
+  ].join("\n");
+}
+
+function makeUtilityHelp() {
+  return [
+    "Utility commands:",
+    ...UTILITY_COMMANDS.map((item) => `- ${item}`),
+  ].join("\n");
+}
+
+async function makeUtilityResponse(message, text) {
+  const normalized = normalizeText(text);
+
+  if (/^(help|commands|tools|what can you do)\b/.test(normalized)) {
+    return [
+      makeUtilityHelp(),
+      "",
+      "Moderation examples:",
+      "- `duck warn @user spam`",
+      "- `duck timeout @user 10m flooding`",
+      "- `duck purge 25`",
+      "- `duck lock #general`",
+    ].join("\n");
+  }
+
+  if (/^(ping|latency)\b/.test(normalized)) {
+    return `Pong. Discord gateway ping: ${Math.round(client.ws.ping)}ms.`;
+  }
+
+  if (/^(botinfo|bot info|about duck|version)\b/.test(normalized)) {
+    return [
+      `Duck bot info`,
+      `Version: ${packageInfo.version}`,
+      `Commit: ${buildInfo.commit}`,
+      `Commit name: ${buildInfo.commitName}`,
+      `Branch: ${buildInfo.branch}`,
+      `Node: ${process.version}`,
+      `AI provider: ${process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "none")}`,
+    ].join("\n");
+  }
+
+  if (/\b(serverinfo|server info|guildinfo|guild info)\b/.test(normalized)) {
+    return formatServerInfo(message.guild);
+  }
+
+  if (/\b(userinfo|user info|whois|who is)\b/.test(normalized)) {
+    const member = findUtilityMemberTarget(message, text, true);
+    return formatMemberInfo(member);
+  }
+
+  if (/\b(avatar|pfp|profile picture)\b/.test(normalized)) {
+    const member = findUtilityMemberTarget(message, text, true);
+    return `${member.displayName}, ${member.user.username}'s avatar:\n${member.user.displayAvatarURL({ size: 1024 })}`;
+  }
+
+  if (/\b(channelinfo|channel info)\b/.test(normalized)) {
+    const targetText = text.replace(/\b(channelinfo|channel info|channel)\b/gi, " ").trim();
+    const channel = message.mentions.channels.first()
+      ?? findChannelByToolTarget(message, targetText)
+      ?? findChannelByNameOrMention(message, targetText)
+      ?? message.channel;
+    return formatChannelInfo(channel);
+  }
+
+  if (/\b(roleinfo|role info)\b/.test(normalized)) {
+    const targetText = text.replace(/\b(roleinfo|role info|role)\b/gi, " ").trim();
+    const role = message.mentions.roles.first()
+      ?? findRoleByToolTarget(message, targetText)
+      ?? findRoleByNameOrMention(message, targetText);
+    if (!role) return "Mention a role or use its exact name so I can show role info.";
+    return formatRoleInfo(role);
+  }
+
+  if (/^(warning|warnings|warns)\b|\b(view|show|list)\b.*\b(warning|warnings|warns)\b/.test(normalized)) {
+    if (!hasPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
+      return "You need Moderate Members permission to view stored warnings.";
+    }
+    const member = findUtilityMemberTarget(message, text, true);
+    return formatWarningsForMember(member, getMemberWarnings(message.guild.id, member.id));
+  }
+
+  return null;
+}
+
+async function sendMessageChunks(message, content) {
+  const chunks = splitDiscordLines(String(content ?? "").split(/\r?\n/));
+  const first = await message.reply({ content: chunks[0], allowedMentions: { repliedUser: false } });
+  for (const chunk of chunks.slice(1)) {
+    await message.channel.send({ content: chunk, allowedMentions: { repliedUser: false } }).catch(() => {});
+  }
+  return first;
 }
 
 function makeMessageWithContent(message, content) {
@@ -3709,8 +3930,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (interaction.commandName === "duck-tools") {
-        const lines = TOOL_DEFINITIONS
-          .map((tool) => `- \`${tool.name}\` (${tool.risk}): ${tool.description}`);
+        const lines = [
+          "Moderation tools:",
+          ...TOOL_DEFINITIONS.map((tool) => `- \`${tool.name}\` (${tool.risk}): ${tool.description}`),
+          "",
+          ...makeUtilityHelp().split("\n"),
+        ];
         const chunks = splitDiscordLines(lines);
         await interaction.reply({ content: chunks[0], ephemeral: true });
         for (const chunk of chunks.slice(1)) {
@@ -3779,6 +4004,16 @@ client.on(Events.MessageCreate, async (message) => {
       ? makeMessageWithContent(message, invocation.content)
       : message;
     const wantsToolPlan = isLikelyModerationRequest(planningMessage.content);
+
+    const utilityResponse = await makeUtilityResponse(planningMessage, planningMessage.content);
+    if (utilityResponse) {
+      await sendMessageChunks(message, utilityResponse);
+      logInfo("message.utility-response", {
+        messageId: message.id,
+        ms: elapsedMs(messageStartedAt),
+      });
+      return;
+    }
 
     const queueMessage = hasConfiguredAi()
       ? await message.reply({ content: getQueueMessage(), allowedMentions: { repliedUser: false } }).catch(() => null)
