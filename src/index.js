@@ -83,6 +83,32 @@ function elapsedMs(startedAt) {
   return Date.now() - startedAt;
 }
 
+function limitDiscordContent(content, maxLength = 1900) {
+  const text = String(content ?? "").trim();
+  if (!text) return "Duck has nothing to send.";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 20).trim()}...`;
+}
+
+function splitDiscordLines(lines, maxLength = 1900) {
+  const chunks = [];
+  let current = "";
+
+  for (const line of lines) {
+    const safeLine = limitDiscordContent(line, maxLength);
+    const next = current ? `${current}\n${safeLine}` : safeLine;
+    if (next.length > maxLength && current) {
+      chunks.push(current);
+      current = safeLine;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : ["Duck has nothing to send."];
+}
+
 function readGitValue(args) {
   try {
     return execFileSync("git", args, {
@@ -2538,7 +2564,7 @@ async function promptForConfirmation(message, action, options = {}) {
   };
 
   const payload = {
-    content: options.content ?? describeAction(pending),
+    content: limitDiscordContent(options.content ?? describeAction(pending)),
     embeds: options.useEmbed ? [makeActionEmbed(pending)] : [],
     components: makeConfirmationRows(actionId),
     allowedMentions: { repliedUser: false },
@@ -2877,9 +2903,10 @@ async function approveAction(source, actionId, client) {
 }
 
 async function sendApprovalResult(source, result, action) {
+  const safeResult = limitDiscordContent(result);
   if ("update" in source && source.isButton?.()) {
     try {
-      await source.update({ content: result, embeds: [], components: [] });
+      await source.update({ content: safeResult, embeds: [], components: [] });
       return;
     } catch (err) {
       logWarn("moderation.result-update-failed", {
@@ -2891,9 +2918,9 @@ async function sendApprovalResult(source, result, action) {
   }
 
   if ("reply" in source) {
-    await source.reply(result).catch(async () => {
+    await source.reply(safeResult).catch(async () => {
       if ("followUp" in source) {
-        await source.followUp({ content: result, ephemeral: true }).catch(() => {});
+        await source.followUp({ content: safeResult, ephemeral: true }).catch(() => {});
       }
     });
   }
@@ -3142,10 +3169,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (interaction.commandName === "duck-tools") {
-        const tools = TOOL_DEFINITIONS
-          .map((tool) => `- \`${tool.name}\` (${tool.risk}): ${tool.description}`)
-          .join("\n");
-        await interaction.reply({ content: tools, ephemeral: true });
+        const lines = TOOL_DEFINITIONS
+          .map((tool) => `- \`${tool.name}\` (${tool.risk}): ${tool.description}`);
+        const chunks = splitDiscordLines(lines);
+        await interaction.reply({ content: chunks[0], ephemeral: true });
+        for (const chunk of chunks.slice(1)) {
+          await interaction.followUp({ content: chunk, ephemeral: true });
+        }
         return;
       }
     }
