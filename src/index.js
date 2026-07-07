@@ -470,6 +470,15 @@ function getQueueMessage() {
   return process.env.DUCK_QUEUE_MESSAGE || "Duck is thinking...";
 }
 
+function getAiChatMaxTokens() {
+  return Math.max(64, Math.min(Number(process.env.AI_CHAT_MAX_TOKENS) || 700, 4000));
+}
+
+function shouldExcludeReasoning(config) {
+  if (/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "")) return false;
+  return config?.providerName === "OpenRouter" || /openrouter\.ai/i.test(config?.baseUrl || "");
+}
+
 function savePendingActions() {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(pendingActionsPath, JSON.stringify([...pendingActions.values()], null, 2));
@@ -584,6 +593,8 @@ function requireConfig() {
     contextRoleLimit: getAiContextRoleLimit(),
     contextMaxChars: getAiContextMaxChars(),
     contextMessageChars: getAiContextMessageChars(),
+    chatMaxTokens: getAiChatMaxTokens(),
+    excludeReasoning: !/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "true"),
     pendingActionTtlMs: getPendingActionTtlMs(),
   });
 
@@ -2098,6 +2109,11 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
       body.response_format = responseFormat;
     }
 
+    if (shouldExcludeReasoning({ providerName, baseUrl })) {
+      body.reasoning = { exclude: true };
+      body.include_reasoning = false;
+    }
+
     return fetch(url, {
       method: "POST",
       headers: {
@@ -2428,9 +2444,23 @@ async function chatWithOpenAiCompatible(message, config) {
   logDebug("ai.chat.request", {
     providerName: config.providerName,
     model: config.model,
+    maxTokens: getAiChatMaxTokens(),
+    excludeReasoning: shouldExcludeReasoning(config),
     messageId: message.id,
     channelId: message.channelId,
   });
+
+  const requestBody = {
+    model: config.model,
+    temperature: 0.4,
+    max_tokens: getAiChatMaxTokens(),
+    messages,
+  };
+
+  if (shouldExcludeReasoning(config)) {
+    requestBody.reasoning = { exclude: true };
+    requestBody.include_reasoning = false;
+  }
 
   const requestChat = () => fetch(url, {
     method: "POST",
@@ -2439,12 +2469,7 @@ async function chatWithOpenAiCompatible(message, config) {
       "Content-Type": "application/json",
       ...config.extraHeaders,
     },
-    body: JSON.stringify({
-      model: config.model,
-      temperature: 0.4,
-      max_tokens: 220,
-      messages,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   let response;
@@ -2489,27 +2514,6 @@ async function chatWithOpenAiCompatible(message, config) {
       finishReason: body.choices?.[0]?.finish_reason,
       ms: elapsedMs(startedAt),
     });
-
-    messages.push({
-      role: "user",
-      content: "Return a short visible final answer in message.content. Do not put the answer only in reasoning.",
-    });
-
-    try {
-      response = await requestChat();
-    } catch (err) {
-      logError("ai.chat.retry-request-failed", err, {
-        providerName: config.providerName,
-        model: config.model,
-        ms: elapsedMs(startedAt),
-      });
-    }
-
-    if (response?.ok) {
-      body = await response.json();
-      choiceMessage = body.choices?.[0]?.message;
-      content = extractAiTextContent(choiceMessage);
-    }
   }
 
   logDebug("ai.chat.result", {

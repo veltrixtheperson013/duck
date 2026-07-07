@@ -170,6 +170,8 @@ Common tool choices:
      "AI_CONTEXT_CHANNEL_LIMIT": "250",
      "AI_CONTEXT_ROLE_LIMIT": "250",
      "AI_CONTEXT_CACHE_TTL_MS": "15000",
+     "AI_CHAT_MAX_TOKENS": "700",
+     "AI_EXCLUDE_REASONING": "true",
      "PENDING_ACTION_TTL_MS": "1800000",
      "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
      "DUCK_DEBUG": "true",
@@ -193,6 +195,8 @@ Common tool choices:
    Duck compacts context before model calls so large servers do not overload smaller/free models with too much prompt text.
    Private channel message history is only included when the requester has Administrator and Duck has permission to view/read that channel.
    Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
+   Chat response size is controlled by `AI_CHAT_MAX_TOKENS`; the default is `700`.
+   OpenRouter reasoning output is excluded by default with `AI_EXCLUDE_REASONING=true` so reasoning models return visible chat content instead of only an internal `reasoning` field.
    Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
    Debug logging is on by default. Set `DUCK_DEBUG=false` only when you want quieter logs. `DUCK_DEBUG_AI_BODY` can log model output snippets, but should stay `false` unless you are actively debugging.
@@ -268,6 +272,8 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "AI_CONTEXT_CHANNEL_LIMIT": "250",
   "AI_CONTEXT_ROLE_LIMIT": "250",
   "AI_CONTEXT_CACHE_TTL_MS": "15000",
+  "AI_CHAT_MAX_TOKENS": "700",
+  "AI_EXCLUDE_REASONING": "true",
   "PENDING_ACTION_TTL_MS": "1800000",
   "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
   "DUCK_DEBUG": "true",
