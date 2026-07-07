@@ -411,6 +411,10 @@ function savePendingActions() {
   logDebug("pending-actions.saved", { count: pendingActions.size });
 }
 
+function getActionRequestChannelId(action) {
+  return action.requestChannelId || action.channelId;
+}
+
 function schedulePendingExpiry(action) {
   if (pendingExpiryTimers.has(action.id)) {
     clearTimeout(pendingExpiryTimers.get(action.id));
@@ -419,11 +423,17 @@ function schedulePendingExpiry(action) {
   const expiresAt = action.expiresAt ?? action.createdAt + getPendingActionTtlMs();
   const delay = Math.max(0, expiresAt - Date.now());
   const timer = setTimeout(() => {
-    logInfo("pending-action.expired", { actionId: action.id, tool: action.tool, channelId: action.channelId });
+    const requestChannelId = getActionRequestChannelId(action);
+    logInfo("pending-action.expired", {
+      actionId: action.id,
+      tool: action.tool,
+      requestChannelId,
+      targetChannelId: action.channelId,
+    });
     pendingActions.delete(action.id);
     pendingExpiryTimers.delete(action.id);
-    if (pendingByChannel.get(action.channelId) === action.id) {
-      pendingByChannel.delete(action.channelId);
+    if (pendingByChannel.get(requestChannelId) === action.id) {
+      pendingByChannel.delete(requestChannelId);
     }
     savePendingActions();
   }, delay);
@@ -435,7 +445,7 @@ function rebuildPendingByChannel() {
   pendingByChannel.clear();
   const actions = [...pendingActions.values()].sort((a, b) => a.createdAt - b.createdAt);
   for (const action of actions) {
-    pendingByChannel.set(action.channelId, action.id);
+    pendingByChannel.set(getActionRequestChannelId(action), action.id);
   }
 }
 
@@ -449,7 +459,7 @@ function loadPendingActions() {
 
     let skipped = 0;
     for (const action of saved) {
-      if (!action?.id || !action.channelId || !action.guildId) continue;
+      if (!action?.id || !action.guildId || !getActionRequestChannelId(action)) continue;
 
       const expiresAt = action.expiresAt ?? action.createdAt + ttl;
       if (expiresAt <= now) {
@@ -457,7 +467,7 @@ function loadPendingActions() {
         continue;
       }
 
-      const hydrated = { ...action, expiresAt };
+      const hydrated = { ...action, requestChannelId: getActionRequestChannelId(action), expiresAt };
       pendingActions.set(hydrated.id, hydrated);
       schedulePendingExpiry(hydrated);
     }
@@ -2690,7 +2700,7 @@ async function promptForConfirmation(message, action, options = {}) {
     id: actionId,
     guildId: message.guildId,
     requestedBy: message.author.id,
-    channelId: message.channelId,
+    requestChannelId: message.channelId,
     createdAt,
     expiresAt: createdAt + getPendingActionTtlMs(),
   };
@@ -2716,7 +2726,8 @@ async function promptForConfirmation(message, action, options = {}) {
     tool: action.tool,
     risk: action.risk,
     guildId: message.guildId,
-    channelId: message.channelId,
+    requestChannelId: message.channelId,
+    targetChannelId: action.channelId,
     requestedBy: message.author.id,
     promptId: prompt.id,
     ms: elapsedMs(startedAt),
@@ -3014,8 +3025,9 @@ async function approveAction(source, actionId, client) {
     clearTimeout(pendingExpiryTimers.get(actionId));
     pendingExpiryTimers.delete(actionId);
   }
-  if (pendingByChannel.get(action.channelId) === actionId) {
-    pendingByChannel.delete(action.channelId);
+  const requestChannelId = getActionRequestChannelId(action);
+  if (pendingByChannel.get(requestChannelId) === actionId) {
+    pendingByChannel.delete(requestChannelId);
   }
   savePendingActions();
   logInfo("moderation.approve.accepted", {
@@ -3086,8 +3098,9 @@ async function cancelAction(interaction, actionId) {
     clearTimeout(pendingExpiryTimers.get(actionId));
     pendingExpiryTimers.delete(actionId);
   }
-  if (pendingByChannel.get(action.channelId) === actionId) {
-    pendingByChannel.delete(action.channelId);
+  const requestChannelId = getActionRequestChannelId(action);
+  if (pendingByChannel.get(requestChannelId) === actionId) {
+    pendingByChannel.delete(requestChannelId);
   }
   savePendingActions();
   logInfo("moderation.cancelled", { actionId, tool: action.tool, memberId: member.id });
@@ -3145,8 +3158,9 @@ async function cancelLatestActionFromMessage(message) {
     clearTimeout(pendingExpiryTimers.get(actionId));
     pendingExpiryTimers.delete(actionId);
   }
-  if (pendingByChannel.get(action.channelId) === actionId) {
-    pendingByChannel.delete(action.channelId);
+  const requestChannelId = getActionRequestChannelId(action);
+  if (pendingByChannel.get(requestChannelId) === actionId) {
+    pendingByChannel.delete(requestChannelId);
   }
   savePendingActions();
 
