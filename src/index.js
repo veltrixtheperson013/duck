@@ -177,6 +177,11 @@ const TOOL_DEFINITIONS = [
     description: "Bulk delete recent messages in the current channel.",
   },
   {
+    name: "grep_messages",
+    risk: "medium",
+    description: "Search recent readable messages in the current or mentioned text channel for keywords.",
+  },
+  {
     name: "warn_member",
     risk: "medium",
     description: "Warn a mentioned server member, store the warning, and direct message them when possible.",
@@ -350,6 +355,7 @@ const TOOL_REQUIREMENTS = {
   timeout_member: PermissionsBitField.Flags.ModerateMembers,
   delete_channel: PermissionsBitField.Flags.ManageChannels,
   purge_messages: PermissionsBitField.Flags.ManageMessages,
+  grep_messages: PermissionsBitField.Flags.ReadMessageHistory,
   warn_member: PermissionsBitField.Flags.ModerateMembers,
   view_warnings: PermissionsBitField.Flags.ModerateMembers,
   clear_warnings: PermissionsBitField.Flags.ModerateMembers,
@@ -763,6 +769,12 @@ function parseMessageCount(text, fallback = 10) {
   return Math.max(1, Math.min(Number(match[1]), 99));
 }
 
+function parseGrepResultCount(text, fallback = 10) {
+  const match = text.match(/\b(?:limit|top|first|show)\s+(\d{1,2})\b/i) ?? text.match(/\b(\d{1,2})\s+(?:matches|results)\b/i);
+  if (!match) return fallback;
+  return Math.max(1, Math.min(Number(match[1]), 20));
+}
+
 function parseWarningClearCount(text) {
   if (/\b(all|every)\b/i.test(text)) return "all";
   const match = text.match(/\b(\d{1,3})\b/);
@@ -774,6 +786,23 @@ function extractQuotedName(text) {
   const quoted = text.match(/["']([^"']+)["']/);
   if (quoted) return quoted[1].trim();
   return null;
+}
+
+function extractGrepQuery(text) {
+  const quoted = extractQuotedName(text);
+  if (quoted) return limitDiscordContent(quoted, 120);
+
+  const match = text.match(/\b(?:grep|search|find|look\s+for)\b(?:\s+(?:messages?|chat|history))?(?:\s+(?:for|containing|with|about))?\s+(.+)$/i);
+  const raw = (match?.[1] ?? text)
+    .replace(/<#\d+>/g, " ")
+    .replace(/\b(?:in|from)\s+#?[a-z0-9-_]+\b/gi, " ")
+    .replace(/\b(?:limit|top|first|show)\s+\d{1,2}\b/gi, " ")
+    .replace(/\b\d{1,2}\s+(?:matches|results)\b/gi, " ")
+    .replace(/\b(?:grep|search|find|look\s+for|messages?|chat|history|for|containing|with|about|keyword|keywords)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return raw ? limitDiscordContent(raw, 120) : null;
 }
 
 function extractNickname(text) {
@@ -1112,8 +1141,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|lock|unlock|create|make|say|speak|send|post|announce)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|grep|search|find|lock|unlock|create|make|say|speak|send|post|announce)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -1382,6 +1411,24 @@ function planModerationToolFromText(message, rawText) {
       channelId: channel.id,
       channelName: channel.name,
       summary: `delete the channel "${channel.name}"`,
+    };
+  }
+
+  if (/\b(grep|search|find|look\s+for)\b/.test(normalized) && /\b(messages?|chat|history|keyword|keywords|containing|with|about)\b|<#\d+>/.test(normalized)) {
+    const channel = getTextChannelTarget(message, text);
+    if (!channel || !("messages" in channel)) return { error: "I can only search messages in a text channel." };
+    const query = extractGrepQuery(text);
+    if (!query) return { error: "Tell me which keyword or phrase to search for." };
+    const count = parseGrepResultCount(text);
+    return {
+      tool: "grep_messages",
+      risk: "medium",
+      channelId: channel.id,
+      channelName: channel.name,
+      query,
+      count,
+      reason: `Search recent messages for "${query}".`,
+      summary: `search recent messages in ${summarizeChannel(channel)} for "${query}"`,
     };
   }
 
@@ -2143,6 +2190,30 @@ function validateAiPlan(message, plan, serverContext = null) {
     };
   }
 
+  if (tool.name === "grep_messages") {
+    const targetChannelId = String(plan.channelId || message.channelId);
+    const channel = message.guild.channels.cache.get(targetChannelId)
+      ?? findChannelByToolTarget(message, plan.channelName || plan.targetName || "");
+    if (!channel?.isTextBased?.() || !("messages" in channel)) {
+      return { error: "Mention the text channel I should search, or use this in the channel to search." };
+    }
+
+    const rawQuery = plan.query || plan.keyword || plan.keywords || plan.search || plan.reason || "";
+    const query = typeof rawQuery === "string" ? limitDiscordContent(rawQuery.replace(/\s+/g, " ").trim(), 120) : "";
+    if (!query || query === "No reason provided.") return { error: "Tell me which keyword or phrase to search for." };
+
+    const count = Math.max(1, Math.min(Number(plan.count) || parseGrepResultCount(message.content), 20));
+    return {
+      ...base,
+      channelId: channel.id,
+      channelName: channel.name,
+      query,
+      count,
+      reason: `Search recent messages for "${query}".`,
+      summary: `search recent messages in ${channel.name ? `#${channel.name}` : `channel ${channel.id}`} for "${query}"`,
+    };
+  }
+
   if (tool.name === "delete_channel") {
     const targetText = plan.channelName || plan.targetName || "";
     const channel = String(plan.channelId || "").trim()
@@ -2291,9 +2362,9 @@ async function makePlannerMessages(message, providedContext = null) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|grep_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"query\":\"keyword or phrase when using grep_messages\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Use serverContext.currentMessage.replyTo when the user is replying to another message. It contains the referenced message text, channel, author, timestamp, and authorMember when available.",
@@ -2333,6 +2404,7 @@ function makePlannerResponseFormat(kind) {
                 "timeout_member",
                 "delete_channel",
                 "purge_messages",
+                "grep_messages",
                 "warn_member",
                 "view_warnings",
                 "clear_warnings",
@@ -2370,6 +2442,7 @@ function makePlannerResponseFormat(kind) {
             newName: { type: "string" },
             topic: { type: "string" },
             messageText: { type: "string" },
+            query: { type: "string" },
             nickname: { type: "string" },
             count: { type: "number" },
             durationMs: { type: "number" },
@@ -2725,10 +2798,10 @@ async function makeChatMessages(message) {
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
-        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, create_role, delete_role, or delete_channel.",
+        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, grep_messages, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, create_role, delete_role, or delete_channel.",
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
-        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}.",
+        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}, {{grep_messages::general|keyword::search request}}.",
         "Only use speak when the user gives the exact message Duck should send. If the user asks you to draft, write, make, or prepare an announcement, draft the text and ask for confirmation without a marker.",
         "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
         "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
@@ -2977,6 +3050,11 @@ const INLINE_TOOL_MAP = {
   purge: "purge_messages",
   purge_messages: "purge_messages",
   delete_messages: "purge_messages",
+  grep: "grep_messages",
+  grep_messages: "grep_messages",
+  search_messages: "grep_messages",
+  search: "grep_messages",
+  find_messages: "grep_messages",
   delete_user_messages: "delete_user_messages",
   slowmode: "set_slowmode",
   set_slowmode: "set_slowmode",
@@ -3049,7 +3127,7 @@ function parseInlineToolCall(message, content) {
     roleId: primaryTarget.match(/^<@&(\d+)>$/)?.[1],
   };
 
-  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic", "speak"].includes(tool)) {
+  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic", "speak", "grep_messages"].includes(tool)) {
     const channel = tool === "delete_channel"
       ? findExactChannelByToolTarget(message, primaryTarget)
       : findChannelByToolTarget(message, primaryTarget);
@@ -3068,6 +3146,11 @@ function parseInlineToolCall(message, content) {
 
   if (tool === "purge_messages" || tool === "delete_user_messages") {
     rawPlan.count = parseMessageCount(reason, parseMessageCount(message.content));
+  }
+  if (tool === "grep_messages") {
+    rawPlan.channelName = primaryTarget;
+    rawPlan.query = targetParts[1] ?? reason;
+    rawPlan.count = parseGrepResultCount(`${target} ${reason} ${message.content}`);
   }
   if (tool === "clear_warnings") rawPlan.count = parseWarningClearCount(`${target} ${reason} ${message.content}`);
   if (tool === "timeout_member") rawPlan.durationMs = parseDurationMs(`${message.content} ${reason}`);
@@ -3163,6 +3246,7 @@ function commandLabel(action) {
   if (action.tool === "timeout_member") return "Timeout";
   if (action.tool === "delete_channel") return "Delete Channel";
   if (action.tool === "purge_messages") return "Delete Messages";
+  if (action.tool === "grep_messages") return "Search Messages";
   if (action.tool === "warn_member") return "Warn";
   if (action.tool === "view_warnings") return "View Warnings";
   if (action.tool === "clear_warnings") return "Clear Warnings";
@@ -3245,6 +3329,7 @@ function makeActionEmbed(action) {
   if (action.newName) details.push(`New name: ${action.newName}`);
   if (action.topic) details.push(`Topic: ${action.topic}`);
   if (action.messageText) details.push(`Message: ${action.messageText}`);
+  if (action.query) details.push(`Query: ${action.query}`);
   if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
   if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
   if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
@@ -3269,6 +3354,7 @@ function describeAction(action) {
   if (action.roleName) lines.push(`Role: @${action.roleName}`);
   if (action.channelName && action.tool !== "delete_channel") lines.push(`Channel: ${action.channelName}`);
   if (action.messageText) lines.push(`Message: ${action.messageText}`);
+  if (action.query) lines.push(`Query: ${action.query}`);
 
   return lines.join("\n");
 }
@@ -3514,6 +3600,49 @@ async function executeAction(client, action, approver) {
 
     const deleted = await channel.bulkDelete(matches, true);
     return `I have deleted ${deleted.size} message${deleted.size === 1 ? "" : "s"}.`;
+  }
+
+  if (action.tool === "grep_messages") {
+    const channel = await guild.channels.fetch(action.channelId);
+    if (!channel?.isTextBased?.() || !("messages" in channel)) {
+      return "I can only search messages in a text channel.";
+    }
+
+    const permissions = channel.permissionsFor(botMember);
+    if (!permissions?.has(PermissionsBitField.Flags.ViewChannel) || !permissions.has(PermissionsBitField.Flags.ReadMessageHistory)) {
+      return "Duck cannot read message history in that channel.";
+    }
+
+    const query = String(action.query || "").trim();
+    if (!query) return "Tell me which keyword or phrase to search for.";
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const resultLimit = Math.max(1, Math.min(Number(action.count) || 10, 20));
+    const fetched = await channel.messages.fetch({ limit: 100 });
+    const matches = [...fetched.values()]
+      .filter((item) => {
+        const content = item.cleanContent.replace(/\s+/g, " ").toLowerCase();
+        return query.includes(" ")
+          ? content.includes(query.toLowerCase())
+          : terms.every((term) => content.includes(term));
+      })
+      .slice(0, resultLimit);
+
+    if (!matches.length) {
+      return `No recent matches for "${query}" in ${channel}.`;
+    }
+
+    const lines = matches.map((item, index) => {
+      const content = item.cleanContent
+        .replace(/\s+/g, " ")
+        .replace(/@/g, "@\\u200b")
+        .slice(0, 180);
+      return `${index + 1}. ${item.author.tag} at <t:${Math.floor(item.createdTimestamp / 1000)}:R>: ${content || "[no text]"} (${item.url})`;
+    });
+
+    return [
+      `Found ${matches.length} recent match${matches.length === 1 ? "" : "es"} for "${query}" in ${channel}:`,
+      ...lines,
+    ].join("\n");
   }
 
   if (action.tool === "delete_user_messages") {
