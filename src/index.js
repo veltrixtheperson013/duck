@@ -30,6 +30,10 @@ const pendingByChannel = new Map();
 const pendingExpiryTimers = new Map();
 const serverContextCache = new Map();
 const messageHistoryCache = new Map();
+const resourceFetchCache = new Map();
+const jsonFileCache = new Map();
+const pendingJsonWrites = new Map();
+let cacheMaintenanceTimer = null;
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
 let buildInfo = {
   commit: process.env.DUCK_COMMIT || process.env.COMMIT_SHA || process.env.GIT_COMMIT || "unknown",
@@ -433,47 +437,73 @@ function loadJsonConfig() {
 }
 
 function loadSettings() {
-  try {
-    if (!fs.existsSync(settingsPath)) return { guilds: {} };
-    return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  } catch {
-    return { guilds: {} };
-  }
+  const settings = loadJsonFile(settingsPath, { guilds: {} });
+  settings.guilds ??= {};
+  return settings;
 }
 
 function saveSettings(settings) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  saveJsonFile(settingsPath, settings);
 }
 
 function loadJsonFile(filePath, fallback) {
+  if (jsonFileCache.has(filePath)) return jsonFileCache.get(filePath);
+
   try {
-    if (!fs.existsSync(filePath)) return fallback;
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const loaded = fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, "utf8")) : fallback;
+    jsonFileCache.set(filePath, loaded);
+    return loaded;
   } catch {
+    jsonFileCache.set(filePath, fallback);
     return fallback;
   }
 }
 
-function saveJsonFile(filePath, data) {
+function writeJsonFileNow(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
-function loadWarnings() {
-  try {
-    if (!fs.existsSync(warningsPath)) return { guilds: {} };
-    const warnings = JSON.parse(fs.readFileSync(warningsPath, "utf8"));
-    warnings.guilds ??= {};
-    return warnings;
-  } catch {
-    return { guilds: {} };
+function getJsonWriteDebounceMs() {
+  return Math.max(0, Math.min(Number(process.env.DUCK_JSON_WRITE_DEBOUNCE_MS) || 500, 10_000));
+}
+
+function saveJsonFile(filePath, data, options = {}) {
+  jsonFileCache.set(filePath, data);
+  const debounceMs = options.immediate ? 0 : getJsonWriteDebounceMs();
+  const pending = pendingJsonWrites.get(filePath);
+  if (pending?.timer) clearTimeout(pending.timer);
+
+  if (debounceMs <= 0) {
+    writeJsonFileNow(filePath, data);
+    pendingJsonWrites.delete(filePath);
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    const latest = pendingJsonWrites.get(filePath)?.data ?? jsonFileCache.get(filePath);
+    writeJsonFileNow(filePath, latest);
+    pendingJsonWrites.delete(filePath);
+  }, debounceMs);
+  pendingJsonWrites.set(filePath, { data, timer });
+}
+
+function flushJsonWrites() {
+  for (const [filePath, pending] of pendingJsonWrites.entries()) {
+    if (pending.timer) clearTimeout(pending.timer);
+    writeJsonFileNow(filePath, pending.data);
+    pendingJsonWrites.delete(filePath);
   }
 }
 
+function loadWarnings() {
+  const warnings = loadJsonFile(warningsPath, { guilds: {} });
+  warnings.guilds ??= {};
+  return warnings;
+}
+
 function saveWarnings(warnings) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(warningsPath, JSON.stringify(warnings, null, 2));
+  saveJsonFile(warningsPath, warnings);
 }
 
 function getMemberWarnings(guildId, memberId) {
@@ -1671,7 +1701,7 @@ async function getReferencedMessageContext(message) {
     };
   }
 
-  const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
+  const botMember = await cachedBotMember(message.guild);
   if (!canIncludeChannelMessages(message, channel, botMember)) {
     return {
       id: reference.messageId,
@@ -1781,18 +1811,176 @@ async function getRecentChannelMessages(channel, limit, options = {}) {
     return cached.messages.slice(0, wanted);
   }
 
-  const fetched = await channel.messages.fetch({ limit: Math.min(100, Math.max(wanted, Math.min(getMessageCacheLimit(), 100))) });
-  const fetchedMessages = [...fetched.values()];
-  const messages = normalizeCachedMessages([...(cached?.messages ?? []), ...fetchedMessages]);
+  if (cached?.fetchPromise) {
+    await cached.fetchPromise;
+    const refreshed = messageHistoryCache.get(key);
+    if (refreshed?.messages?.length) return refreshed.messages.slice(0, wanted);
+  }
+
+  const fetchLimit = Math.min(100, Math.max(wanted, Math.min(getMessageCacheLimit(), 100)));
+  const fetchPromise = channel.messages.fetch({ limit: fetchLimit });
   messageHistoryCache.set(key, {
     channelId: channel.id,
     guildId: channel.guildId,
-    fetchedAt: now,
+    fetchedAt: cached?.fetchedAt ?? 0,
     touchedAt: now,
-    messages,
+    messages: cached?.messages ?? [],
+    fetchPromise,
   });
-  logDebug("message-cache.fetch", { guildId: channel.guildId, channelId: channel.id, wanted, fetched: fetchedMessages.length, cached: messages.length });
-  return messages.slice(0, wanted);
+
+  try {
+    const fetched = await fetchPromise;
+    const fetchedMessages = [...fetched.values()];
+    const messages = normalizeCachedMessages([...(cached?.messages ?? []), ...fetchedMessages]);
+    messageHistoryCache.set(key, {
+      channelId: channel.id,
+      guildId: channel.guildId,
+      fetchedAt: now,
+      touchedAt: now,
+      messages,
+    });
+    logDebug("message-cache.fetch", { guildId: channel.guildId, channelId: channel.id, wanted, fetched: fetchedMessages.length, cached: messages.length });
+    return messages.slice(0, wanted);
+  } catch (err) {
+    if (cached) {
+      messageHistoryCache.set(key, { ...cached, touchedAt: now });
+    } else {
+      messageHistoryCache.delete(key);
+    }
+    throw err;
+  }
+}
+
+function getResourceCacheTtlMs() {
+  return Math.max(5_000, Math.min(Number(process.env.DUCK_RESOURCE_CACHE_TTL_MS) || 60_000, 10 * 60 * 1000));
+}
+
+async function cachedResourceFetch(key, fallbackValue, fetcher) {
+  const now = Date.now();
+  const cached = resourceFetchCache.get(key);
+  if (cached?.value && cached.expiresAt > now) {
+    cached.touchedAt = now;
+    return cached.value;
+  }
+  if (cached?.promise) return cached.promise;
+  if (fallbackValue) {
+    resourceFetchCache.set(key, {
+      value: fallbackValue,
+      expiresAt: now + getResourceCacheTtlMs(),
+      touchedAt: now,
+    });
+    return fallbackValue;
+  }
+
+  const promise = Promise.resolve()
+    .then(fetcher)
+    .then((value) => {
+      resourceFetchCache.set(key, {
+        value,
+        expiresAt: Date.now() + getResourceCacheTtlMs(),
+        touchedAt: Date.now(),
+      });
+      return value;
+    })
+    .catch((err) => {
+      resourceFetchCache.delete(key);
+      throw err;
+    });
+  resourceFetchCache.set(key, { promise, touchedAt: now, expiresAt: now + getResourceCacheTtlMs() });
+  return promise;
+}
+
+function cachedGuild(guildId) {
+  const cached = client.guilds.cache.get(guildId);
+  return cachedResourceFetch(`guild:${guildId}`, cached, () => client.guilds.fetch(guildId));
+}
+
+function cachedBotMember(guild) {
+  return cachedResourceFetch(`member:${guild.id}:me`, guild.members.me, () => guild.members.fetchMe());
+}
+
+function cachedMember(guild, memberId) {
+  const cached = guild.members.cache.get(String(memberId));
+  return cachedResourceFetch(`member:${guild.id}:${memberId}`, cached, () => guild.members.fetch(memberId));
+}
+
+function cachedChannel(guild, channelId) {
+  const cached = guild.channels.cache.get(String(channelId));
+  return cachedResourceFetch(`channel:${guild.id}:${channelId}`, cached, () => guild.channels.fetch(channelId));
+}
+
+function cachedRole(guild, roleId) {
+  const cached = guild.roles.cache.get(String(roleId));
+  return cachedResourceFetch(`role:${guild.id}:${roleId}`, cached, () => guild.roles.fetch(roleId));
+}
+
+function getCacheSweepMs() {
+  return Math.max(30_000, Math.min(Number(process.env.DUCK_CACHE_SWEEP_MS) || 120_000, 30 * 60 * 1000));
+}
+
+function pruneMapToLimit(map, limit) {
+  if (map.size <= limit) return 0;
+  const removable = [...map.entries()]
+    .sort((a, b) => (a[1].touchedAt ?? a[1].fetchedAt ?? 0) - (b[1].touchedAt ?? b[1].fetchedAt ?? 0))
+    .slice(0, map.size - limit);
+  for (const [key] of removable) map.delete(key);
+  return removable.length;
+}
+
+function pruneRuntimeCaches() {
+  const now = Date.now();
+  let removedMessages = 0;
+  let removedResources = 0;
+  let removedContexts = 0;
+  const messageMaxAge = Math.max(getMessageCacheTtlMs() * 3, 60_000);
+  const resourceMaxAge = Math.max(getResourceCacheTtlMs() * 3, 60_000);
+
+  for (const [key, entry] of messageHistoryCache.entries()) {
+    if (now - Math.max(entry.touchedAt || 0, entry.fetchedAt || 0) > messageMaxAge) {
+      messageHistoryCache.delete(key);
+      removedMessages += 1;
+    }
+  }
+  removedMessages += pruneMapToLimit(messageHistoryCache, Math.max(10, Number(process.env.DUCK_MESSAGE_CACHE_MAX_CHANNELS) || 100));
+
+  for (const [key, entry] of resourceFetchCache.entries()) {
+    if (!entry.promise && now - (entry.touchedAt || 0) > resourceMaxAge) {
+      resourceFetchCache.delete(key);
+      removedResources += 1;
+    }
+  }
+  removedResources += pruneMapToLimit(resourceFetchCache, Math.max(50, Number(process.env.DUCK_RESOURCE_CACHE_MAX_ITEMS) || 500));
+
+  for (const [key, entry] of serverContextCache.entries()) {
+    if (entry.expiresAt <= now) {
+      serverContextCache.delete(key);
+      removedContexts += 1;
+    }
+  }
+
+  flushJsonWrites();
+  logDebug("cache.sweep", {
+    messageChannels: messageHistoryCache.size,
+    resources: resourceFetchCache.size,
+    contexts: serverContextCache.size,
+    removedMessages,
+    removedResources,
+    removedContexts,
+  });
+}
+
+function startCacheMaintenance() {
+  if (cacheMaintenanceTimer) return;
+  cacheMaintenanceTimer = setInterval(pruneRuntimeCaches, getCacheSweepMs());
+}
+
+function flushRuntimeStateAndExit(signal) {
+  try {
+    pruneRuntimeCaches();
+  } catch (err) {
+    logWarn("cache.shutdown-flush-failed", { signal, error: err?.message || String(err) });
+  }
+  process.exit(0);
 }
 
 function findHistoryChannelTarget(message, text) {
@@ -1848,7 +2036,7 @@ async function collectRecentMessages(message) {
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
   const maxMessageChars = getAiContextMessageChars();
   const seen = new Set();
-  const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
+  const botMember = await cachedBotMember(message.guild);
   const priorityChannels = getContextPriorityChannels(message);
   const candidates = [
     ...priorityChannels,
@@ -3498,8 +3686,8 @@ async function executeAction(client, action, approver) {
     channelId: action.channelId,
     approverId: approver.id,
   });
-  const guild = await client.guilds.fetch(action.guildId);
-  const botMember = await guild.members.fetchMe();
+  const guild = await cachedGuild(action.guildId);
+  const botMember = await cachedBotMember(guild);
   const needed = TOOL_REQUIREMENTS[action.tool];
 
   if (needed && !hasPermission(botMember, needed)) {
@@ -3509,7 +3697,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "ban_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     await member.ban({ reason: `Duck approved by ${approver.user.tag}: ${action.reason}` });
@@ -3519,7 +3707,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "kick_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     const displayName = member.displayName;
@@ -3529,7 +3717,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "softban_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     const displayName = member.displayName;
@@ -3543,7 +3731,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "timeout_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     await member.timeout(action.durationMs, `Duck approved by ${approver.user.tag}: ${action.reason}`);
@@ -3551,7 +3739,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "untimeout_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     await member.timeout(null, `Duck approved by ${approver.user.tag}: ${action.reason}`);
@@ -3559,7 +3747,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "warn_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const warning = `You were warned in ${guild.name}: ${action.reason}`;
     await member.send(warning).catch(() => null);
     const totalWarnings = addMemberWarning(guild.id, member.id, {
@@ -3573,12 +3761,12 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "view_warnings") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     return formatWarningsForMember(member, getMemberWarnings(guild.id, member.id));
   }
 
   if (action.tool === "clear_warnings") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const existingWarnings = getMemberWarnings(guild.id, member.id);
     const count = action.count === "all" ? existingWarnings.length : Math.max(1, Math.min(Number(action.count) || 0, 999));
     if (!existingWarnings.length) return `${member.displayName}, ${member.user.username} has no stored warnings to clear.`;
@@ -3589,7 +3777,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "set_nickname") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     await member.setNickname(action.nickname, `Duck approved by ${approver.user.tag}: ${action.reason}`);
@@ -3597,10 +3785,10 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "add_role" || action.tool === "remove_role") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    const role = await guild.roles.fetch(action.roleId);
+    const role = await cachedRole(guild, action.roleId);
     if (!role || role.managed || role.id === guild.id) return "I cannot use that role.";
 
     if (!canManageRole(botMember, role)) {
@@ -3617,7 +3805,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "disconnect_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
@@ -3626,8 +3814,8 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "move_member") {
-    const member = await guild.members.fetch(action.targetId);
-    const channel = await guild.channels.fetch(action.channelId);
+    const member = await cachedMember(guild, action.targetId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) return "I can only move members to a voice channel.";
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     const blockReason = memberActionBlockReason(action, botMember, member);
@@ -3637,7 +3825,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "voice_mute_member" || action.tool === "voice_unmute_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
@@ -3649,7 +3837,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "deafen_member" || action.tool === "undeafen_member") {
-    const member = await guild.members.fetch(action.targetId);
+    const member = await cachedMember(guild, action.targetId);
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
@@ -3661,17 +3849,19 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "delete_channel") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel) return `I could not find the channel "${action.channelName}".`;
     if (action.channelName && channel.name !== action.channelName) {
       return `I did not delete anything because the target channel changed from "${action.channelName}" to "${channel.name}".`;
     }
     await channel.delete(`Duck approved by ${approver.user.tag}`);
+    resourceFetchCache.delete(`channel:${guild.id}:${action.channelId}`);
+    invalidateChannelMessageCache(action.channelId, guild.id);
     return `I have deleted the channel "${action.channelName}".`;
   }
 
   if (action.tool === "purge_messages") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel?.isTextBased() || !("messages" in channel) || !("bulkDelete" in channel)) {
       return "I can only delete messages in a text channel.";
     }
@@ -3691,7 +3881,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "grep_messages") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel?.isTextBased?.() || !("messages" in channel)) {
       return "I can only search messages in a text channel.";
     }
@@ -3734,7 +3924,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "delete_user_messages") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel?.isTextBased() || !("messages" in channel) || !("bulkDelete" in channel)) {
       return "I can only delete user messages in a text channel.";
     }
@@ -3752,7 +3942,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "set_slowmode") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel || !("setRateLimitPerUser" in channel)) {
       return "I can only set slowmode in a text channel.";
     }
@@ -3762,7 +3952,7 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "lock_channel" || action.tool === "unlock_channel") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel || !("permissionOverwrites" in channel)) {
       return "I can only update permissions in a guild text channel.";
     }
@@ -3799,22 +3989,23 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "rename_channel") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel || !("setName" in channel)) return "I can only rename a guild channel.";
     const oldName = channel.name;
     await channel.setName(action.newName, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    resourceFetchCache.delete(`channel:${guild.id}:${action.channelId}`);
     return `I have renamed ${oldName} to ${action.newName}.`;
   }
 
   if (action.tool === "set_channel_topic") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel || !("setTopic" in channel)) return "I can only set topics in a text channel.";
     await channel.setTopic(action.topic, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return `I have updated the topic in ${channel}.`;
   }
 
   if (action.tool === "speak") {
-    const channel = await guild.channels.fetch(action.channelId);
+    const channel = await cachedChannel(guild, action.channelId);
     if (!channel?.isTextBased?.() || !("send" in channel)) return "I can only speak in a text channel.";
 
     const permissions = channel.permissionsFor(botMember);
@@ -3838,10 +4029,11 @@ async function executeAction(client, action, approver) {
   }
 
   if (action.tool === "delete_role") {
-    const role = await guild.roles.fetch(action.roleId);
+    const role = await cachedRole(guild, action.roleId);
     if (!canManageRole(botMember, role)) return "I cannot delete that role because it is managed, missing, or at/above Duck's highest role.";
     const roleName = role.name;
     await role.delete(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    resourceFetchCache.delete(`role:${guild.id}:${action.roleId}`);
     return `I have deleted @${roleName}.`;
   }
 
@@ -3854,7 +4046,7 @@ async function resolveApprover(interactionOrMessage) {
   }
 
   if (!interactionOrMessage.guild || !interactionOrMessage.author) return null;
-  return interactionOrMessage.guild.members.fetch(interactionOrMessage.author.id);
+  return cachedMember(interactionOrMessage.guild, interactionOrMessage.author.id);
 }
 
 async function approveAction(source, actionId, client) {
@@ -4068,7 +4260,7 @@ function wantsRecentHistory(message, text) {
 
 async function makeRecentHistoryResponse(message) {
   const targetChannel = findHistoryChannelTarget(message, message.content) ?? message.channel;
-  const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
+  const botMember = await cachedBotMember(message.guild);
 
   if (!targetChannel.isTextBased?.() || !("messages" in targetChannel)) {
     return "I can only summarize message history from text channels.";
@@ -4497,7 +4689,7 @@ function startKeepAliveServer() {
 async function sendLogMessage(guild, title, fields = {}) {
   const channelId = getEntryChannelConfig(guild.id).logChannelId;
   if (!channelId) return;
-  const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId).catch(() => null);
+  const channel = await cachedChannel(guild, channelId).catch(() => null);
   if (!channel?.isTextBased?.() || !("send" in channel)) return;
 
   const embed = new EmbedBuilder()
@@ -4520,7 +4712,7 @@ async function handleMemberJoin(member) {
   const announcementsUrl = entryConfig.announcementsUrl || "";
 
   if (welcomeChannelId) {
-    const welcomeChannel = member.guild.channels.cache.get(welcomeChannelId) ?? await member.guild.channels.fetch(welcomeChannelId).catch(() => null);
+    const welcomeChannel = await cachedChannel(member.guild, welcomeChannelId).catch(() => null);
     if (welcomeChannel?.isTextBased?.() && "send" in welcomeChannel) {
       await welcomeChannel.send({
         content: `Welcome <@${member.id}> to ${member.guild.name}.`,
@@ -4530,11 +4722,11 @@ async function handleMemberJoin(member) {
   }
 
   if (entryCategoryId && entryConfig.enabled) {
-    const botMember = member.guild.members.me ?? await member.guild.members.fetchMe();
+    const botMember = await cachedBotMember(member.guild);
     if (!hasPermission(botMember, PermissionsBitField.Flags.ManageChannels)) {
       logWarn("entry-channel.missing-permission", { guildId: member.guild.id, memberId: member.id });
     } else {
-      const owner = member.guild.members.cache.get(member.guild.ownerId) ?? await member.guild.members.fetch(member.guild.ownerId).catch(() => null);
+      const owner = await cachedMember(member.guild, member.guild.ownerId).catch(() => null);
       const permissionOverwrites = [
         { id: member.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
         { id: botMember.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
@@ -4579,7 +4771,7 @@ async function handleMemberJoin(member) {
 async function handleMemberRemove(member) {
   const welcomeChannelId = getEnvId("DUCK_WELCOME_CHANNEL_ID");
   if (welcomeChannelId) {
-    const channel = member.guild.channels.cache.get(welcomeChannelId) ?? await member.guild.channels.fetch(welcomeChannelId).catch(() => null);
+    const channel = await cachedChannel(member.guild, welcomeChannelId).catch(() => null);
     if (channel?.isTextBased?.() && "send" in channel) {
       await channel.send({
         content: `${member.user.username} has left the server.`,
@@ -4682,6 +4874,10 @@ async function registerCommands(client) {
 requireConfig();
 loadPendingActions();
 startKeepAliveServer();
+startCacheMaintenance();
+process.once("beforeExit", flushJsonWrites);
+process.once("SIGINT", () => flushRuntimeStateAndExit("SIGINT"));
+process.once("SIGTERM", () => flushRuntimeStateAndExit("SIGTERM"));
 
 const client = new Client({
   intents: [
