@@ -1251,6 +1251,51 @@ function canIncludeChannelMessages(message, channel, botMember) {
   return message.member?.permissions?.has(PermissionsBitField.Flags.Administrator);
 }
 
+function findHistoryChannelTarget(message, text) {
+  const mentioned = message.mentions.channels.find((channel) => channel.isTextBased?.() && "messages" in channel);
+  if (mentioned) return mentioned;
+
+  const normalizedText = normalizeMemberLookup(text);
+  if (!normalizedText) return null;
+
+  let best = null;
+  let bestScore = 0;
+  for (const channel of message.guild.channels.cache.values()) {
+    if (!channel.isTextBased?.() || !("messages" in channel) || !channel.name) continue;
+
+    const normalizedName = normalizeMemberLookup(channel.name);
+    if (normalizedName.length < 3) continue;
+
+    let score = 0;
+    if (normalizedText.includes(normalizedName)) score = normalizedName.length;
+    if (new RegExp(`(^|\\s|#)${channel.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s|[?.!,])`, "i").test(text)) {
+      score += 1000;
+    }
+
+    if (score > bestScore) {
+      best = channel;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= 3 ? best : null;
+}
+
+function getContextPriorityChannels(message) {
+  const channels = [
+    findHistoryChannelTarget(message, message.content),
+    message.channel,
+    ...message.mentions.channels.filter((channel) => channel.isTextBased?.() && "messages" in channel).values(),
+  ];
+
+  const seen = new Set();
+  return channels.filter((channel) => {
+    if (!channel || seen.has(channel.id)) return false;
+    seen.add(channel.id);
+    return true;
+  });
+}
+
 async function collectRecentMessages(message) {
   const startedAt = Date.now();
   const maxChannels = getAiContextMessageChannelLimit();
@@ -1258,10 +1303,11 @@ async function collectRecentMessages(message) {
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
   const seen = new Set();
   const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
+  const priorityChannels = getContextPriorityChannels(message);
   const candidates = [
-    message.channel,
+    ...priorityChannels,
     ...message.guild.channels.cache
-      .filter((channel) => channel.id !== message.channelId && channel.isTextBased?.() && "messages" in channel)
+      .filter((channel) => !priorityChannels.some((priority) => priority.id === channel.id) && channel.isTextBased?.() && "messages" in channel)
       .sort((a, b) => a.rawPosition - b.rawPosition)
       .values(),
   ];
@@ -1364,7 +1410,9 @@ async function collectRecentMessages(message) {
 async function collectServerContext(message) {
   const startedAt = Date.now();
   const cacheTtl = getServerContextCacheTtlMs();
-  const cacheKey = `${message.guildId}:${message.channelId}`;
+  const requesterScope = message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ? "admin" : "public";
+  const focusChannels = getContextPriorityChannels(message).map((channel) => channel.id).join(",");
+  const cacheKey = `${message.guildId}:${message.channelId}:${requesterScope}:${focusChannels}`;
   const cached = serverContextCache.get(cacheKey);
   if (cacheTtl > 0 && cached && cached.expiresAt > Date.now()) {
     logDebug("context.cache-hit", {
@@ -3063,20 +3111,42 @@ async function cancelLatestActionFromMessage(message) {
   return true;
 }
 
-function wantsRecentHistory(text) {
+function wantsRecentHistory(message, text) {
   const normalized = normalizeText(text);
-  return /\b(recent|last|pull up|show|summarize|summary)\b/.test(normalized)
-    && /\b(message|messages|chat|history|logs?)\b/.test(normalized);
+  const hasHistoryIntent = /\b(recent|last|pull up|show|summarize|summary|recap|catch me up)\b/.test(normalized);
+  const hasHistoryObject = /\b(message|messages|chat|history|logs?|channel)\b/.test(normalized);
+  const hasChannelTarget = Boolean(findHistoryChannelTarget(message, text));
+  return (
+    hasHistoryIntent && (hasHistoryObject || hasChannelTarget)
+  ) || /\b(what'?s going on|what is going on|what happened)\b/.test(normalized);
 }
 
 async function makeRecentHistoryResponse(message) {
-  const { recentMessages } = await collectRecentMessages(message);
-  const items = recentMessages
-    .filter((item) => item.channelId === message.channelId && item.id !== message.id && item.content)
-    .slice(0, 8);
+  const targetChannel = findHistoryChannelTarget(message, message.content) ?? message.channel;
+  const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
+
+  if (!targetChannel.isTextBased?.() || !("messages" in targetChannel)) {
+    return "I can only summarize message history from text channels.";
+  }
+
+  if (!canIncludeChannelMessages(message, targetChannel, botMember)) {
+    if (channelIsPrivate(targetChannel) && !message.member?.permissions?.has(PermissionsBitField.Flags.Administrator)) {
+      return `#${targetChannel.name} is private. I can only read private channel history when the requester has Administrator.`;
+    }
+    return `I cannot read message history in #${targetChannel.name}. Make sure Duck can view the channel and read message history.`;
+  }
+
+  const fetched = await targetChannel.messages.fetch({ limit: 25 });
+  const items = [...fetched.values()]
+    .filter((item) => item.id !== message.id && item.content?.trim())
+    .slice(0, 10)
+    .map((item) => ({
+      authorTag: item.author.tag,
+      content: item.cleanContent.replace(/\s+/g, " ").slice(0, 180),
+    }));
 
   if (!items.length) {
-    return "I do not have readable recent message history for this channel yet.";
+    return `I can read #${targetChannel.name}, but I do not see recent text messages to summarize yet.`;
   }
 
   const lines = items.map((item) => {
@@ -3084,7 +3154,10 @@ async function makeRecentHistoryResponse(message) {
     return `- ${item.authorTag}: ${content}`;
   });
 
-  return [`Recent messages in #${message.channel.name}:`, ...lines].join("\n");
+  return [
+    `Recent activity in #${targetChannel.name}:`,
+    ...lines,
+  ].join("\n");
 }
 
 function makeMessageWithContent(message, content) {
@@ -3295,7 +3368,7 @@ client.on(Events.MessageCreate, async (message) => {
       });
     }
 
-    if (wantsRecentHistory(planningMessage.content)) {
+    if (wantsRecentHistory(planningMessage, planningMessage.content)) {
       const content = await makeRecentHistoryResponse(message);
       logInfo("message.history-response", {
         messageId: message.id,
