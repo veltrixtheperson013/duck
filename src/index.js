@@ -474,6 +474,10 @@ function getAiChatMaxTokens() {
   return Math.max(64, Math.min(Number(process.env.AI_CHAT_MAX_TOKENS) || 700, 4000));
 }
 
+function getAiChatMaxAttempts() {
+  return Math.max(1, Math.min(Number(process.env.AI_CHAT_MAX_ATTEMPTS) || 3, 10));
+}
+
 function shouldExcludeReasoning(config) {
   if (/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "")) return false;
   return config?.providerName === "OpenRouter" || /openrouter\.ai/i.test(config?.baseUrl || "");
@@ -594,6 +598,7 @@ function requireConfig() {
     contextMaxChars: getAiContextMaxChars(),
     contextMessageChars: getAiContextMessageChars(),
     chatMaxTokens: getAiChatMaxTokens(),
+    chatMaxAttempts: getAiChatMaxAttempts(),
     excludeReasoning: !/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "true"),
     pendingActionTtlMs: getPendingActionTtlMs(),
   });
@@ -2478,6 +2483,7 @@ async function chatWithOpenAiCompatible(message, config) {
     providerName: config.providerName,
     model: config.model,
     maxTokens: getAiChatMaxTokens(),
+    maxAttempts: getAiChatMaxAttempts(),
     excludeReasoning: shouldExcludeReasoning(config),
     messageId: message.id,
     channelId: message.channelId,
@@ -2505,46 +2511,59 @@ async function chatWithOpenAiCompatible(message, config) {
     body: JSON.stringify(requestBody),
   });
 
-  let response;
-  try {
-    response = await requestChat();
-  } catch (err) {
-    logError("ai.chat.request-failed", err, {
-      providerName: config.providerName,
-      model: config.model,
-      ms: elapsedMs(startedAt),
-    });
-    throw new AiServiceError(`${config.providerName} chat failed before it got a response: ${err?.message || String(err)}`, {
-      providerName: config.providerName,
-      model: config.model,
-    });
-  }
+  const maxAttempts = config.providerName === "OpenRouter" ? getAiChatMaxAttempts() : 1;
+  let body = null;
+  let choiceMessage = null;
+  let content = "";
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    logWarn("ai.chat.http-failed", {
-      providerName: config.providerName,
-      model: config.model,
-      status: response.status,
-      ms: elapsedMs(startedAt),
-      error: errorText.slice(0, 800),
-    });
-    throw new AiServiceError(`${config.providerName} chat returned HTTP ${response.status}: ${errorText.slice(0, 220)}`, {
-      providerName: config.providerName,
-      model: config.model,
-      status: response.status,
-    });
-  }
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await requestChat();
+    } catch (err) {
+      logError("ai.chat.request-failed", err, {
+        providerName: config.providerName,
+        model: config.model,
+        attempt,
+        attempts: maxAttempts,
+        ms: elapsedMs(startedAt),
+      });
+      throw new AiServiceError(`${config.providerName} chat failed before it got a response: ${err?.message || String(err)}`, {
+        providerName: config.providerName,
+        model: config.model,
+      });
+    }
 
-  let body = await response.json();
-  let choiceMessage = body.choices?.[0]?.message;
-  let content = extractAiTextContent(choiceMessage);
+    if (!response.ok) {
+      const errorText = await response.text();
+      logWarn("ai.chat.http-failed", {
+        providerName: config.providerName,
+        model: config.model,
+        attempt,
+        attempts: maxAttempts,
+        status: response.status,
+        ms: elapsedMs(startedAt),
+        error: errorText.slice(0, 800),
+      });
+      throw new AiServiceError(`${config.providerName} chat returned HTTP ${response.status}: ${errorText.slice(0, 220)}`, {
+        providerName: config.providerName,
+        model: config.model,
+        status: response.status,
+      });
+    }
 
-  if (!(typeof content === "string" && content.trim()) && typeof choiceMessage?.reasoning === "string" && choiceMessage.reasoning.trim()) {
-    logWarn("ai.chat.reasoning-without-content", {
+    body = await response.json();
+    choiceMessage = body.choices?.[0]?.message;
+    content = extractAiTextContent(choiceMessage);
+    if (typeof content === "string" && content.trim()) break;
+
+    logWarn("ai.chat.empty-content-retry", {
       providerName: config.providerName,
       model: config.model,
+      attempt,
+      attempts: maxAttempts,
       finishReason: body.choices?.[0]?.finish_reason,
+      hasReasoning: typeof choiceMessage?.reasoning === "string" && Boolean(choiceMessage.reasoning.trim()),
       ms: elapsedMs(startedAt),
     });
   }
