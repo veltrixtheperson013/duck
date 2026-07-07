@@ -76,6 +76,19 @@ function elapsedMs(startedAt) {
   return Date.now() - startedAt;
 }
 
+class AiServiceError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "AiServiceError";
+    this.details = details;
+  }
+}
+
+function makeAiUserError(err, fallback = "AI failed before it could answer.") {
+  if (err instanceof AiServiceError) return err.message;
+  return fallback;
+}
+
 const TOOL_DEFINITIONS = [
   {
     name: "ban_member",
@@ -594,6 +607,12 @@ function planLocalModerationTool(message) {
 
 function planModerationTool(message) {
   return planLocalModerationTool(message);
+}
+
+function isLikelyModerationRequest(rawText) {
+  const normalized = normalizeText(rawText);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|slowmode|lock|lockdown|unlock|purge|delete|remove|nickname|nick|rename|role|disconnect|voice kick|move|create|make|new)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|slowmode|timeout|mute|ban|kick|warn|nickname|nick|voice|purge|delete|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -1317,7 +1336,10 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
     response = await requestPlanner(responseFormatKind);
   } catch (err) {
     logError("ai.planner.request-failed", err, { providerName, model, ms: elapsedMs(startedAt) });
-    return null;
+    throw new AiServiceError(`${providerName} planner failed before it got a response: ${err?.message || String(err)}`, {
+      providerName,
+      model,
+    });
   }
 
   logDebug("ai.planner.http", {
@@ -1346,7 +1368,10 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
         response = await requestPlanner("none");
       } catch (err) {
         logError("ai.planner.retry-failed", err, { providerName, model, ms: elapsedMs(startedAt) });
-        return null;
+        throw new AiServiceError(`${providerName} planner retry failed before it got a response: ${err?.message || String(err)}`, {
+          providerName,
+          model,
+        });
       }
       logDebug("ai.planner.retry-http", {
         providerName,
@@ -1366,7 +1391,11 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
         ms: elapsedMs(startedAt),
         error: retryError.slice(0, 800),
       });
-      return null;
+      throw new AiServiceError(`${providerName} planner returned HTTP ${response.status}: ${retryError.slice(0, 220)}`, {
+        providerName,
+        model,
+        status: response.status,
+      });
     }
   }
 
@@ -1374,7 +1403,7 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
   const content = body.choices?.[0]?.message?.content;
   if (!content) {
     logWarn("ai.planner.empty-content", { providerName, model, ms: elapsedMs(startedAt) });
-    return null;
+    throw new AiServiceError(`${providerName} planner returned an empty response.`, { providerName, model });
   }
 
   try {
@@ -1397,7 +1426,10 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
       ms: elapsedMs(startedAt),
       raw: shouldLogAiBodies() ? content.slice(0, 1000) : undefined,
     });
-    return null;
+    throw new AiServiceError(`${providerName} planner returned invalid JSON instead of a tool plan.`, {
+      providerName,
+      model,
+    });
   }
 }
 
@@ -1427,7 +1459,10 @@ async function planWithOllama(message) {
     });
   } catch (err) {
     logError("ai.ollama.planner.request-failed", err, { model, baseUrl, ms: elapsedMs(startedAt) });
-    return null;
+    throw new AiServiceError(`Ollama planner failed before it got a response: ${err?.message || String(err)}`, {
+      model,
+      baseUrl,
+    });
   }
 
   if (!response.ok) {
@@ -1438,14 +1473,14 @@ async function planWithOllama(message) {
       ms: elapsedMs(startedAt),
       error: (await response.text()).slice(0, 800),
     });
-    return null;
+    throw new AiServiceError(`Ollama planner returned HTTP ${response.status}.`, { model, baseUrl, status: response.status });
   }
 
   const body = await response.json();
   const content = body.message?.content;
   if (!content) {
     logWarn("ai.ollama.planner.empty-content", { model, baseUrl, ms: elapsedMs(startedAt) });
-    return null;
+    throw new AiServiceError("Ollama planner returned an empty response.", { model, baseUrl });
   }
 
   try {
@@ -1466,7 +1501,7 @@ async function planWithOllama(message) {
       ms: elapsedMs(startedAt),
       raw: shouldLogAiBodies() ? content.slice(0, 1000) : undefined,
     });
-    return null;
+    throw new AiServiceError("Ollama planner returned invalid JSON instead of a tool plan.", { model, baseUrl });
   }
 }
 
@@ -1577,10 +1612,13 @@ async function makeChatMessages(message) {
     {
       role: "system",
       content: [
-        "You are Duck, a concise Discord moderation assistant.",
+        "You are Duck, a concise Discord AI chatbot with moderation tools.",
         "Respond naturally to the current message using the server context and recent chat.",
+        "Use the context to answer questions about the server, recent messages, members, channels, and roles when you can.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
-        "You cannot execute moderation directly. If a user asks for moderation, tell them you can prepare it and an Administrator must confirm.",
+        "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
+        "If a user asks for moderation, tell them you can prepare the tool call and an Administrator must confirm before it runs.",
+        "Be honest when you are missing context, permissions, or tool access.",
         "Do not claim an action was done unless Duck has already confirmed execution.",
       ].join(" "),
     },
@@ -1630,18 +1668,26 @@ async function chatWithOpenAiCompatible(message, config) {
       model: config.model,
       ms: elapsedMs(startedAt),
     });
-    return null;
+    throw new AiServiceError(`${config.providerName} chat failed before it got a response: ${err?.message || String(err)}`, {
+      providerName: config.providerName,
+      model: config.model,
+    });
   }
 
   if (!response.ok) {
+    const errorText = await response.text();
     logWarn("ai.chat.http-failed", {
       providerName: config.providerName,
       model: config.model,
       status: response.status,
       ms: elapsedMs(startedAt),
-      error: (await response.text()).slice(0, 800),
+      error: errorText.slice(0, 800),
     });
-    return null;
+    throw new AiServiceError(`${config.providerName} chat returned HTTP ${response.status}: ${errorText.slice(0, 220)}`, {
+      providerName: config.providerName,
+      model: config.model,
+      status: response.status,
+    });
   }
 
   const body = await response.json();
@@ -1653,7 +1699,11 @@ async function chatWithOpenAiCompatible(message, config) {
     ms: elapsedMs(startedAt),
     raw: shouldLogAiBodies() && typeof content === "string" ? content.slice(0, 1000) : undefined,
   });
-  return typeof content === "string" && content.trim() ? content.trim().slice(0, 1800) : null;
+  if (typeof content === "string" && content.trim()) return content.trim().slice(0, 1800);
+  throw new AiServiceError(`${config.providerName} chat returned an empty response.`, {
+    providerName: config.providerName,
+    model: config.model,
+  });
 }
 
 async function chatWithOllama(message) {
@@ -1682,18 +1732,26 @@ async function chatWithOllama(message) {
     });
   } catch (err) {
     logError("ai.ollama.chat.request-failed", err, { model, baseUrl, ms: elapsedMs(startedAt) });
-    return null;
+    throw new AiServiceError(`Ollama chat failed before it got a response: ${err?.message || String(err)}`, {
+      model,
+      baseUrl,
+    });
   }
 
   if (!response.ok) {
+    const errorText = await response.text();
     logWarn("ai.ollama.chat.http-failed", {
       model,
       baseUrl,
       status: response.status,
       ms: elapsedMs(startedAt),
-      error: (await response.text()).slice(0, 800),
+      error: errorText.slice(0, 800),
     });
-    return null;
+    throw new AiServiceError(`Ollama chat returned HTTP ${response.status}: ${errorText.slice(0, 220)}`, {
+      model,
+      baseUrl,
+      status: response.status,
+    });
   }
 
   const body = await response.json();
@@ -1704,34 +1762,61 @@ async function chatWithOllama(message) {
     ms: elapsedMs(startedAt),
     raw: shouldLogAiBodies() && typeof content === "string" ? content.slice(0, 1000) : undefined,
   });
-  return typeof content === "string" && content.trim() ? content.trim().slice(0, 1800) : null;
+  if (typeof content === "string" && content.trim()) return content.trim().slice(0, 1800);
+  throw new AiServiceError("Ollama chat returned an empty response.", { model, baseUrl });
 }
 
 async function generateChatResponse(message) {
   const provider = getConfiguredAiProvider();
   logDebug("ai.chat.provider", { provider, messageId: message.id, channelId: message.channelId });
-  if (provider === "ollama") {
-    return chatWithOllama(message);
-  }
+  try {
+    if (provider === "ollama") {
+      return { content: await chatWithOllama(message), error: null };
+    }
 
-  const config = getOpenAiCompatibleConfig();
-  if (config) {
-    return chatWithOpenAiCompatible(message, config);
-  }
+    const config = getOpenAiCompatibleConfig();
+    if (config) {
+      return { content: await chatWithOpenAiCompatible(message, config), error: null };
+    }
 
-  return null;
+    return { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
+  } catch (err) {
+    logError("ai.chat.failed", err, {
+      provider,
+      messageId: message.id,
+      channelId: message.channelId,
+    });
+    return { content: null, error: makeAiUserError(err, "AI failed before it could answer.") };
+  }
 }
 
 async function planModerationRequest(message) {
-  const aiPlan = await planWithConfiguredAi(message);
-  if (aiPlan) return aiPlan;
+  let aiError = null;
+  try {
+    const aiPlan = await planWithConfiguredAi(message);
+    if (aiPlan) return aiPlan;
+  } catch (err) {
+    aiError = makeAiUserError(err, "AI failed before it could plan that tool.");
+    logWarn("planner.ai-failed-local-fallback", {
+      messageId: message.id,
+      channelId: message.channelId,
+      error: aiError,
+    });
+  }
+
   const localPlan = planLocalModerationTool(message);
+  if (localPlan && aiError) {
+    localPlan.aiWarning = `AI planning failed, so I used my local parser instead. ${aiError}`;
+  }
   logDebug("planner.local-fallback", {
     messageId: message.id,
     hasPlan: Boolean(localPlan),
     tool: localPlan?.tool,
     error: localPlan?.error,
   });
+  if (!localPlan && aiError) {
+    return { error: `I tried to use AI for that tool request, but it failed. ${aiError}` };
+  }
   return localPlan;
 }
 
@@ -1788,6 +1873,7 @@ function describeAction(action) {
     `Target: ${action.summary}`,
   ];
 
+  if (action.aiWarning) lines.push(`AI note: ${action.aiWarning}`);
   if (action.reason) lines.push(`Reason: ${action.reason}`);
   if (action.durationMs) lines.push(`Duration: ${Math.round(action.durationMs / 60000)} minute(s)`);
   if (action.seconds != null) lines.push(`Slowmode: ${action.seconds} second(s)`);
@@ -2390,6 +2476,7 @@ client.on(Events.MessageCreate, async (message) => {
     const planningMessage = invocation.invoked
       ? makeMessageWithContent(message, invocation.content)
       : message;
+    const wantsToolPlan = isLikelyModerationRequest(planningMessage.content);
 
     const queueMessage = hasConfiguredAi()
       ? await message.reply({ content: getQueueMessage(), allowedMentions: { repliedUser: false } }).catch(() => null)
@@ -2417,22 +2504,35 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
-    const plan = await planModerationRequest(planningMessage);
-    logDebug("message.plan-finished", {
-      messageId: message.id,
-      hasPlan: Boolean(plan),
-      tool: plan?.tool,
-      planError: plan?.error,
-      ms: elapsedMs(messageStartedAt),
-    });
-    if (!plan) {
-      const chatResponse = hasConfiguredAi()
-        ? await generateChatResponse(planningMessage)
-        : null;
-      const content = chatResponse ?? (invocation.invoked ? makeDuckHelp(invocation.content) : null);
-      logInfo("message.chat-fallback", {
+    let plan = null;
+    if (wantsToolPlan) {
+      plan = await planModerationRequest(planningMessage);
+      logDebug("message.plan-finished", {
         messageId: message.id,
-        hasChatResponse: Boolean(chatResponse),
+        hasPlan: Boolean(plan),
+        tool: plan?.tool,
+        planError: plan?.error,
+        ms: elapsedMs(messageStartedAt),
+      });
+    } else {
+      logDebug("message.chat-first", {
+        messageId: message.id,
+        reason: "not-likely-moderation-request",
+        ms: elapsedMs(messageStartedAt),
+      });
+    }
+
+    if (!plan) {
+      const chatResult = hasConfiguredAi()
+        ? await generateChatResponse(planningMessage)
+        : { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
+      const content = chatResult.content
+        ?? chatResult.error
+        ?? (invocation.invoked ? makeDuckHelp(invocation.content) : null);
+      logInfo("message.chat-finished", {
+        messageId: message.id,
+        hasChatResponse: Boolean(chatResult.content),
+        chatError: chatResult.error,
         hasContent: Boolean(content),
         queueMessageId: queueMessage?.id,
         ms: elapsedMs(messageStartedAt),
@@ -2443,7 +2543,7 @@ client.on(Events.MessageCreate, async (message) => {
       } else if (content) {
         await message.reply({ content, allowedMentions: { repliedUser: false } });
       } else if (queueMessage) {
-        await queueMessage.edit({ content: "I heard you, but I do not have a useful response for that yet." }).catch(() => {});
+        await queueMessage.edit({ content: "I tried to answer, but AI returned no content and I do not have a local fallback for that." }).catch(() => {});
       }
       return;
     }

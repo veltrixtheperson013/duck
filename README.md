@@ -1,16 +1,16 @@
 # Duck
 
-Duck is a Node.js Discord moderation bot. It uses a local, zero-cost intent planner instead of a paid AI API, then gives that planner Discord moderation tools it can request.
+Duck is a Node.js Discord AI chatbot with confirmation-gated moderation tools.
 
 The important safety rule: Duck never runs a moderation tool immediately. It always creates a confirmation prompt first.
 
-Duck can use OpenRouter as an optional AI planner for more flexible wording. OpenRouter has free models, but it still requires an OpenRouter account and API key. If no AI provider is configured, Duck falls back to the built-in local planner.
+Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal chat and AI tool planning. For obvious moderation requests, Duck asks AI for a tool plan, validates it, and falls back to the built-in local parser only when AI is unavailable or fails.
 
 ## Features
 
 - `/setup channel:#channel` chooses the channel where Duck listens.
 - Duck responds to all user messages in the setup channel when AI is configured.
-- Natural language moderation requests in the setup channel become confirmation-gated plans.
+- Natural language moderation requests in the setup channel become confirmation-gated tool plans.
 - Duck also responds when someone says `duck`, mentions `@Duck`, or replies to one of Duck's messages.
 - Queue/thinking messages are posted while AI is working, then edited with the result.
 - Server context and recent-message reads are cached briefly to reduce wait times.
@@ -20,8 +20,9 @@ Duck can use OpenRouter as an optional AI planner for more flexible wording. Ope
 - Discord status shows Duck is watching for `duck` / `@Duck`.
 - Administrator approval required for every action.
 - Permission checks for the person requesting, the Administrator confirming, and Duck itself.
-- Optional AI planner for more flexible wording.
-- The AI planner receives bounded server context: channel list, role list, mentioned users, and recent messages from readable text channels.
+- OpenRouter-first chat for normal messages, with AI tool planning for moderation requests.
+- The AI receives bounded server context: channel list, role list, mentioned users, and recent messages from readable text channels.
+- User-facing error messages say when AI/OpenRouter failed instead of hiding it behind generic fallback text.
 - Tools for ban, softban, kick, timeout, remove timeout, warn, nicknames, roles, voice moderation, channel creation/deletion, purge messages, slowmode, lock channel, and unlock channel.
 
 ## Examples
@@ -80,7 +81,7 @@ I have deleted the channel "General".
 
 ## AI Tool Calling
 
-Duck's AI never executes tools directly. It only returns a JSON plan, then Duck validates that plan and shows an Administrator-only confirmation prompt.
+Duck's AI never executes tools directly. It only returns a JSON plan for moderation requests, then Duck validates that plan and shows an Administrator-only confirmation prompt.
 
 The planner is instructed to:
 
