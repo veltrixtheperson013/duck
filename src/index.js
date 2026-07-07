@@ -284,6 +284,11 @@ const TOOL_DEFINITIONS = [
     description: "Set a text channel topic.",
   },
   {
+    name: "speak",
+    risk: "medium",
+    description: "Send an approved message as Duck in the current or mentioned text channel.",
+  },
+  {
     name: "create_role",
     risk: "high",
     description: "Create a server role.",
@@ -334,6 +339,7 @@ const TOOL_REQUIREMENTS = {
   create_voice_channel: PermissionsBitField.Flags.ManageChannels,
   rename_channel: PermissionsBitField.Flags.ManageChannels,
   set_channel_topic: PermissionsBitField.Flags.ManageChannels,
+  speak: PermissionsBitField.Flags.SendMessages,
   create_role: PermissionsBitField.Flags.ManageRoles,
   delete_role: PermissionsBitField.Flags.ManageRoles,
 };
@@ -718,6 +724,7 @@ function inferReasonFromRequest(message, toolName) {
     create_voice_channel: ["create", "make", "new", "voice", "channel"],
     rename_channel: ["rename", "channel"],
     set_channel_topic: ["topic", "channel", "set"],
+    speak: ["say", "speak", "send", "post", "announce", "message"],
     create_role: ["create", "make", "new", "role"],
     delete_role: ["delete", "remove", "role"],
   }[toolName] ?? [];
@@ -893,6 +900,19 @@ function extractPlainName(text, maxLength = 100) {
     .slice(0, maxLength) || null;
 }
 
+function extractSpeakMessage(text) {
+  const quoted = extractQuotedName(text);
+  if (quoted) return limitDiscordContent(quoted, 1900);
+
+  const cleaned = text
+    .replace(/<#\d+>/g, " ")
+    .replace(/\b(duck|can you|could you|would you|please|say|speak|send|post|announce|message|saying|as|in|to|channel)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned ? limitDiscordContent(cleaned, 1900) : null;
+}
+
 function extractRoleName(text) {
   return extractPlainName(text.replace(/\b(create|make|new|role|delete|remove)\b/gi, " "), 100);
 }
@@ -982,8 +1002,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|lock|unlock|create|make|say|speak|send|post|announce)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -1252,6 +1272,25 @@ function planModerationToolFromText(message, rawText) {
       channelId: channel.id,
       channelName: channel.name,
       summary: `delete the channel "${channel.name}"`,
+    };
+  }
+
+  const wantsDuckToSpeak = /^(please\s+)?(say|speak|send|post|announce)\b/.test(normalized)
+    || /\b(send|post)\s+(a\s+)?message\b/.test(normalized)
+    || /\b(say|speak|send|post|announce)\s+(in|to)\b/.test(normalized);
+  if (wantsDuckToSpeak) {
+    const channel = getTextChannelTarget(message, text);
+    if (!channel || !("send" in channel)) return { error: "I can only speak in a text channel." };
+    const messageText = extractSpeakMessage(text);
+    if (!messageText) return { error: "Tell me what message Duck should send." };
+    return {
+      tool: "speak",
+      risk: "medium",
+      channelId: channel.id,
+      channelName: channel.name,
+      messageText,
+      reason: "Approved speak request.",
+      summary: `send a message in ${summarizeChannel(channel)}`,
     };
   }
 
@@ -1990,6 +2029,27 @@ function validateAiPlan(message, plan, serverContext = null) {
     return result;
   }
 
+  if (tool.name === "speak") {
+    const targetChannelId = String(plan.channelId || "");
+    const channel = message.guild.channels.cache.get(targetChannelId)
+      ?? findChannelByToolTarget(message, plan.channelName || plan.targetName || "")
+      ?? message.channel;
+    if (!channel?.isTextBased?.() || !("send" in channel)) return { error: "I can only speak in a text channel." };
+
+    const rawMessageText = plan.messageText || plan.content || plan.text || "";
+    const messageText = typeof rawMessageText === "string" ? limitDiscordContent(rawMessageText, 1900) : null;
+    if (!messageText) return { error: "Tell me what message Duck should send." };
+
+    return {
+      ...base,
+      channelId: channel.id,
+      channelName: channel.name,
+      messageText,
+      reason: base.reason === "No reason provided." ? "Approved speak request." : base.reason,
+      summary: `send a message in ${channel.name ? `#${channel.name}` : `channel ${channel.id}`}`,
+    };
+  }
+
   if (tool.name === "create_text_channel" || tool.name === "create_voice_channel") {
     const channelName = typeof plan.channelName === "string" ? extractNewChannelName(plan.channelName) : extractNewChannelName(message.content);
     if (!channelName) return { error: "Tell me the channel name in quotes." };
@@ -2036,9 +2096,10 @@ async function makePlannerMessages(message) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Only use speak when the user explicitly asks Duck to say, post, announce, or send a message. Put the text Duck should send in messageText.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
@@ -2098,6 +2159,7 @@ function makePlannerResponseFormat(kind) {
                 "create_voice_channel",
                 "rename_channel",
                 "set_channel_topic",
+                "speak",
                 "create_role",
                 "delete_role",
               ],
@@ -2111,6 +2173,7 @@ function makePlannerResponseFormat(kind) {
             channelName: { type: "string" },
             newName: { type: "string" },
             topic: { type: "string" },
+            messageText: { type: "string" },
             nickname: { type: "string" },
             count: { type: "number" },
             durationMs: { type: "number" },
@@ -2462,10 +2525,10 @@ async function makeChatMessages(message) {
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
-        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, create_role, delete_role, or delete_channel.",
+        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, create_role, delete_role, or delete_channel.",
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
-        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}.",
+        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}.",
         "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
         "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
         "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
@@ -2747,6 +2810,11 @@ const INLINE_TOOL_MAP = {
   set_topic: "set_channel_topic",
   set_channel_topic: "set_channel_topic",
   topic: "set_channel_topic",
+  speak: "speak",
+  say: "speak",
+  send_message: "speak",
+  post: "speak",
+  announce: "speak",
   create_role: "create_role",
   delete_role: "delete_role",
   delete_channel: "delete_channel",
@@ -2780,7 +2848,7 @@ function parseInlineToolCall(message, content) {
     roleId: primaryTarget.match(/^<@&(\d+)>$/)?.[1],
   };
 
-  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic"].includes(tool)) {
+  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic", "speak"].includes(tool)) {
     const channel = tool === "delete_channel"
       ? findExactChannelByToolTarget(message, primaryTarget)
       : findChannelByToolTarget(message, primaryTarget);
@@ -2808,6 +2876,10 @@ function parseInlineToolCall(message, content) {
   if (tool === "create_voice_channel") rawPlan.channelName = target;
   if (tool === "rename_channel") rawPlan.newName = targetParts[1] ?? reason;
   if (tool === "set_channel_topic") rawPlan.topic = reason;
+  if (tool === "speak") {
+    rawPlan.channelName = primaryTarget;
+    rawPlan.messageText = targetParts[1] ?? reason;
+  }
   if (tool === "create_role") rawPlan.roleName = target;
   if (tool === "delete_role") {
     const role = findRoleByToolTarget(message, primaryTarget);
@@ -2912,6 +2984,7 @@ function commandLabel(action) {
   if (action.tool === "create_voice_channel") return "Create Voice Channel";
   if (action.tool === "rename_channel") return "Rename Channel";
   if (action.tool === "set_channel_topic") return "Set Channel Topic";
+  if (action.tool === "speak") return "Speak";
   if (action.tool === "create_role") return "Create Role";
   if (action.tool === "delete_role") return "Delete Role";
   return "Moderate";
@@ -2970,6 +3043,7 @@ function makeActionEmbed(action) {
   if (action.roleName) details.push(`Role: @${action.roleName}`);
   if (action.newName) details.push(`New name: ${action.newName}`);
   if (action.topic) details.push(`Topic: ${action.topic}`);
+  if (action.messageText) details.push(`Message: ${action.messageText}`);
   if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
   if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
   if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
@@ -2993,6 +3067,7 @@ function describeAction(action) {
   if (action.nickname) lines.push(`Nickname: ${action.nickname}`);
   if (action.roleName) lines.push(`Role: @${action.roleName}`);
   if (action.channelName && action.tool !== "delete_channel") lines.push(`Channel: ${action.channelName}`);
+  if (action.messageText) lines.push(`Message: ${action.messageText}`);
 
   return lines.join("\n");
 }
@@ -3317,6 +3392,22 @@ async function executeAction(client, action, approver) {
     if (!channel || !("setTopic" in channel)) return "I can only set topics in a text channel.";
     await channel.setTopic(action.topic, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return `I have updated the topic in ${channel}.`;
+  }
+
+  if (action.tool === "speak") {
+    const channel = await guild.channels.fetch(action.channelId);
+    if (!channel?.isTextBased?.() || !("send" in channel)) return "I can only speak in a text channel.";
+
+    const permissions = channel.permissionsFor(botMember);
+    if (!permissions?.has(PermissionsBitField.Flags.ViewChannel) || !permissions.has(PermissionsBitField.Flags.SendMessages)) {
+      return "Duck cannot send messages in that channel.";
+    }
+
+    await channel.send({
+      content: limitDiscordContent(action.messageText, 1900),
+      allowedMentions: { parse: [] },
+    });
+    return `I sent the message in ${channel}.`;
   }
 
   if (action.tool === "create_role") {
