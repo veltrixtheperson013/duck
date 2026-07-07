@@ -913,6 +913,19 @@ function extractSpeakMessage(text) {
   return cleaned ? limitDiscordContent(cleaned, 1900) : null;
 }
 
+function isLikelySpeakRequest(text) {
+  return /\b(say|speak|send|post|announce|announcement)\b/i.test(text);
+}
+
+function isDraftSpeakRequest(text) {
+  return /\b(make|draft|write|prepare|create)\b.*\b(announcement|message|post)\b/i.test(text);
+}
+
+function hasExplicitSpeakMessage(text) {
+  if (extractQuotedName(text)) return true;
+  return /^(please\s+)?(say|speak)\s+\S/i.test(normalizeText(text));
+}
+
 function extractRoleName(text) {
   return extractPlainName(text.replace(/\b(create|make|new|role|delete|remove)\b/gi, " "), 100);
 }
@@ -1275,9 +1288,9 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  const wantsDuckToSpeak = /^(please\s+)?(say|speak|send|post|announce)\b/.test(normalized)
-    || /\b(send|post)\s+(a\s+)?message\b/.test(normalized)
-    || /\b(say|speak|send|post|announce)\s+(in|to)\b/.test(normalized);
+  const wantsDuckToSpeak = hasExplicitSpeakMessage(text)
+    && (/^(please\s+)?(say|speak)\b/.test(normalized)
+      || /\b(send|post|announce)\b/.test(normalized));
   if (wantsDuckToSpeak) {
     const channel = getTextChannelTarget(message, text);
     if (!channel || !("send" in channel)) return { error: "I can only speak in a text channel." };
@@ -2030,10 +2043,18 @@ function validateAiPlan(message, plan, serverContext = null) {
   }
 
   if (tool.name === "speak") {
+    if (isDraftSpeakRequest(message.content) && !hasExplicitSpeakMessage(message.content)) {
+      return { error: "Tell me the exact message Duck should send, preferably in quotes." };
+    }
+
     const targetChannelId = String(plan.channelId || "");
+    const targetChannelText = plan.channelName || plan.targetName || "";
     const channel = message.guild.channels.cache.get(targetChannelId)
-      ?? findChannelByToolTarget(message, plan.channelName || plan.targetName || "")
-      ?? message.channel;
+      ?? findChannelByToolTarget(message, targetChannelText)
+      ?? (targetChannelId || targetChannelText ? null : message.channel);
+    if (!channel && (targetChannelId || targetChannelText)) {
+      return { error: "I could not resolve the channel Duck should speak in. Mention the channel or use its exact name." };
+    }
     if (!channel?.isTextBased?.() || !("send" in channel)) return { error: "I can only speak in a text channel." };
 
     const rawMessageText = plan.messageText || plan.content || plan.text || "";
@@ -2099,7 +2120,7 @@ async function makePlannerMessages(message) {
         "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
         "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
-        "Only use speak when the user explicitly asks Duck to say, post, announce, or send a message. Put the text Duck should send in messageText.",
+        "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
@@ -2529,6 +2550,7 @@ async function makeChatMessages(message) {
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
         "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}.",
+        "Only use speak when the user gives the exact message Duck should send. If the user asks you to draft, write, make, or prepare an announcement, draft the text and ask for confirmation without a marker.",
         "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
         "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
         "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
@@ -4155,9 +4177,14 @@ client.on(Events.MessageCreate, async (message) => {
       }
 
       if (!plan) {
-        plan = await planModerationRequest(planningMessage);
-        if (!toolResponseContent && chatError) {
-          toolResponseContent = chatError;
+        const shouldSkipPlannerFallback = isLikelySpeakRequest(planningMessage.content)
+          && Boolean(toolResponseContent)
+          && !hasExplicitSpeakMessage(planningMessage.content);
+        if (!shouldSkipPlannerFallback) {
+          plan = await planModerationRequest(planningMessage);
+          if (!toolResponseContent && chatError) {
+            toolResponseContent = chatError;
+          }
         }
       }
       logDebug("message.plan-finished", {
@@ -4176,9 +4203,11 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     if (!plan) {
-      const chatResult = hasConfiguredAi()
-        ? await generateChatResponse(planningMessage)
-        : { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
+      const chatResult = toolResponseContent
+        ? { content: toolResponseContent, error: chatError }
+        : hasConfiguredAi()
+          ? await generateChatResponse(planningMessage)
+          : { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
       const content = chatResult.content
         ?? chatResult.error
         ?? (invocation.invoked ? makeDuckHelp(invocation.content) : null);
@@ -4198,7 +4227,7 @@ client.on(Events.MessageCreate, async (message) => {
           if (!needed || hasPermission(message.member, needed)) {
             await promptForConfirmation(message, parsedToolCall.plan, {
               messageToEdit: queueMessage,
-              content: parsedToolCall.content,
+              content: parsedToolCall.content || "Prepared a moderation plan. Waiting for Administrator confirmation.",
               useEmbed: true,
             });
             logInfo("message.inline-moderation-planned", {
