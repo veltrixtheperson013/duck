@@ -34,6 +34,7 @@ const resourceFetchCache = new Map();
 const jsonFileCache = new Map();
 const pendingJsonWrites = new Map();
 let cacheMaintenanceTimer = null;
+let cacheRefreshTimer = null;
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
 let buildInfo = {
   commit: process.env.DUCK_COMMIT || process.env.COMMIT_SHA || process.env.GIT_COMMIT || "unknown",
@@ -611,6 +612,14 @@ function getMessageCacheTtlMs() {
 
 function getMessageCacheLimit() {
   return Math.max(25, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_LIMIT) || 150, 500));
+}
+
+function getCacheRefreshMs() {
+  return Math.max(60_000, Math.min(Number(process.env.DUCK_CACHE_REFRESH_MS) || 3 * 60_000, 60 * 60 * 1000));
+}
+
+function getCacheRefreshChannelLimit() {
+  return Math.max(1, Math.min(Number(process.env.DUCK_CACHE_REFRESH_MAX_CHANNELS) || 25, 200));
 }
 
 function getQueueMessage() {
@@ -2030,11 +2039,12 @@ async function getRecentChannelMessages(channel, limit, options = {}) {
 
   const fetchLimit = Math.min(100, Math.max(wanted, Math.min(getMessageCacheLimit(), 100)));
   const fetchPromise = channel.messages.fetch({ limit: fetchLimit });
+  const touchedAt = options.preserveTouchedAt ? cached?.touchedAt ?? now : now;
   messageHistoryCache.set(key, {
     channelId: channel.id,
     guildId: channel.guildId,
     fetchedAt: cached?.fetchedAt ?? 0,
-    touchedAt: now,
+    touchedAt,
     messages: cached?.messages ?? [],
     fetchPromise,
   });
@@ -2047,7 +2057,7 @@ async function getRecentChannelMessages(channel, limit, options = {}) {
       channelId: channel.id,
       guildId: channel.guildId,
       fetchedAt: now,
-      touchedAt: now,
+      touchedAt,
       messages,
     });
     logDebug("message-cache.fetch", { guildId: channel.guildId, channelId: channel.id, wanted, fetched: fetchedMessages.length, cached: messages.length });
@@ -2079,6 +2089,7 @@ async function cachedResourceFetch(key, fallbackValue, fetcher) {
       value: fallbackValue,
       expiresAt: now + getResourceCacheTtlMs(),
       touchedAt: now,
+      fetcher,
     });
     return fallbackValue;
   }
@@ -2090,6 +2101,7 @@ async function cachedResourceFetch(key, fallbackValue, fetcher) {
         value,
         expiresAt: Date.now() + getResourceCacheTtlMs(),
         touchedAt: Date.now(),
+        fetcher,
       });
       return value;
     })
@@ -2097,7 +2109,7 @@ async function cachedResourceFetch(key, fallbackValue, fetcher) {
       resourceFetchCache.delete(key);
       throw err;
     });
-  resourceFetchCache.set(key, { promise, touchedAt: now, expiresAt: now + getResourceCacheTtlMs() });
+  resourceFetchCache.set(key, { promise, touchedAt: now, expiresAt: now + getResourceCacheTtlMs(), fetcher });
   return promise;
 }
 
@@ -2129,6 +2141,17 @@ function getCacheSweepMs() {
   return Math.max(30_000, Math.min(Number(process.env.DUCK_CACHE_SWEEP_MS) || 120_000, 30 * 60 * 1000));
 }
 
+async function runBoundedTasks(items, concurrency, worker) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      await worker(item);
+    }
+  }));
+}
+
 function pruneMapToLimit(map, limit) {
   if (map.size <= limit) return 0;
   const removable = [...map.entries()]
@@ -2143,8 +2166,8 @@ function pruneRuntimeCaches() {
   let removedMessages = 0;
   let removedResources = 0;
   let removedContexts = 0;
-  const messageMaxAge = Math.max(getMessageCacheTtlMs() * 3, 60_000);
-  const resourceMaxAge = Math.max(getResourceCacheTtlMs() * 3, 60_000);
+  const messageMaxAge = Math.max(getMessageCacheTtlMs() * 3, getCacheRefreshMs() * 2, 60_000);
+  const resourceMaxAge = Math.max(getResourceCacheTtlMs() * 3, getCacheRefreshMs() * 2, 60_000);
 
   for (const [key, entry] of messageHistoryCache.entries()) {
     if (now - Math.max(entry.touchedAt || 0, entry.fetchedAt || 0) > messageMaxAge) {
@@ -2180,9 +2203,88 @@ function pruneRuntimeCaches() {
   });
 }
 
+async function refreshRuntimeCaches() {
+  const startedAt = Date.now();
+  const now = Date.now();
+  const activeWindow = Math.max(getCacheRefreshMs() * 2, getMessageCacheTtlMs() * 3, 60_000);
+  const messageLimit = getCacheRefreshChannelLimit();
+  const refreshConcurrency = Math.min(getAiContextFetchConcurrency(), 8);
+  let refreshedMessages = 0;
+  let failedMessages = 0;
+  let refreshedResources = 0;
+  let failedResources = 0;
+
+  const messageEntries = [...messageHistoryCache.entries()]
+    .filter(([, entry]) => !entry.fetchPromise && now - (entry.touchedAt || entry.fetchedAt || 0) <= activeWindow)
+    .sort((a, b) => (b[1].touchedAt ?? b[1].fetchedAt ?? 0) - (a[1].touchedAt ?? a[1].fetchedAt ?? 0))
+    .slice(0, messageLimit);
+
+  await runBoundedTasks(messageEntries, refreshConcurrency, async ([key, entry]) => {
+    const guild = client.guilds.cache.get(entry.guildId);
+    const channel = guild?.channels.cache.get(entry.channelId);
+    if (!channel?.isTextBased?.() || !("messages" in channel)) {
+      messageHistoryCache.delete(key);
+      return;
+    }
+
+    try {
+      await getRecentChannelMessages(channel, Math.min(getMessageCacheLimit(), 100), { forceFetch: true, preserveTouchedAt: true });
+      refreshedMessages += 1;
+    } catch (err) {
+      failedMessages += 1;
+      logDebug("cache.refresh-message-failed", {
+        guildId: entry.guildId,
+        channelId: entry.channelId,
+        error: err?.message || String(err),
+      });
+    }
+  });
+
+  const resourceEntries = [...resourceFetchCache.entries()]
+    .filter(([, entry]) => entry.value && !entry.promise && typeof entry.fetcher === "function" && now - (entry.touchedAt || 0) <= activeWindow)
+    .sort((a, b) => (b[1].touchedAt ?? 0) - (a[1].touchedAt ?? 0))
+    .slice(0, Math.max(25, Number(process.env.DUCK_RESOURCE_CACHE_REFRESH_MAX_ITEMS) || 100));
+
+  await runBoundedTasks(resourceEntries, refreshConcurrency, async ([key, entry]) => {
+    try {
+      const value = await entry.fetcher();
+      resourceFetchCache.set(key, {
+        value,
+        expiresAt: Date.now() + getResourceCacheTtlMs(),
+        touchedAt: entry.touchedAt,
+        refreshedAt: Date.now(),
+        fetcher: entry.fetcher,
+      });
+      refreshedResources += 1;
+    } catch (err) {
+      failedResources += 1;
+      resourceFetchCache.delete(key);
+      logDebug("cache.refresh-resource-failed", {
+        key,
+        error: err?.message || String(err),
+      });
+    }
+  });
+
+  logDebug("cache.refresh", {
+    messageChannels: messageHistoryCache.size,
+    resources: resourceFetchCache.size,
+    refreshedMessages,
+    failedMessages,
+    refreshedResources,
+    failedResources,
+    ms: elapsedMs(startedAt),
+  });
+}
+
 function startCacheMaintenance() {
   if (cacheMaintenanceTimer) return;
   cacheMaintenanceTimer = setInterval(pruneRuntimeCaches, getCacheSweepMs());
+  if (!cacheRefreshTimer) {
+    cacheRefreshTimer = setInterval(() => {
+      refreshRuntimeCaches().catch((err) => logWarn("cache.refresh-failed", { error: err?.message || String(err) }));
+    }, getCacheRefreshMs());
+  }
 }
 
 function flushRuntimeStateAndExit(signal) {
