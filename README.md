@@ -197,7 +197,7 @@ If your Wispbyte panel does not have environment variables, copy `config.example
 
 Upload `config.json` with the rest of the bot files. Keep it private because it contains your bot token.
 
-Duck also supports `.env` and normal environment variables if your host adds them later.
+Duck also supports normal environment variables if your host adds them later.
 
 ## Supported Requests
 
