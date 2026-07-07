@@ -7,6 +7,7 @@ import {
   ButtonStyle,
   ChannelType,
   Client,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   ActivityType,
@@ -206,6 +207,26 @@ const TOOL_DEFINITIONS = [
     description: "Move a mentioned member to a mentioned voice channel.",
   },
   {
+    name: "voice_mute_member",
+    risk: "medium",
+    description: "Server-mute a mentioned member in voice.",
+  },
+  {
+    name: "voice_unmute_member",
+    risk: "medium",
+    description: "Remove server voice mute from a mentioned member.",
+  },
+  {
+    name: "deafen_member",
+    risk: "medium",
+    description: "Server-deafen a mentioned member in voice.",
+  },
+  {
+    name: "undeafen_member",
+    risk: "medium",
+    description: "Remove server deafen from a mentioned member.",
+  },
+  {
     name: "create_text_channel",
     risk: "high",
     description: "Create a text channel.",
@@ -230,6 +251,10 @@ const TOOL_REQUIREMENTS = {
   remove_role: PermissionsBitField.Flags.ManageRoles,
   disconnect_member: PermissionsBitField.Flags.MoveMembers,
   move_member: PermissionsBitField.Flags.MoveMembers,
+  voice_mute_member: PermissionsBitField.Flags.MuteMembers,
+  voice_unmute_member: PermissionsBitField.Flags.MuteMembers,
+  deafen_member: PermissionsBitField.Flags.DeafenMembers,
+  undeafen_member: PermissionsBitField.Flags.DeafenMembers,
   create_text_channel: PermissionsBitField.Flags.ManageChannels,
 };
 
@@ -476,7 +501,35 @@ function extractReason(text, commandWords) {
     reason = reason.replace(new RegExp(`\\b${word}\\b`, "i"), "");
   }
   reason = reason.replace(/<@!?\d+>/g, "").replace(/\b\d{1,3}\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b/gi, "");
+  reason = reason
+    .replace(/\b(hey|hi|hello|yo|duck|can you|could you|would you|please)\b/gi, " ")
+    .replace(/\b(for|because|reason is|reason:)\b/gi, " ")
+    .replace(/[?.,!]+/g, " ");
   return reason.replace(/\s+/g, " ").trim() || "No reason provided.";
+}
+
+function inferReasonFromRequest(message, toolName) {
+  const commandWords = {
+    ban_member: ["ban", "banish"],
+    softban_member: ["soft", "softban", "ban"],
+    kick_member: ["kick"],
+    timeout_member: ["timeout", "mute"],
+    warn_member: ["warn", "warning"],
+    untimeout_member: ["untimeout", "unmute", "remove", "timeout", "mute"],
+    delete_user_messages: ["delete", "purge", "messages"],
+    set_nickname: ["nickname", "nick", "rename"],
+    add_role: ["add", "give", "grant", "role", "to"],
+    remove_role: ["remove", "take", "role", "from"],
+    disconnect_member: ["disconnect", "voice", "kick"],
+    move_member: ["move", "voice", "channel", "to"],
+    voice_mute_member: ["voice", "server", "mute"],
+    voice_unmute_member: ["voice", "server", "unmute"],
+    deafen_member: ["deafen"],
+    undeafen_member: ["undeafen"],
+  }[toolName] ?? [];
+
+  const reason = extractReason(message.content, commandWords);
+  return reason === "No reason provided." ? null : reason;
 }
 
 function extractChannelReason(text, commandWords) {
@@ -548,6 +601,25 @@ function findVoiceChannelByNameOrMention(message, text) {
   return message.guild.channels.cache.find((channel) => {
     return channel.type === ChannelType.GuildVoice && channel.name?.toLowerCase() === wanted;
   });
+}
+
+function findChannelByToolTarget(message, target) {
+  const text = String(target || "").trim();
+  const channelId = text.match(/^<#(\d+)>$/)?.[1] ?? (/^\d{10,}$/.test(text) ? text : null);
+  if (channelId) return message.guild.channels.cache.get(channelId) ?? null;
+
+  const exact = text.replace(/^#/, "").toLowerCase();
+  return message.guild.channels.cache.find((channel) => channel.name?.toLowerCase() === exact)
+    ?? findChannelByNameOrMention(message, text);
+}
+
+function findRoleByToolTarget(message, target) {
+  const text = String(target || "").trim();
+  const roleId = text.match(/^<@&(\d+)>$/)?.[1] ?? (/^\d{10,}$/.test(text) ? text : null);
+  if (roleId) return message.guild.roles.cache.get(roleId) ?? null;
+
+  const exact = text.replace(/^@/, "").toLowerCase();
+  return message.guild.roles.cache.find((role) => role.name.toLowerCase() === exact) ?? null;
 }
 
 function extractNewChannelName(text) {
@@ -645,8 +717,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|slowmode|lock|lockdown|unlock|purge|delete|remove|nickname|nick|rename|role|disconnect|voice kick|move|create|make|new)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|slowmode|timeout|mute|ban|kick|warn|nickname|nick|voice|purge|delete|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|slowmode|lock|lockdown|unlock|purge|delete|remove|nickname|nick|rename|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|nickname|nick|voice|purge|delete|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -753,6 +825,50 @@ function planModerationToolFromText(message, rawText) {
       targetId: member.id,
       reason: extractReason(text, ["disconnect", "voice", "kick"]),
       summary: `disconnect ${member.displayName}, ${member.user.username} from voice`,
+    };
+  }
+
+  if (/\b(voice\s+mute|server\s+mute)\b/.test(normalized)) {
+    if (!member) return { error: "Tell me who to voice mute by mentioning them." };
+    return {
+      tool: "voice_mute_member",
+      risk: "medium",
+      targetId: member.id,
+      reason: extractReason(text, ["voice", "server", "mute"]),
+      summary: `voice mute ${member.displayName}, ${member.user.username}`,
+    };
+  }
+
+  if (/\b(voice\s+unmute|server\s+unmute)\b/.test(normalized)) {
+    if (!member) return { error: "Tell me who to voice unmute by mentioning them." };
+    return {
+      tool: "voice_unmute_member",
+      risk: "medium",
+      targetId: member.id,
+      reason: extractReason(text, ["voice", "server", "unmute"]),
+      summary: `voice unmute ${member.displayName}, ${member.user.username}`,
+    };
+  }
+
+  if (/\bdeafen\b/.test(normalized) && !/\bundeafen\b/.test(normalized)) {
+    if (!member) return { error: "Tell me who to deafen by mentioning them." };
+    return {
+      tool: "deafen_member",
+      risk: "medium",
+      targetId: member.id,
+      reason: extractReason(text, ["deafen"]),
+      summary: `deafen ${member.displayName}, ${member.user.username}`,
+    };
+  }
+
+  if (/\bundeafen\b/.test(normalized)) {
+    if (!member) return { error: "Tell me who to undeafen by mentioning them." };
+    return {
+      tool: "undeafen_member",
+      risk: "medium",
+      targetId: member.id,
+      reason: extractReason(text, ["undeafen"]),
+      summary: `undeafen ${member.displayName}, ${member.user.username}`,
     };
   }
 
@@ -1118,10 +1234,11 @@ function validateAiPlan(message, plan, serverContext = null) {
   if (!tool) return null;
 
   const context = serverContext ?? getMentionContext(message);
+  const inferredReason = inferReasonFromRequest(message, tool.name);
   const base = {
     tool: tool.name,
     risk: tool.risk,
-    reason: typeof plan.reason === "string" && plan.reason.trim() ? plan.reason.trim() : "No reason provided.",
+    reason: typeof plan.reason === "string" && plan.reason.trim() ? plan.reason.trim() : inferredReason ?? "No reason provided.",
   };
 
   if ([
@@ -1136,6 +1253,10 @@ function validateAiPlan(message, plan, serverContext = null) {
     "remove_role",
     "disconnect_member",
     "move_member",
+    "voice_mute_member",
+    "voice_unmute_member",
+    "deafen_member",
+    "undeafen_member",
     "delete_user_messages",
   ].includes(tool.name)) {
     const allowedMembers = context.members ?? context.mentionedMembers ?? [];
@@ -1191,6 +1312,10 @@ function validateAiPlan(message, plan, serverContext = null) {
       result.summary = `move ${member.displayName}, ${member.username} to ${channel.name}`;
     }
 
+    if (["voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"].includes(tool.name)) {
+      result.summary = `${commandLabel({ tool: tool.name }).toLowerCase()} ${member.displayName}, ${member.username}`;
+    }
+
     return result;
   }
 
@@ -1208,6 +1333,9 @@ function validateAiPlan(message, plan, serverContext = null) {
     const targetChannelId = String(plan.channelId || message.channelId);
     const allowed = message.guild.channels.cache.get(targetChannelId);
     if (!allowed) return { error: "Mention the channel so I can target the right one." };
+    if (tool.name === "delete_channel" && !plan.channelId) {
+      return { error: "Mention the channel or use its exact name so I can safely target the right channel." };
+    }
 
     const result = {
       ...base,
@@ -1248,9 +1376,9 @@ async function makePlannerMessages(message) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|create_text_channel\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"channelName\":\"new channel name when needed\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"channelName\":\"new channel name when needed\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member and move_member for voice moderation, create_text_channel for new text channels, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel for new text channels, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
         "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
@@ -1299,6 +1427,10 @@ function makePlannerResponseFormat(kind) {
                 "remove_role",
                 "disconnect_member",
                 "move_member",
+                "voice_mute_member",
+                "voice_unmute_member",
+                "deafen_member",
+                "undeafen_member",
                 "create_text_channel",
               ],
             },
@@ -1651,7 +1783,14 @@ async function makeChatMessages(message) {
         "Use the context to answer questions about the server, recent messages, members, channels, and roles when you can.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
-        "If a user asks for moderation, tell them you can prepare the tool call and an Administrator must confirm before it runs.",
+        "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
+        "Use tools ban, softban, kick, timeout, warn, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, or delete_channel.",
+        "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
+        "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
+        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}.",
+        "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
+        "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
+        "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
         "Be honest when you are missing context, permissions, or tool access.",
         "Do not claim an action was done unless Duck has already confirmed execution.",
       ].join(" "),
@@ -1824,6 +1963,115 @@ function extractAiTextContent(aiMessage) {
   return "";
 }
 
+const INLINE_TOOL_MAP = {
+  ban: "ban_member",
+  ban_member: "ban_member",
+  softban: "softban_member",
+  soft_ban: "softban_member",
+  softban_member: "softban_member",
+  kick: "kick_member",
+  kick_member: "kick_member",
+  timeout: "timeout_member",
+  mute: "timeout_member",
+  timeout_member: "timeout_member",
+  warn: "warn_member",
+  warning: "warn_member",
+  warn_member: "warn_member",
+  untimeout: "untimeout_member",
+  unmute: "untimeout_member",
+  untimeout_member: "untimeout_member",
+  purge: "purge_messages",
+  purge_messages: "purge_messages",
+  delete_messages: "purge_messages",
+  delete_user_messages: "delete_user_messages",
+  slowmode: "set_slowmode",
+  set_slowmode: "set_slowmode",
+  lock: "lock_channel",
+  lock_channel: "lock_channel",
+  unlock: "unlock_channel",
+  unlock_channel: "unlock_channel",
+  nickname: "set_nickname",
+  nick: "set_nickname",
+  set_nickname: "set_nickname",
+  add_role: "add_role",
+  remove_role: "remove_role",
+  disconnect: "disconnect_member",
+  disconnect_member: "disconnect_member",
+  move: "move_member",
+  move_member: "move_member",
+  voice_mute: "voice_mute_member",
+  server_mute: "voice_mute_member",
+  voice_mute_member: "voice_mute_member",
+  voice_unmute: "voice_unmute_member",
+  server_unmute: "voice_unmute_member",
+  voice_unmute_member: "voice_unmute_member",
+  deafen: "deafen_member",
+  deafen_member: "deafen_member",
+  undeafen: "undeafen_member",
+  undeafen_member: "undeafen_member",
+  create_channel: "create_text_channel",
+  create_text_channel: "create_text_channel",
+  delete_channel: "delete_channel",
+};
+
+function parseInlineToolCall(message, content) {
+  if (typeof content !== "string") return { content, plan: null };
+
+  const marker = content.match(/\{\{\s*([a-zA-Z0-9_ -]+)\s*::\s*([\s\S]*?)\s*::\s*([\s\S]*?)\s*\}\}/);
+  const cleanContent = content
+    .replace(/\{\{\s*[a-zA-Z0-9_ -]+\s*::[\s\S]*?::[\s\S]*?\s*\}\}/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (!marker) return { content: cleanContent || content, plan: null };
+
+  const toolKey = marker[1].trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const tool = INLINE_TOOL_MAP[toolKey];
+  const target = marker[2].trim();
+  const reason = marker[3].trim();
+  if (!tool || !target || !reason) return { content: cleanContent, plan: null };
+  const targetParts = target.split("|").map((part) => part.trim()).filter(Boolean);
+  const primaryTarget = targetParts[0] ?? target;
+
+  const rawPlan = {
+    tool,
+    reason,
+    targetName: primaryTarget,
+    targetId: primaryTarget.match(/^<@!?(\d+)>$/)?.[1] ?? (/^\d{10,}$/.test(primaryTarget) ? primaryTarget : undefined),
+    channelId: primaryTarget.match(/^<#(\d+)>$/)?.[1],
+    roleId: primaryTarget.match(/^<@&(\d+)>$/)?.[1],
+  };
+
+  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel"].includes(tool)) {
+    const channel = findChannelByToolTarget(message, primaryTarget);
+    if (channel) rawPlan.channelId = channel.id;
+  }
+
+  if (tool === "add_role" || tool === "remove_role") {
+    const role = findRoleByToolTarget(message, targetParts[1] ?? reason);
+    if (role) rawPlan.roleId = role.id;
+  }
+
+  if (tool === "move_member") {
+    const channel = findChannelByToolTarget(message, targetParts[1] ?? reason);
+    if (channel) rawPlan.channelId = channel.id;
+  }
+
+  if (tool === "purge_messages" || tool === "delete_user_messages") {
+    rawPlan.count = parseMessageCount(reason, parseMessageCount(message.content));
+  }
+  if (tool === "timeout_member") rawPlan.durationMs = parseDurationMs(`${message.content} ${reason}`);
+  if (tool === "set_slowmode") rawPlan.seconds = parseSlowmodeSeconds(`${target} ${reason} ${message.content}`);
+  if (tool === "set_nickname") rawPlan.nickname = reason;
+  if (tool === "create_text_channel") rawPlan.channelName = target;
+
+  const plan = validateAiPlan(message, rawPlan);
+  return {
+    content: cleanContent || "I can prepare that for Administrator approval.",
+    plan,
+  };
+}
+
 async function generateChatResponse(message) {
   const provider = getConfiguredAiProvider();
   logDebug("ai.chat.provider", { provider, messageId: message.id, channelId: message.channelId });
@@ -1904,6 +2152,10 @@ function commandLabel(action) {
   if (action.tool === "remove_role") return "Remove Role";
   if (action.tool === "disconnect_member") return "Disconnect Voice";
   if (action.tool === "move_member") return "Move Voice";
+  if (action.tool === "voice_mute_member") return "Voice Mute";
+  if (action.tool === "voice_unmute_member") return "Voice Unmute";
+  if (action.tool === "deafen_member") return "Deafen";
+  if (action.tool === "undeafen_member") return "Undeafen";
   if (action.tool === "create_text_channel") return "Create Text Channel";
   return "Moderate";
 }
@@ -1921,6 +2173,31 @@ function makeConfirmationRows(actionId) {
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
+}
+
+function makeActionEmbed(action) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${commandLabel(action)} Pending Approval`)
+    .setDescription(RISK_COPY[action.risk])
+    .setColor(action.risk === "critical" ? 0xff3b30 : action.risk === "high" ? 0xff9500 : 0x3b82f6)
+    .addFields(
+      { name: "Tool", value: `\`${action.tool}\``, inline: true },
+      { name: "Target", value: action.summary?.slice(0, 1024) || "Unknown", inline: false },
+      { name: "Reason", value: (action.reason || "No reason provided.").slice(0, 1024), inline: false },
+    )
+    .setFooter({ text: "An Administrator must confirm before Duck runs this." });
+
+  const details = [];
+  if (action.durationMs) details.push(`Duration: ${Math.round(action.durationMs / 60000)} minute(s)`);
+  if (action.seconds != null) details.push(`Slowmode: ${action.seconds} second(s)`);
+  if (action.count != null) details.push(`Count: ${action.count}`);
+  if (action.nickname) details.push(`Nickname: ${action.nickname}`);
+  if (action.roleName) details.push(`Role: @${action.roleName}`);
+  if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
+  if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
+  if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
+
+  return embed;
 }
 
 function describeAction(action) {
@@ -1943,7 +2220,7 @@ function describeAction(action) {
   return lines.join("\n");
 }
 
-async function promptForConfirmation(message, action) {
+async function promptForConfirmation(message, action, options = {}) {
   const startedAt = Date.now();
   const actionId = `${Date.now()}_${message.id}`;
   const createdAt = Date.now();
@@ -1957,11 +2234,16 @@ async function promptForConfirmation(message, action) {
     expiresAt: createdAt + getPendingActionTtlMs(),
   };
 
-  const prompt = await message.reply({
-    content: describeAction(pending),
+  const payload = {
+    content: options.content ?? describeAction(pending),
+    embeds: options.useEmbed ? [makeActionEmbed(pending)] : [],
     components: makeConfirmationRows(actionId),
     allowedMentions: { repliedUser: false },
-  });
+  };
+
+  const prompt = options.messageToEdit
+    ? await options.messageToEdit.edit(payload)
+    : await message.reply(payload);
 
   pending.promptId = prompt.id;
   pendingActions.set(actionId, pending);
@@ -2085,6 +2367,26 @@ async function executeAction(client, action, approver) {
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     await member.voice.setChannel(channel, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return `I have moved ${member.displayName}, ${member.user.username} to ${channel.name}.`;
+  }
+
+  if (action.tool === "voice_mute_member" || action.tool === "voice_unmute_member") {
+    const member = await guild.members.fetch(action.targetId);
+    if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
+    const mute = action.tool === "voice_mute_member";
+    await member.voice.setMute(mute, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return mute
+      ? `I have voice muted ${member.displayName}, ${member.user.username}.`
+      : `I have removed voice mute from ${member.displayName}, ${member.user.username}.`;
+  }
+
+  if (action.tool === "deafen_member" || action.tool === "undeafen_member") {
+    const member = await guild.members.fetch(action.targetId);
+    if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
+    const deaf = action.tool === "deafen_member";
+    await member.voice.setDeaf(deaf, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return deaf
+      ? `I have deafened ${member.displayName}, ${member.user.username}.`
+      : `I have removed deafen from ${member.displayName}, ${member.user.username}.`;
   }
 
   if (action.tool === "delete_channel") {
@@ -2565,8 +2867,33 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     let plan = null;
+    let toolResponseContent = null;
+    let chatError = null;
     if (wantsToolPlan) {
-      plan = await planModerationRequest(planningMessage);
+      if (hasConfiguredAi()) {
+        const chatResult = await generateChatResponse(planningMessage);
+        chatError = chatResult.error;
+        if (chatResult.content) {
+          const parsedToolCall = parseInlineToolCall(planningMessage, chatResult.content);
+          toolResponseContent = parsedToolCall.content;
+          plan = parsedToolCall.plan;
+          logDebug("message.inline-tool-parsed", {
+            messageId: message.id,
+            hasPlan: Boolean(plan),
+            tool: plan?.tool,
+            planError: plan?.error,
+            hasResponseContent: Boolean(toolResponseContent),
+            ms: elapsedMs(messageStartedAt),
+          });
+        }
+      }
+
+      if (!plan) {
+        plan = await planModerationRequest(planningMessage);
+        if (!toolResponseContent && chatError) {
+          toolResponseContent = chatError;
+        }
+      }
       logDebug("message.plan-finished", {
         messageId: message.id,
         hasPlan: Boolean(plan),
@@ -2599,9 +2926,28 @@ client.on(Events.MessageCreate, async (message) => {
       });
 
       if (content && queueMessage) {
-        await queueMessage.edit({ content, allowedMentions: { repliedUser: false } }).catch(() => {});
+        const parsedToolCall = parseInlineToolCall(planningMessage, content);
+        if (parsedToolCall.plan && !parsedToolCall.plan.error) {
+          const needed = TOOL_REQUIREMENTS[parsedToolCall.plan.tool];
+          if (!needed || hasPermission(message.member, needed)) {
+            await promptForConfirmation(message, parsedToolCall.plan, {
+              messageToEdit: queueMessage,
+              content: parsedToolCall.content,
+              useEmbed: true,
+            });
+            logInfo("message.inline-moderation-planned", {
+              messageId: message.id,
+              tool: parsedToolCall.plan.tool,
+              queueMessageId: queueMessage.id,
+              ms: elapsedMs(messageStartedAt),
+            });
+            return;
+          }
+        }
+        await queueMessage.edit({ content: parsedToolCall.content || content, allowedMentions: { repliedUser: false } }).catch(() => {});
       } else if (content) {
-        await message.reply({ content, allowedMentions: { repliedUser: false } });
+        const parsedToolCall = parseInlineToolCall(planningMessage, content);
+        await message.reply({ content: parsedToolCall.content || content, allowedMentions: { repliedUser: false } });
       } else if (queueMessage) {
         await queueMessage.edit({ content: "I tried to answer, but AI returned no content and I do not have a local fallback for that." }).catch(() => {});
       }
@@ -2640,10 +2986,19 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
+    const confirmationContent = toolResponseContent || "Prepared a moderation plan. Waiting for Administrator confirmation.";
     if (queueMessage) {
-      await queueMessage.edit({ content: "Prepared a moderation plan. Waiting for Administrator confirmation." }).catch(() => {});
+      await promptForConfirmation(message, plan, {
+        messageToEdit: queueMessage,
+        content: confirmationContent,
+        useEmbed: true,
+      });
+    } else {
+      await promptForConfirmation(message, plan, {
+        content: confirmationContent,
+        useEmbed: true,
+      });
     }
-    await promptForConfirmation(message, plan);
     logInfo("message.moderation-planned", {
       messageId: message.id,
       tool: plan.tool,

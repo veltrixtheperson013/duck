@@ -11,6 +11,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - `/setup channel:#channel` chooses the channel where Duck listens.
 - Duck responds to all user messages in the setup channel when AI is configured.
 - Natural language moderation requests in the setup channel become confirmation-gated tool plans.
+- AI chat can request moderation with hidden inline markers like `{{warn::member::reason}}`; Duck hides the marker, validates it locally, then shows an approval embed.
 - Duck also responds when someone says `duck`, mentions `@Duck`, or replies to one of Duck's messages.
 - Queue/thinking messages are posted while AI is working, then edited with the result.
 - Server context and recent-message reads are cached briefly to reduce wait times.
@@ -24,6 +25,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - The AI receives bounded server context: channel list, role list, mentioned users, and recent messages from readable text channels.
 - User-facing error messages say when AI/OpenRouter failed instead of hiding it behind generic fallback text.
 - Tools for ban, softban, kick, timeout, remove timeout, warn, nicknames, roles, voice moderation, channel creation/deletion, purge messages, slowmode, lock channel, and unlock channel.
+- Extra voice tools include server voice mute/unmute and deafen/undeafen.
 
 ## Examples
 
@@ -83,6 +85,21 @@ I have deleted the channel "General".
 
 Duck's AI never executes tools directly. It only returns a JSON plan for moderation requests, then Duck validates that plan and shows an Administrator-only confirmation prompt.
 
+For chat responses, Duck also supports hidden inline tool markers. The AI can respond normally and end with:
+
+```text
+{{warn::Ryzen 9 9950X3D2::testing purposes}}
+```
+
+Duck removes the marker from the visible response and turns it into a confirmation embed. For two-target tools, separate targets with `|`:
+
+```text
+{{add_role::Ryzen 9 9950X3D2|Member::testing purposes}}
+{{move::Ryzen 9 9950X3D2|General Voice::testing purposes}}
+```
+
+Supported marker tool names include `ban`, `softban`, `kick`, `timeout`, `warn`, `untimeout`, `purge`, `delete_user_messages`, `slowmode`, `lock`, `unlock`, `nickname`, `add_role`, `remove_role`, `disconnect`, `move`, `voice_mute`, `voice_unmute`, `deafen`, `undeafen`, `create_channel`, and `delete_channel`.
+
 The planner is instructed to:
 
 - Choose exactly one tool for the user's moderation request.
@@ -118,6 +135,8 @@ Common tool choices:
 - `set_nickname`: change a mentioned member's nickname.
 - `add_role` / `remove_role`: edit a mentioned member's role.
 - `disconnect_member` / `move_member`: voice moderation.
+- `voice_mute_member` / `voice_unmute_member`: server mute or unmute a member in voice.
+- `deafen_member` / `undeafen_member`: server deafen or undeafen a member in voice.
 - `create_text_channel`: create a text channel.
 - `delete_channel`: delete an explicitly requested channel.
 
@@ -186,6 +205,8 @@ Common tool choices:
    - Manage Nicknames
    - Manage Roles
    - Move Members
+   - Mute Members
+   - Deafen Members
 
 5. Start the bot:
 
@@ -270,6 +291,10 @@ Set `DUCK_DEBUG_AI_BODY=true` only when needed. It logs short AI response snippe
 - `remove role @user "Muted"`
 - `disconnect @user`
 - `move @user "General Voice"`
+- `voice mute @user reason`
+- `voice unmute @user reason`
+- `deafen @user reason`
+- `undeafen @user reason`
 - `delete 10 messages from @user`
 - `create text channel "mod-log"`
 - `delete channel "General"`
