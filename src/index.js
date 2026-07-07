@@ -1219,6 +1219,7 @@ async function collectRecentMessages(message) {
       .values(),
   ];
   const recentMessages = [];
+  const channelMessages = [];
   const errors = [];
 
   for (const channel of candidates) {
@@ -1228,9 +1229,10 @@ async function collectRecentMessages(message) {
 
     try {
       const fetched = await channel.messages.fetch({ limit: perChannel });
+      const messagesForChannel = [];
       for (const item of fetched.values()) {
         if (recentMessages.length >= maxTotal) break;
-        recentMessages.push({
+        const summary = {
           id: item.id,
           channelId: channel.id,
           channelName: channel.name,
@@ -1239,10 +1241,40 @@ async function collectRecentMessages(message) {
           createdAt: item.createdAt.toISOString(),
           content: item.cleanContent.replace(/\s+/g, " ").slice(0, 220),
           attachmentCount: item.attachments.size,
+        };
+        recentMessages.push(summary);
+        messagesForChannel.push({
+          id: summary.id,
+          authorId: summary.authorId,
+          authorTag: summary.authorTag,
+          createdAt: summary.createdAt,
+          content: summary.content,
+          attachmentCount: summary.attachmentCount,
         });
+      }
+
+      channelMessages.push({
+        channelId: channel.id,
+        channelName: channel.name,
+        channelType: channel.type,
+        parentName: channel.parent?.name ?? null,
+        readable: true,
+        messages: messagesForChannel,
+      });
+
+      if (recentMessages.length >= maxTotal) {
+        break;
       }
     } catch {
       errors.push(channel.id);
+      channelMessages.push({
+        channelId: channel.id,
+        channelName: channel.name,
+        channelType: channel.type,
+        parentName: channel.parent?.name ?? null,
+        readable: false,
+        messages: [],
+      });
     }
   }
 
@@ -1251,11 +1283,12 @@ async function collectRecentMessages(message) {
     channelId: message.channelId,
     channelReads: seen.size,
     messages: recentMessages.length,
+    channelMessageGroups: channelMessages.length,
     failedChannels: errors.length,
     ms: elapsedMs(startedAt),
   });
 
-  return recentMessages;
+  return { recentMessages, channelMessages };
 }
 
 async function collectServerContext(message) {
@@ -1301,6 +1334,7 @@ async function collectServerContext(message) {
     }))
     .slice(0, getAiContextRoleLimit());
 
+  const messageContext = await collectRecentMessages(message);
   const context = {
     guild: {
       id: message.guild.id,
@@ -1317,7 +1351,8 @@ async function collectServerContext(message) {
     mentionedRoles: mentioned.roles,
     availableChannels: channels,
     availableRoles: roles,
-    recentMessages: await collectRecentMessages(message),
+    recentMessages: messageContext.recentMessages,
+    channelMessages: messageContext.channelMessages,
     currentMessage: {
       id: message.id,
       authorId: message.author.id,
@@ -1341,6 +1376,7 @@ async function collectServerContext(message) {
     roles: roles.length,
     memberCandidates: memberCandidates.length,
     recentMessages: context.recentMessages.length,
+    channelMessageGroups: context.channelMessages.length,
     ms: elapsedMs(startedAt),
   });
 
@@ -1573,6 +1609,7 @@ async function makePlannerMessages(message) {
         "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
         "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
         "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
@@ -1983,7 +2020,8 @@ async function makeChatMessages(message) {
       content: [
         "You are Duck, a concise Discord AI chatbot with moderation tools.",
         "Respond naturally to the current message using the server context and recent chat.",
-        "Use the context to answer questions about the server, recent messages, members, channels, and roles when you can.",
+        "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
+        "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
@@ -2961,8 +2999,8 @@ function wantsRecentHistory(text) {
 }
 
 async function makeRecentHistoryResponse(message) {
-  const recent = await collectRecentMessages(message);
-  const items = recent
+  const { recentMessages } = await collectRecentMessages(message);
+  const items = recentMessages
     .filter((item) => item.channelId === message.channelId && item.id !== message.id && item.content)
     .slice(0, 8);
 
