@@ -10,8 +10,11 @@ Duck can use OpenRouter as an optional AI planner for more flexible wording. Ope
 
 - `/setup channel:#channel` chooses the channel where Duck listens.
 - Natural language moderation requests in the setup channel.
+- Duck also responds when someone says `duck`, mentions `@Duck`, or replies to one of Duck's messages.
 - Confirmation buttons for every moderation action.
 - Text confirmation with `I confirm` for the latest pending action in the channel.
+- Pending confirmations are saved to disk so quick process/server restarts do not lose them.
+- Discord status shows Duck is watching for `duck` / `@Duck`.
 - Administrator approval required for every action.
 - Permission checks for the person requesting, the Administrator confirming, and Duck itself.
 - Optional AI planner for more flexible wording.
@@ -19,6 +22,24 @@ Duck can use OpenRouter as an optional AI planner for more flexible wording. Ope
 - Tools for ban, softban, kick, timeout, remove timeout, warn, nicknames, roles, voice moderation, channel creation/deletion, purge messages, slowmode, lock channel, and unlock channel.
 
 ## Examples
+
+```text
+duck
+```
+
+Duck replies with usage examples.
+
+```text
+@Duck warn @BadUser spam
+```
+
+Duck prepares a warning even outside the setup channel because it was mentioned.
+
+You can also reply to one of Duck's messages:
+
+```text
+timeout @BadUser 10m spam
+```
 
 ```text
 Ban @BadUser spam
@@ -107,7 +128,8 @@ Common tool choices:
      "OPENROUTER_MODEL": "tencent/hy3:free",
      "AI_CONTEXT_CHANNELS": "5",
      "AI_CONTEXT_MESSAGES_PER_CHANNEL": "8",
-     "AI_CONTEXT_MAX_MESSAGES": "40"
+     "AI_CONTEXT_MAX_MESSAGES": "40",
+     "PENDING_ACTION_TTL_MS": "1800000"
    }
    ```
 
@@ -123,6 +145,7 @@ Common tool choices:
    - Groq is still supported with `AI_PROVIDER=groq`, `GROQ_API_KEY`, and `GROQ_MODEL`, but do not use it if Groq login is broken for you.
 
    AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, and `AI_CONTEXT_MAX_MESSAGES`.
+   Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
 
    Current OpenRouter free models can rotate. As of July 6, 2026, OpenRouter's public model API lists `tencent/hy3:free` with zero prompt and completion pricing.
 
@@ -187,6 +210,7 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "AI_CONTEXT_CHANNELS": "5",
   "AI_CONTEXT_MESSAGES_PER_CHANNEL": "8",
   "AI_CONTEXT_MAX_MESSAGES": "40",
+  "PENDING_ACTION_TTL_MS": "1800000",
   "OLLAMA_MODEL": "llama3.1:8b",
   "OLLAMA_BASE_URL": "http://localhost:11434",
   "AI_API_KEY": "optional_hosted_ai_key_here",

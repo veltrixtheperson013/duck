@@ -8,6 +8,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  ActivityType,
   PermissionsBitField,
   REST,
   Routes,
@@ -16,9 +17,11 @@ import {
 
 const dataDir = path.join(process.cwd(), "data");
 const settingsPath = path.join(dataDir, "settings.json");
+const pendingActionsPath = path.join(dataDir, "pending-actions.json");
 
 const pendingActions = new Map();
 const pendingByChannel = new Map();
+const pendingExpiryTimers = new Map();
 
 const TOOL_DEFINITIONS = [
   {
@@ -190,6 +193,68 @@ function saveSettings(settings) {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 
+function getPendingActionTtlMs() {
+  return Math.max(60_000, Number(process.env.PENDING_ACTION_TTL_MS) || 30 * 60 * 1000);
+}
+
+function savePendingActions() {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(pendingActionsPath, JSON.stringify([...pendingActions.values()], null, 2));
+}
+
+function schedulePendingExpiry(action) {
+  if (pendingExpiryTimers.has(action.id)) {
+    clearTimeout(pendingExpiryTimers.get(action.id));
+  }
+
+  const expiresAt = action.expiresAt ?? action.createdAt + getPendingActionTtlMs();
+  const delay = Math.max(0, expiresAt - Date.now());
+  const timer = setTimeout(() => {
+    pendingActions.delete(action.id);
+    pendingExpiryTimers.delete(action.id);
+    if (pendingByChannel.get(action.channelId) === action.id) {
+      pendingByChannel.delete(action.channelId);
+    }
+    savePendingActions();
+  }, delay);
+
+  pendingExpiryTimers.set(action.id, timer);
+}
+
+function rebuildPendingByChannel() {
+  pendingByChannel.clear();
+  const actions = [...pendingActions.values()].sort((a, b) => a.createdAt - b.createdAt);
+  for (const action of actions) {
+    pendingByChannel.set(action.channelId, action.id);
+  }
+}
+
+function loadPendingActions() {
+  try {
+    if (!fs.existsSync(pendingActionsPath)) return;
+
+    const saved = JSON.parse(fs.readFileSync(pendingActionsPath, "utf8"));
+    const now = Date.now();
+    const ttl = getPendingActionTtlMs();
+
+    for (const action of saved) {
+      if (!action?.id || !action.channelId || !action.guildId) continue;
+
+      const expiresAt = action.expiresAt ?? action.createdAt + ttl;
+      if (expiresAt <= now) continue;
+
+      const hydrated = { ...action, expiresAt };
+      pendingActions.set(hydrated.id, hydrated);
+      schedulePendingExpiry(hydrated);
+    }
+
+    rebuildPendingByChannel();
+    savePendingActions();
+  } catch (err) {
+    console.error("Could not restore pending Duck confirmations:", err);
+  }
+}
+
 function getGuildSettings(guildId) {
   const settings = loadSettings();
   settings.guilds[guildId] ??= {};
@@ -350,6 +415,16 @@ function summarizeChannel(channel) {
   return channel.name ? `#${channel.name}` : `channel ${channel.id}`;
 }
 
+function findMentionedMemberForPlan(message, text) {
+  const mentionIds = [...text.matchAll(/<@!?(\d+)>/g)].map((match) => match[1]);
+  for (const id of mentionIds) {
+    const member = message.mentions.members.get(id);
+    if (member && !member.user.bot) return member;
+  }
+
+  return message.mentions.members.find((member) => !member.user.bot) ?? message.mentions.members.first();
+}
+
 function planLocalModerationTool(message) {
   return planModerationToolFromText(message, message.content);
 }
@@ -361,7 +436,7 @@ function planModerationTool(message) {
 function planModerationToolFromText(message, rawText) {
   const text = rawText.trim();
   const normalized = normalizeText(text);
-  const member = message.mentions.members.first();
+  const member = findMentionedMemberForPlan(message, text);
 
   if (/^(ban|banish)\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to ban by mentioning them." };
@@ -603,11 +678,13 @@ function cleanJsonResponse(text) {
 }
 
 function getMentionContext(message) {
-  const members = [...(message.mentions.members?.values() ?? [])].map((member) => ({
-    id: member.id,
-    displayName: member.displayName,
-    username: member.user.username,
-  }));
+  const members = [...(message.mentions.members?.values() ?? [])]
+    .filter((member) => !member.user.bot)
+    .map((member) => ({
+      id: member.id,
+      displayName: member.displayName,
+      username: member.user.username,
+    }));
 
   const mentionedChannels = [...message.mentions.channels.values()].map((channel) => ({
     id: channel.id,
@@ -722,7 +799,9 @@ async function collectServerContext(message) {
     },
     currentChannel: summarizeChannelForContext(message.channel),
     requester: summarizeMember(message.member),
-    mentionedMembers: [...(message.mentions.members?.values() ?? [])].map(summarizeMember),
+    mentionedMembers: [...(message.mentions.members?.values() ?? [])]
+      .filter((member) => !member.user.bot)
+      .map(summarizeMember),
     mentionedChannels: mentioned.channels,
     mentionedRoles: mentioned.roles,
     availableChannels: channels,
@@ -1180,17 +1259,16 @@ function describeAction(action) {
 
 async function promptForConfirmation(message, action) {
   const actionId = `${Date.now()}_${message.id}`;
+  const createdAt = Date.now();
   const pending = {
     ...action,
     id: actionId,
     guildId: message.guildId,
     requestedBy: message.author.id,
     channelId: message.channelId,
-    createdAt: Date.now(),
+    createdAt,
+    expiresAt: createdAt + getPendingActionTtlMs(),
   };
-
-  pendingActions.set(actionId, pending);
-  pendingByChannel.set(message.channelId, actionId);
 
   const prompt = await message.reply({
     content: describeAction(pending),
@@ -1200,15 +1278,9 @@ async function promptForConfirmation(message, action) {
 
   pending.promptId = prompt.id;
   pendingActions.set(actionId, pending);
-
-  setTimeout(() => {
-    if (pendingActions.has(actionId)) {
-      pendingActions.delete(actionId);
-      if (pendingByChannel.get(message.channelId) === actionId) {
-        pendingByChannel.delete(message.channelId);
-      }
-    }
-  }, 5 * 60 * 1000);
+  pendingByChannel.set(message.channelId, actionId);
+  schedulePendingExpiry(pending);
+  savePendingActions();
 }
 
 async function executeAction(client, action, approver) {
@@ -1409,9 +1481,14 @@ async function approveAction(source, actionId, client) {
   }
 
   pendingActions.delete(actionId);
+  if (pendingExpiryTimers.has(actionId)) {
+    clearTimeout(pendingExpiryTimers.get(actionId));
+    pendingExpiryTimers.delete(actionId);
+  }
   if (pendingByChannel.get(action.channelId) === actionId) {
     pendingByChannel.delete(action.channelId);
   }
+  savePendingActions();
 
   const result = await executeAction(client, action, approver);
 
@@ -1436,11 +1513,65 @@ async function cancelAction(interaction, actionId) {
   }
 
   pendingActions.delete(actionId);
+  if (pendingExpiryTimers.has(actionId)) {
+    clearTimeout(pendingExpiryTimers.get(actionId));
+    pendingExpiryTimers.delete(actionId);
+  }
   if (pendingByChannel.get(action.channelId) === actionId) {
     pendingByChannel.delete(action.channelId);
   }
+  savePendingActions();
 
   await interaction.update({ content: "Cancelled. I did not run the moderation tool.", components: [] });
+}
+
+function makeDuckHelp() {
+  return [
+    "Duck is online. Mention me, reply to me, or say `duck` with a moderation request.",
+    "Examples: `duck warn @user spam`, `duck timeout @user 10m flooding`, `duck purge 25`, `duck lock #general`.",
+    "I only prepare actions. An Administrator must confirm before I do anything.",
+  ].join("\n");
+}
+
+function makeMessageWithContent(message, content) {
+  const planningMessage = Object.create(message);
+  Object.defineProperty(planningMessage, "content", {
+    value: content,
+    configurable: true,
+  });
+  return planningMessage;
+}
+
+async function isReplyToDuck(message, client) {
+  if (!message.reference?.messageId) return false;
+  if (message.mentions.repliedUser?.id === client.user.id) return true;
+
+  try {
+    const referenced = await message.channel.messages.fetch(message.reference.messageId);
+    return referenced.author.id === client.user.id;
+  } catch {
+    return false;
+  }
+}
+
+async function getDuckInvocation(message, client) {
+  const botMention = new RegExp(`<@!?${client.user.id}>`, "g");
+  const mentionedDuck = botMention.test(message.content);
+  const startsWithDuck = /^duck(?:\b|[\s,.:;!?-]|$)/i.test(message.content.trim());
+  const repliedToDuck = await isReplyToDuck(message, client);
+  const invoked = mentionedDuck || startsWithDuck || repliedToDuck;
+
+  if (!invoked) {
+    return { invoked: false, content: message.content };
+  }
+
+  const content = message.content
+    .replace(botMention, " ")
+    .replace(/^duck(?:\b|[\s,.:;!?-]|$)/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return { invoked: true, content };
 }
 
 async function registerCommands(client) {
@@ -1466,6 +1597,7 @@ async function registerCommands(client) {
 }
 
 requireConfig();
+loadPendingActions();
 
 const client = new Client({
   intents: [
@@ -1479,6 +1611,17 @@ const client = new Client({
 
 client.once(Events.ClientReady, async () => {
   console.log(`Duck is online as ${client.user.tag}`);
+  client.user.setPresence({
+    activities: [
+      {
+        name: "for duck / @Duck",
+        type: ActivityType.Watching,
+      },
+    ],
+    status: "online",
+  });
+
+  console.log(`Restored ${pendingActions.size} pending Duck confirmation${pendingActions.size === 1 ? "" : "s"}.`);
   try {
     await registerCommands(client);
     console.log("Duck slash commands registered.");
@@ -1533,6 +1676,8 @@ client.on(Events.MessageCreate, async (message) => {
 
     const guildSettings = getGuildSettings(message.guildId);
     const configuredChannelId = guildSettings.modChannelId;
+    const invocation = await getDuckInvocation(message, client);
+    const inConfiguredChannel = configuredChannelId && message.channelId === configuredChannelId;
 
     const isConfirmText = normalizeText(message.content) === "i confirm";
     if (isConfirmText) {
@@ -1543,11 +1688,24 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    if (!configuredChannelId) return;
-    if (message.channelId !== configuredChannelId) return;
+    if (!inConfiguredChannel && !invocation.invoked) return;
 
-    const plan = await planModerationRequest(message);
-    if (!plan) return;
+    if (invocation.invoked && !invocation.content) {
+      await message.reply({ content: makeDuckHelp(), allowedMentions: { repliedUser: false } });
+      return;
+    }
+
+    const planningMessage = invocation.invoked
+      ? makeMessageWithContent(message, invocation.content)
+      : message;
+
+    const plan = await planModerationRequest(planningMessage);
+    if (!plan) {
+      if (invocation.invoked) {
+        await message.reply({ content: makeDuckHelp(), allowedMentions: { repliedUser: false } });
+      }
+      return;
+    }
 
     if (plan.error) {
       await message.reply(plan.error);
