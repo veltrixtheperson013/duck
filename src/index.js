@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import http from "node:http";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -21,6 +23,7 @@ const dataDir = path.join(process.cwd(), "data");
 const settingsPath = path.join(dataDir, "settings.json");
 const pendingActionsPath = path.join(dataDir, "pending-actions.json");
 const warningsPath = path.join(dataDir, "warnings.json");
+const quotesPath = path.join(dataDir, "quotes.json");
 
 const pendingActions = new Map();
 const pendingByChannel = new Map();
@@ -307,9 +310,39 @@ const UTILITY_COMMANDS = [
   "`duck channelinfo #channel`",
   "`duck roleinfo @role`",
   "`duck warnings @user`",
+  "`duck quote` / `duck quote add <text>` / `duck quote list`",
+  "`duck ship @user [@user]`",
+  "`duck curse [@user]`",
+  "`duck spinwheel pizza, tacos, sushi`",
+  "`duck remind 10m check the logs`",
+  "`duck rules`",
   "`duck ping`",
   "`duck botinfo`",
 ];
+
+const DEFAULT_QUOTES = [
+  "Silence is golden. Duct tape is silver.",
+  "I'm not arguing, I'm just explaining why I'm right.",
+  "Common sense is not a super power. It's just not common.",
+];
+
+const CURSES = [
+  "may your next click always land 1px off the button you meant.",
+  "may your chat always say 'typing...' right when you have nothing left to say.",
+  "may your food always be one bite too hot.",
+  "may you forever queue behind the slowest walker in every hallway.",
+  "may your phone always be at 12% with no charger in sight.",
+];
+
+const BLESSINGS = [
+  "may every green light be in your favor today.",
+  "may your snacks always be perfectly portioned.",
+  "may your wifi never lag mid-clutch.",
+  "may your favorite song always play at the right moment.",
+];
+
+let keepAliveServer = null;
+let inviteCleanupTimer = null;
 
 const TOOL_REQUIREMENTS = {
   ban_member: PermissionsBitField.Flags.BanMembers,
@@ -406,6 +439,20 @@ function saveSettings(settings) {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 
+function loadJsonFile(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJsonFile(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
 function loadWarnings() {
   try {
     if (!fs.existsSync(warningsPath)) return { guilds: {} };
@@ -485,6 +532,32 @@ function getAiContextMessageChars() {
 
 function getQueueMessage() {
   return process.env.DUCK_QUEUE_MESSAGE || "Duck is thinking...";
+}
+
+function getEnvBoolean(name, fallback = false) {
+  const value = process.env[name];
+  if (value == null || value === "") return fallback;
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function getEnvId(name) {
+  const value = String(process.env[name] || "").trim();
+  return /^\d{10,}$/.test(value) ? value : null;
+}
+
+function getLegacyCommandPrefixes() {
+  return (process.env.DUCK_LEGACY_PREFIXES || "!,!!")
+    .split(",")
+    .map((prefix) => prefix.trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+}
+
+function getLegacyCommandContent(content) {
+  const prefixes = getLegacyCommandPrefixes();
+  const prefix = prefixes.find((candidate) => content.startsWith(candidate));
+  if (!prefix) return null;
+  return content.slice(prefix.length).trim();
 }
 
 function getAiChatMaxTokens() {
@@ -2624,6 +2697,7 @@ async function makeChatMessages(message) {
         "If the current message is a reply, use serverContext.currentMessage.replyTo as direct reply context before broader channel history.",
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
+        "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
@@ -3908,6 +3982,66 @@ function formatRoleInfo(role) {
   ].join("\n");
 }
 
+function loadQuotes() {
+  const quotes = loadJsonFile(quotesPath, DEFAULT_QUOTES);
+  return Array.isArray(quotes) ? quotes.filter((quote) => typeof quote === "string" && quote.trim()) : [...DEFAULT_QUOTES];
+}
+
+function saveQuotes(quotes) {
+  saveJsonFile(quotesPath, quotes);
+}
+
+function parseReminderDuration(text) {
+  const match = String(text || "").trim().match(/^(\d{1,4})(s|m|h|d)$/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const seconds = unit === "s" ? amount
+    : unit === "m" ? amount * 60
+      : unit === "h" ? amount * 60 * 60
+        : amount * 24 * 60 * 60;
+  if (seconds < 1 || seconds > 7 * 24 * 60 * 60) return null;
+  return seconds;
+}
+
+function formatRulesText() {
+  return [
+    "Server Rules",
+    "1. Be civil. Treat everyone with respect and keep the chat friendly.",
+    "2. No scams, spam, or malicious links.",
+    "3. No politics in general chat.",
+    "4. No hate content or extremist content.",
+    "5. No unnecessary drama or harassment.",
+    "6. Ask before inviting people if that is expected in this server.",
+  ].join("\n");
+}
+
+function formatShipResult(memberA, memberB) {
+  const pairKey = [memberA.id, memberB.id].sort().join("-");
+  const pct = Number.parseInt(createHash("sha256").update(pairKey).digest("hex").slice(0, 8), 16) % 101;
+  const filled = "#".repeat(Math.floor(pct / 10));
+  const empty = "-".repeat(10 - Math.floor(pct / 10));
+  const verdict = pct >= 90 ? "soulmates"
+    : pct >= 70 ? "pretty solid"
+      : pct >= 40 ? "could go either way"
+        : pct >= 15 ? "rough start"
+          : "please don't";
+  return [
+    "Ship Calculator",
+    `${memberA.displayName} x ${memberB.displayName}`,
+    `[${filled}${empty}] ${pct}%`,
+    verdict,
+  ].join("\n");
+}
+
+function parseSpinOptions(text) {
+  return text
+    .split(",")
+    .map((option) => option.trim())
+    .filter(Boolean)
+    .slice(0, 50);
+}
+
 function makeUtilityHelp() {
   return [
     "Utility commands:",
@@ -3932,6 +4066,68 @@ async function makeUtilityResponse(message, text) {
 
   if (/^(ping|latency)\b/.test(normalized)) {
     return `Pong. Discord gateway ping: ${Math.round(client.ws.ping)}ms.`;
+  }
+
+  if (/^(rules|sendrules)\b/.test(normalized)) {
+    return formatRulesText();
+  }
+
+  if (/^quote\b/.test(normalized)) {
+    const rest = text.replace(/^quote\b/i, "").trim();
+    const quotes = loadQuotes();
+
+    if (/^add\b/i.test(rest)) {
+      const quoteText = rest.replace(/^add\b/i, "").trim();
+      if (!quoteText) return "Usage: `duck quote add <text>`";
+      quotes.push(limitDiscordContent(quoteText, 500));
+      saveQuotes(quotes);
+      return `Quote #${quotes.length} saved.`;
+    }
+
+    if (/^list\b/i.test(rest)) {
+      if (!quotes.length) return "No quotes saved yet.";
+      return quotes.slice(0, 20).map((quote, index) => `${index + 1}. ${quote}`).join("\n");
+    }
+
+    if (!quotes.length) return "No quotes saved yet. Add one with `duck quote add <text>`.";
+    return quotes[Math.floor(Math.random() * quotes.length)];
+  }
+
+  if (/^ship\b/.test(normalized)) {
+    const members = [...message.mentions.members.values()].filter((member) => !member.user.bot);
+    const memberA = members[0] ?? findMemberByTextReference(message, text.replace(/^ship\b/i, "")) ?? message.member;
+    const memberB = members[1] ?? (members[0] ? message.member : null);
+    if (!memberA || !memberB) return "Usage: `duck ship @user [@user]`";
+    return formatShipResult(memberA, memberB);
+  }
+
+  if (/^curse\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^curse\b/i, ""), true);
+    const blessing = Math.random() < 0.5;
+    const textPool = blessing ? BLESSINGS : CURSES;
+    const result = textPool[Math.floor(Math.random() * textPool.length)];
+    return `${blessing ? "Blessing granted" : "Curse cast"} on ${target.displayName}: ${result}`;
+  }
+
+  if (/^spinwheel\b/.test(normalized)) {
+    const options = parseSpinOptions(text.replace(/^spinwheel\b/i, "").trim());
+    if (options.length < 2) return "Give me at least 2 comma-separated options, like `duck spinwheel pizza, tacos, sushi`.";
+    return `Landed on: ${options[Math.floor(Math.random() * options.length)]}`;
+  }
+
+  if (/^remind\b/.test(normalized)) {
+    const match = text.match(/^remind\s+(\S+)\s+([\s\S]+)/i);
+    if (!match) return "Usage: `duck remind 10m check the logs`";
+    const seconds = parseReminderDuration(match[1]);
+    const reminderText = match[2].trim();
+    if (!seconds || !reminderText) return "Pick a reminder time from 1 second to 7 days. Use `s`, `m`, `h`, or `d`.";
+    setTimeout(() => {
+      message.channel.send({
+        content: `<@${message.author.id}> Reminder: ${limitDiscordContent(reminderText, 1700)}`,
+        allowedMentions: { users: [message.author.id] },
+      }).catch((err) => logWarn("reminder.send-failed", { messageId: message.id, error: err?.message || String(err) }));
+    }, seconds * 1000);
+    return `Reminder set for ${match[1]}.`;
   }
 
   if (/^(botinfo|bot info|about duck|version)\b/.test(normalized)) {
@@ -4039,6 +4235,147 @@ async function getDuckInvocation(message, client) {
   return { invoked: true, content };
 }
 
+function startKeepAliveServer() {
+  if (!getEnvBoolean("DUCK_KEEP_ALIVE", false) || keepAliveServer) return;
+
+  const port = Math.max(1, Math.min(Number(process.env.PORT) || Number(process.env.DUCK_KEEP_ALIVE_PORT) || 8080, 65535));
+  keepAliveServer = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Duck is alive.");
+  });
+  keepAliveServer.on("error", (err) => {
+    logWarn("keep-alive.failed", { port, error: err?.message || String(err) });
+    keepAliveServer = null;
+  });
+  keepAliveServer.listen(port, "0.0.0.0", () => {
+    logInfo("keep-alive.listening", { port });
+  });
+}
+
+async function sendLogMessage(guild, title, fields = {}) {
+  const channelId = getEnvId("DUCK_LOG_CHANNEL_ID");
+  if (!channelId) return;
+  const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased?.() || !("send" in channel)) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle(title)
+    .setColor(0x3b82f6)
+    .setTimestamp(new Date());
+  for (const [name, value] of Object.entries(fields)) {
+    embed.addFields({ name, value: String(value).slice(0, 1024), inline: false });
+  }
+  await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch((err) => {
+    logWarn("log-channel.send-failed", { guildId: guild.id, channelId, error: err?.message || String(err) });
+  });
+}
+
+async function handleMemberJoin(member) {
+  const welcomeChannelId = getEnvId("DUCK_WELCOME_CHANNEL_ID");
+  const entryCategoryId = getEnvId("DUCK_ENTRY_CATEGORY_ID");
+  const rulesUrl = process.env.DUCK_RULES_URL || "";
+  const announcementsUrl = process.env.DUCK_ANNOUNCEMENTS_URL || "";
+
+  if (welcomeChannelId) {
+    const welcomeChannel = member.guild.channels.cache.get(welcomeChannelId) ?? await member.guild.channels.fetch(welcomeChannelId).catch(() => null);
+    if (welcomeChannel?.isTextBased?.() && "send" in welcomeChannel) {
+      await welcomeChannel.send({
+        content: `Welcome <@${member.id}> to ${member.guild.name}.`,
+        allowedMentions: { users: [member.id] },
+      }).catch((err) => logWarn("welcome.send-failed", { guildId: member.guild.id, memberId: member.id, error: err?.message || String(err) }));
+    }
+  }
+
+  if (entryCategoryId && getEnvBoolean("DUCK_CREATE_ENTRY_CHANNELS", false)) {
+    const botMember = member.guild.members.me ?? await member.guild.members.fetchMe();
+    if (!hasPermission(botMember, PermissionsBitField.Flags.ManageChannels)) {
+      logWarn("entry-channel.missing-permission", { guildId: member.guild.id, memberId: member.id });
+    } else {
+      const owner = member.guild.members.cache.get(member.guild.ownerId) ?? await member.guild.members.fetch(member.guild.ownerId).catch(() => null);
+      const permissionOverwrites = [
+        { id: member.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: botMember.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+        { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+      ];
+      if (owner) {
+        permissionOverwrites.push({
+          id: owner.id,
+          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory],
+        });
+      }
+
+      const channel = await member.guild.channels.create({
+        name: `entry-${member.user.username}`.toLowerCase().replace(/[^a-z0-9-_]/g, "-").slice(0, 90),
+        type: ChannelType.GuildText,
+        parent: entryCategoryId,
+        permissionOverwrites,
+        reason: "Duck member entry room",
+      }).catch((err) => {
+        logWarn("entry-channel.create-failed", { guildId: member.guild.id, memberId: member.id, error: err?.message || String(err) });
+        return null;
+      });
+
+      if (channel) {
+        const links = [rulesUrl && `<${rulesUrl}>`, announcementsUrl && `<${announcementsUrl}>`].filter(Boolean).join(" and ");
+        await channel.send({
+          content: [
+            `Hey <@${member.id}>. Glad you made it to the server.`,
+            links ? `Take a look at ${links} while you wait.` : "Your account will be reviewed shortly.",
+          ].join("\n\n"),
+          allowedMentions: { users: [member.id] },
+        }).catch(() => {});
+        await sendLogMessage(member.guild, "New Person Arrived", {
+          User: `${member.user.tag} (${member.id})`,
+          "Private Channel": `<#${channel.id}>`,
+        });
+      }
+    }
+  }
+}
+
+async function handleMemberRemove(member) {
+  const welcomeChannelId = getEnvId("DUCK_WELCOME_CHANNEL_ID");
+  if (welcomeChannelId) {
+    const channel = member.guild.channels.cache.get(welcomeChannelId) ?? await member.guild.channels.fetch(welcomeChannelId).catch(() => null);
+    if (channel?.isTextBased?.() && "send" in channel) {
+      await channel.send({
+        content: `${member.user.username} has left the server.`,
+        allowedMentions: { parse: [] },
+      }).catch(() => {});
+    }
+  }
+
+  await sendLogMessage(member.guild, "Member Left", {
+    User: `${member.user.tag} (${member.id})`,
+  });
+}
+
+async function cleanupOldInvites() {
+  const lifetimeDays = Math.max(1, Number(process.env.DUCK_INVITE_LIFETIME_DAYS) || 3);
+  const cutoff = Date.now() - lifetimeDays * 24 * 60 * 60 * 1000;
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const invites = await guild.invites.fetch();
+      for (const invite of invites.values()) {
+        if (invite.createdTimestamp && invite.createdTimestamp <= cutoff) {
+          await invite.delete(`Duck automated ${lifetimeDays}-day invite cleanup`);
+          logInfo("invite.deleted-old", { guildId: guild.id, code: invite.code, lifetimeDays });
+        }
+      }
+    } catch (err) {
+      logWarn("invite.cleanup-failed", { guildId: guild.id, error: err?.message || String(err) });
+    }
+  }
+}
+
+function startInviteCleanupLoop() {
+  if (!getEnvBoolean("DUCK_INVITE_CLEANUP", false) || inviteCleanupTimer) return;
+  inviteCleanupTimer = setInterval(() => {
+    cleanupOldInvites().catch((err) => logWarn("invite.cleanup-loop-failed", { error: err?.message || String(err) }));
+  }, 60 * 60 * 1000);
+  cleanupOldInvites().catch((err) => logWarn("invite.cleanup-start-failed", { error: err?.message || String(err) }));
+}
+
 async function registerCommands(client) {
   const startedAt = Date.now();
   const setupCommand = new SlashCommandBuilder()
@@ -4065,6 +4402,7 @@ async function registerCommands(client) {
 
 requireConfig();
 loadPendingActions();
+startKeepAliveServer();
 
 const client = new Client({
   intents: [
@@ -4096,6 +4434,7 @@ client.once(Events.ClientReady, async () => {
   });
 
   logInfo("pending-actions.ready", { count: pendingActions.size });
+  startInviteCleanupLoop();
   try {
     await registerCommands(client);
   } catch (err) {
@@ -4155,6 +4494,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    await handleMemberJoin(member);
+  } catch (err) {
+    logError("member-join.failed", err, { guildId: member.guild.id, memberId: member.id });
+  }
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    await handleMemberRemove(member);
+  } catch (err) {
+    logError("member-remove.failed", err, { guildId: member.guild.id, memberId: member.id });
+  }
+});
+
 client.on(Events.MessageCreate, async (message) => {
   const messageStartedAt = Date.now();
   try {
@@ -4163,6 +4518,7 @@ client.on(Events.MessageCreate, async (message) => {
     const guildSettings = getGuildSettings(message.guildId);
     const configuredChannelId = guildSettings.modChannelId;
     const invocation = await getDuckInvocation(message, client);
+    const legacyCommandContent = getLegacyCommandContent(message.content);
     const inConfiguredChannel = configuredChannelId && message.channelId === configuredChannelId;
     logDebug("message.received", {
       messageId: message.id,
@@ -4171,8 +4527,22 @@ client.on(Events.MessageCreate, async (message) => {
       authorId: message.author.id,
       inConfiguredChannel: Boolean(inConfiguredChannel),
       invoked: invocation.invoked,
+      legacyCommand: Boolean(legacyCommandContent),
       contentLength: message.content.length,
     });
+
+    if (legacyCommandContent) {
+      const legacyMessage = makeMessageWithContent(message, legacyCommandContent);
+      const utilityResponse = await makeUtilityResponse(legacyMessage, legacyCommandContent);
+      if (utilityResponse) {
+        await sendMessageChunks(message, utilityResponse);
+        logInfo("message.legacy-utility-response", {
+          messageId: message.id,
+          ms: elapsedMs(messageStartedAt),
+        });
+        return;
+      }
+    }
 
     const isConfirmText = normalizeText(message.content) === "i confirm";
     if (isConfirmText) {
