@@ -560,6 +560,30 @@ function getLegacyCommandContent(content) {
   return content.slice(prefix.length).trim();
 }
 
+function getEntryChannelConfig(guildId) {
+  const guildSettings = getGuildSettings(guildId);
+  const saved = guildSettings.entryChannels ?? {};
+  return {
+    enabled: saved.enabled ?? getEnvBoolean("DUCK_CREATE_ENTRY_CHANNELS", false),
+    categoryId: saved.categoryId ?? getEnvId("DUCK_ENTRY_CATEGORY_ID"),
+    rulesUrl: saved.rulesUrl ?? process.env.DUCK_RULES_URL ?? "",
+    announcementsUrl: saved.announcementsUrl ?? process.env.DUCK_ANNOUNCEMENTS_URL ?? "",
+    logChannelId: saved.logChannelId ?? getEnvId("DUCK_LOG_CHANNEL_ID"),
+  };
+}
+
+function updateEntryChannelConfig(guildId, patch) {
+  const guildSettings = getGuildSettings(guildId);
+  const current = guildSettings.entryChannels ?? {};
+  updateGuildSettings(guildId, {
+    entryChannels: {
+      ...current,
+      ...patch,
+    },
+  });
+  return getEntryChannelConfig(guildId);
+}
+
 function getAiChatMaxTokens() {
   return Math.max(64, Math.min(Number(process.env.AI_CHAT_MAX_TOKENS) || 700, 4000));
 }
@@ -4253,7 +4277,7 @@ function startKeepAliveServer() {
 }
 
 async function sendLogMessage(guild, title, fields = {}) {
-  const channelId = getEnvId("DUCK_LOG_CHANNEL_ID");
+  const channelId = getEntryChannelConfig(guild.id).logChannelId;
   if (!channelId) return;
   const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId).catch(() => null);
   if (!channel?.isTextBased?.() || !("send" in channel)) return;
@@ -4272,9 +4296,10 @@ async function sendLogMessage(guild, title, fields = {}) {
 
 async function handleMemberJoin(member) {
   const welcomeChannelId = getEnvId("DUCK_WELCOME_CHANNEL_ID");
-  const entryCategoryId = getEnvId("DUCK_ENTRY_CATEGORY_ID");
-  const rulesUrl = process.env.DUCK_RULES_URL || "";
-  const announcementsUrl = process.env.DUCK_ANNOUNCEMENTS_URL || "";
+  const entryConfig = getEntryChannelConfig(member.guild.id);
+  const entryCategoryId = entryConfig.categoryId;
+  const rulesUrl = entryConfig.rulesUrl || "";
+  const announcementsUrl = entryConfig.announcementsUrl || "";
 
   if (welcomeChannelId) {
     const welcomeChannel = member.guild.channels.cache.get(welcomeChannelId) ?? await member.guild.channels.fetch(welcomeChannelId).catch(() => null);
@@ -4286,7 +4311,7 @@ async function handleMemberJoin(member) {
     }
   }
 
-  if (entryCategoryId && getEnvBoolean("DUCK_CREATE_ENTRY_CHANNELS", false)) {
+  if (entryCategoryId && entryConfig.enabled) {
     const botMember = member.guild.members.me ?? await member.guild.members.fetchMe();
     if (!hasPermission(botMember, PermissionsBitField.Flags.ManageChannels)) {
       logWarn("entry-channel.missing-permission", { guildId: member.guild.id, memberId: member.id });
@@ -4393,9 +4418,45 @@ async function registerCommands(client) {
     .setName("duck-tools")
     .setDescription("Show Duck's moderation tools.");
 
+  const entrySetupCommand = new SlashCommandBuilder()
+    .setName("entry-setup")
+    .setDescription("Configure Duck's private new-user entry channels.")
+    .addBooleanOption((option) =>
+      option
+        .setName("enabled")
+        .setDescription("Whether Duck should create private entry channels for new members.")
+        .setRequired(true),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName("category")
+        .setDescription("Category where private entry channels should be created.")
+        .addChannelTypes(ChannelType.GuildCategory)
+        .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("rules-url")
+        .setDescription("Rules channel URL to show in entry channels.")
+        .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("announcements-url")
+        .setDescription("Announcements channel URL to show in entry channels.")
+        .setRequired(false),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName("log-channel")
+        .setDescription("Staff log channel for entry/leave logs.")
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(false),
+    );
+
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), {
-    body: [setupCommand.toJSON(), toolsCommand.toJSON()],
+    body: [setupCommand.toJSON(), toolsCommand.toJSON(), entrySetupCommand.toJSON()],
   });
   logInfo("discord.commands-registered", { appId: client.user.id, ms: elapsedMs(startedAt) });
 }
@@ -4474,6 +4535,59 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const chunk of chunks.slice(1)) {
           await interaction.followUp({ content: chunk, ephemeral: true });
         }
+        return;
+      }
+
+      if (interaction.commandName === "entry-setup") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+          await interaction.reply({ content: "Only an Administrator can configure entry channels.", ephemeral: true });
+          return;
+        }
+
+        const enabled = interaction.options.getBoolean("enabled", true);
+        const category = interaction.options.getChannel("category", false);
+        const logChannel = interaction.options.getChannel("log-channel", false);
+        const rulesUrl = interaction.options.getString("rules-url", false);
+        const announcementsUrl = interaction.options.getString("announcements-url", false);
+        const current = getEntryChannelConfig(interaction.guildId);
+        const nextCategoryId = category?.id ?? current.categoryId;
+
+        if (enabled && !nextCategoryId) {
+          await interaction.reply({
+            content: "Pick a category when enabling entry channels. Example: `/entry-setup enabled:true category:<category>`",
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const updated = updateEntryChannelConfig(interaction.guildId, {
+          enabled,
+          categoryId: nextCategoryId ?? null,
+          logChannelId: logChannel?.id ?? current.logChannelId ?? null,
+          rulesUrl: rulesUrl ?? current.rulesUrl ?? "",
+          announcementsUrl: announcementsUrl ?? current.announcementsUrl ?? "",
+        });
+
+        logInfo("settings.entry-channels-updated", {
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+          enabled: updated.enabled,
+          categoryId: updated.categoryId,
+          logChannelId: updated.logChannelId,
+          hasRulesUrl: Boolean(updated.rulesUrl),
+          hasAnnouncementsUrl: Boolean(updated.announcementsUrl),
+        });
+
+        await interaction.reply({
+          content: [
+            `Entry channels are now ${updated.enabled ? "enabled" : "disabled"}.`,
+            `Category: ${updated.categoryId ? `<#${updated.categoryId}>` : "not set"}`,
+            `Log channel: ${updated.logChannelId ? `<#${updated.logChannelId}>` : "not set"}`,
+            `Rules URL: ${updated.rulesUrl || "not set"}`,
+            `Announcements URL: ${updated.announcementsUrl || "not set"}`,
+          ].join("\n"),
+          ephemeral: true,
+        });
         return;
       }
     }
