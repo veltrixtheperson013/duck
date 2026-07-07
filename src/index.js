@@ -601,6 +601,10 @@ function getAiContextMessageChars() {
   return Math.max(60, Math.min(Number(process.env.AI_CONTEXT_MESSAGE_CHARS) || 160, 500));
 }
 
+function getAiContextFetchConcurrency() {
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_FETCH_CONCURRENCY) || 6, 20));
+}
+
 function getMessageCacheTtlMs() {
   return Math.max(5_000, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_TTL_MS) || 60_000, 10 * 60 * 1000));
 }
@@ -1919,7 +1923,8 @@ async function getReferencedMessageContext(message) {
   }
 
   try {
-    const referenced = await channel.messages.fetch(reference.messageId);
+    const referenced = channel.messages.cache.get(reference.messageId)
+      ?? await channel.messages.fetch(reference.messageId);
     const summary = summarizeMessageForContext(referenced, channel);
     const member = referenced.member ?? message.guild.members.cache.get(referenced.author.id);
     return {
@@ -2241,6 +2246,7 @@ async function collectRecentMessages(message) {
   const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 10, 50));
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
   const maxMessageChars = getAiContextMessageChars();
+  const concurrency = getAiContextFetchConcurrency();
   const seen = new Set();
   const botMember = await cachedBotMember(message.guild);
   const priorityChannels = getContextPriorityChannels(message);
@@ -2253,82 +2259,130 @@ async function collectRecentMessages(message) {
   ];
   const recentMessages = [];
   const channelMessages = [];
+  const channelResults = [];
   const errors = [];
   const skippedPrivate = [];
   const skippedUnreadable = [];
+  let nextCandidateIndex = 0;
+  let estimatedMessages = 0;
 
-  for (const channel of candidates) {
-    if (seen.has(channel.id) || seen.size >= maxChannels || recentMessages.length >= maxTotal) continue;
-    seen.add(channel.id);
-    if (!channel.isTextBased?.() || !("messages" in channel)) continue;
+  function nextChannelCandidate() {
+    if (estimatedMessages >= maxTotal || seen.size >= maxChannels) return null;
+
+    while (nextCandidateIndex < candidates.length) {
+      const index = nextCandidateIndex;
+      const channel = candidates[nextCandidateIndex];
+      nextCandidateIndex += 1;
+      if (!channel || seen.has(channel.id) || !channel.isTextBased?.() || !("messages" in channel)) continue;
+      seen.add(channel.id);
+      return { channel, index };
+    }
+
+    return null;
+  }
+
+  async function readChannelMessages(channel, index) {
     const isPrivate = channelIsPrivate(channel);
     if (!canIncludeChannelMessages(message, channel, botMember)) {
       if (isPrivate) skippedPrivate.push(channel.id);
       else skippedUnreadable.push(channel.id);
-      channelMessages.push({
-        channelId: channel.id,
-        channelName: channel.name,
-        channelType: channel.type,
-        parentName: channel.parent?.name ?? null,
-        private: isPrivate,
-        readable: false,
-        skippedReason: isPrivate ? "private_channel_requires_requester_admin" : "bot_missing_view_or_history_permission",
+      channelResults.push({
+        index,
+        group: {
+          channelId: channel.id,
+          channelName: channel.name,
+          channelType: channel.type,
+          parentName: channel.parent?.name ?? null,
+          private: isPrivate,
+          readable: false,
+          skippedReason: isPrivate ? "private_channel_requires_requester_admin" : "bot_missing_view_or_history_permission",
+          messages: [],
+        },
         messages: [],
       });
-      continue;
+      return;
     }
 
     try {
       const fetched = await getRecentChannelMessages(channel, perChannel);
-      const messagesForChannel = [];
-      for (const item of fetched) {
-        if (recentMessages.length >= maxTotal) break;
-        const summary = {
-          id: item.id,
+      const messagesForChannel = fetched.map((item) => ({
+        id: item.id,
+        channelId: channel.id,
+        channelName: channel.name,
+        authorId: item.author.id,
+        authorTag: item.author.tag,
+        createdAt: item.createdAt.toISOString(),
+        content: item.cleanContent.replace(/\s+/g, " ").slice(0, maxMessageChars),
+        attachmentCount: item.attachments.size,
+      }));
+
+      estimatedMessages += messagesForChannel.length;
+      channelResults.push({
+        index,
+        group: {
           channelId: channel.id,
           channelName: channel.name,
-          authorId: item.author.id,
-          authorTag: item.author.tag,
-          createdAt: item.createdAt.toISOString(),
-          content: item.cleanContent.replace(/\s+/g, " ").slice(0, maxMessageChars),
-          attachmentCount: item.attachments.size,
-        };
-        recentMessages.push(summary);
-        messagesForChannel.push({
-          id: summary.id,
-          authorId: summary.authorId,
-          authorTag: summary.authorTag,
-          createdAt: summary.createdAt,
-          content: summary.content,
-          attachmentCount: summary.attachmentCount,
-        });
-      }
-
-      channelMessages.push({
-        channelId: channel.id,
-        channelName: channel.name,
-        channelType: channel.type,
-        parentName: channel.parent?.name ?? null,
-        private: isPrivate,
-        readable: true,
+          channelType: channel.type,
+          parentName: channel.parent?.name ?? null,
+          private: isPrivate,
+          readable: true,
+          messages: messagesForChannel.map((summary) => ({
+            id: summary.id,
+            authorId: summary.authorId,
+            authorTag: summary.authorTag,
+            createdAt: summary.createdAt,
+            content: summary.content,
+            attachmentCount: summary.attachmentCount,
+          })),
+        },
         messages: messagesForChannel,
       });
-
-      if (recentMessages.length >= maxTotal) {
-        break;
-      }
     } catch {
       errors.push(channel.id);
-      channelMessages.push({
-        channelId: channel.id,
-        channelName: channel.name,
-        channelType: channel.type,
-        parentName: channel.parent?.name ?? null,
-        private: isPrivate,
-        readable: false,
-        skippedReason: "message_fetch_failed",
+      channelResults.push({
+        index,
+        group: {
+          channelId: channel.id,
+          channelName: channel.name,
+          channelType: channel.type,
+          parentName: channel.parent?.name ?? null,
+          private: isPrivate,
+          readable: false,
+          skippedReason: "message_fetch_failed",
+          messages: [],
+        },
         messages: [],
       });
+    }
+  }
+
+  async function worker() {
+    while (true) {
+      const candidate = nextChannelCandidate();
+      if (!candidate) return;
+      await readChannelMessages(candidate.channel, candidate.index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  let remainingMessages = maxTotal;
+  for (const result of channelResults.sort((a, b) => a.index - b.index)) {
+    if (remainingMessages <= 0 && result.group.readable) break;
+
+    const messages = result.messages.slice(0, Math.max(0, remainingMessages));
+    for (const summary of messages) {
+      recentMessages.push(summary);
+    }
+
+    if (result.group.readable) {
+      remainingMessages -= messages.length;
+      channelMessages.push({
+        ...result.group,
+        messages: result.group.messages.slice(0, messages.length),
+      });
+    } else {
+      channelMessages.push(result.group);
     }
   }
 
@@ -2341,6 +2395,7 @@ async function collectRecentMessages(message) {
     failedChannels: errors.length,
     skippedPrivateChannels: skippedPrivate.length,
     skippedUnreadableChannels: skippedUnreadable.length,
+    concurrency,
     ms: elapsedMs(startedAt),
   });
 
@@ -2481,7 +2536,10 @@ async function collectServerContext(message) {
     }))
     .slice(0, getAiContextRoleLimit());
 
-  const messageContext = await collectRecentMessages(message);
+  const [messageContext, currentMessage] = await Promise.all([
+    collectRecentMessages(message),
+    buildCurrentMessageContext(message),
+  ]);
   const rawContext = {
     guild: {
       id: message.guild.id,
@@ -2500,7 +2558,7 @@ async function collectServerContext(message) {
     availableRoles: roles,
     recentMessages: messageContext.recentMessages,
     channelMessages: messageContext.channelMessages,
-    currentMessage: await buildCurrentMessageContext(message),
+    currentMessage,
   };
   const context = compactServerContext(rawContext);
 
@@ -5082,7 +5140,8 @@ async function isReplyToDuck(message, client) {
   if (message.mentions.repliedUser?.id === client.user.id) return true;
 
   try {
-    const referenced = await message.channel.messages.fetch(message.reference.messageId);
+    const referenced = message.channel.messages.cache.get(message.reference.messageId)
+      ?? await message.channel.messages.fetch(message.reference.messageId);
     return referenced.author.id === client.user.id;
   } catch {
     return false;
