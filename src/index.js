@@ -29,6 +29,7 @@ const pendingActions = new Map();
 const pendingByChannel = new Map();
 const pendingExpiryTimers = new Map();
 const serverContextCache = new Map();
+const messageHistoryCache = new Map();
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
 let buildInfo = {
   commit: process.env.DUCK_COMMIT || process.env.COMMIT_SHA || process.env.GIT_COMMIT || "unknown",
@@ -534,6 +535,14 @@ function getAiContextMaxChars() {
 
 function getAiContextMessageChars() {
   return Math.max(60, Math.min(Number(process.env.AI_CONTEXT_MESSAGE_CHARS) || 160, 500));
+}
+
+function getMessageCacheTtlMs() {
+  return Math.max(5_000, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_TTL_MS) || 60_000, 10 * 60 * 1000));
+}
+
+function getMessageCacheLimit() {
+  return Math.max(25, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_LIMIT) || 150, 500));
 }
 
 function getQueueMessage() {
@@ -1708,6 +1717,84 @@ function canIncludeChannelMessages(message, channel, botMember) {
   return message.member?.permissions?.has(PermissionsBitField.Flags.Administrator);
 }
 
+function getChannelCacheKey(channel) {
+  return `${channel.guildId}:${channel.id}`;
+}
+
+function normalizeCachedMessages(messages) {
+  const seen = new Set();
+  return messages
+    .filter((item) => item?.id && !seen.has(item.id) && item.createdTimestamp)
+    .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+    .filter((item) => {
+      seen.add(item.id);
+      return true;
+    })
+    .slice(0, getMessageCacheLimit());
+}
+
+function rememberMessage(message) {
+  if (!message.guild || !message.channel?.isTextBased?.() || !("messages" in message.channel)) return;
+
+  const key = getChannelCacheKey(message.channel);
+  const cached = messageHistoryCache.get(key);
+  const messages = normalizeCachedMessages([message, ...(cached?.messages ?? [])]);
+  messageHistoryCache.set(key, {
+    channelId: message.channelId,
+    guildId: message.guildId,
+    fetchedAt: cached?.fetchedAt ?? 0,
+    touchedAt: Date.now(),
+    messages,
+  });
+}
+
+function removeCachedMessage(message) {
+  if (!message.guildId || !message.channelId) return;
+  const key = `${message.guildId}:${message.channelId}`;
+  const cached = messageHistoryCache.get(key);
+  if (!cached) return;
+  cached.messages = cached.messages.filter((item) => item.id !== message.id);
+  cached.touchedAt = Date.now();
+}
+
+function removeCachedMessages(messages) {
+  for (const message of messages.values()) {
+    removeCachedMessage(message);
+  }
+}
+
+function invalidateChannelMessageCache(channelId, guildId) {
+  if (!channelId || !guildId) return;
+  messageHistoryCache.delete(`${guildId}:${channelId}`);
+}
+
+async function getRecentChannelMessages(channel, limit, options = {}) {
+  const wanted = Math.max(1, Math.min(limit, 100));
+  const key = getChannelCacheKey(channel);
+  const cached = messageHistoryCache.get(key);
+  const now = Date.now();
+  const ttl = getMessageCacheTtlMs();
+
+  const cacheAge = cached ? now - Math.max(cached.fetchedAt || 0, cached.touchedAt || 0) : Infinity;
+  if (!options.forceFetch && cached && cached.messages.length >= wanted && cacheAge <= ttl) {
+    logDebug("message-cache.hit", { guildId: channel.guildId, channelId: channel.id, wanted, cached: cached.messages.length });
+    return cached.messages.slice(0, wanted);
+  }
+
+  const fetched = await channel.messages.fetch({ limit: Math.min(100, Math.max(wanted, Math.min(getMessageCacheLimit(), 100))) });
+  const fetchedMessages = [...fetched.values()];
+  const messages = normalizeCachedMessages([...(cached?.messages ?? []), ...fetchedMessages]);
+  messageHistoryCache.set(key, {
+    channelId: channel.id,
+    guildId: channel.guildId,
+    fetchedAt: now,
+    touchedAt: now,
+    messages,
+  });
+  logDebug("message-cache.fetch", { guildId: channel.guildId, channelId: channel.id, wanted, fetched: fetchedMessages.length, cached: messages.length });
+  return messages.slice(0, wanted);
+}
+
 function findHistoryChannelTarget(message, text) {
   const mentioned = message.mentions.channels.find((channel) => channel.isTextBased?.() && "messages" in channel);
   if (mentioned) return mentioned;
@@ -1798,9 +1885,9 @@ async function collectRecentMessages(message) {
     }
 
     try {
-      const fetched = await channel.messages.fetch({ limit: perChannel });
+      const fetched = await getRecentChannelMessages(channel, perChannel);
       const messagesForChannel = [];
-      for (const item of fetched.values()) {
+      for (const item of fetched) {
         if (recentMessages.length >= maxTotal) break;
         const summary = {
           id: item.id,
@@ -3599,6 +3686,7 @@ async function executeAction(client, action, approver) {
     }
 
     const deleted = await channel.bulkDelete(matches, true);
+    removeCachedMessages(deleted);
     return `I have deleted ${deleted.size} message${deleted.size === 1 ? "" : "s"}.`;
   }
 
@@ -3617,8 +3705,8 @@ async function executeAction(client, action, approver) {
     if (!query) return "Tell me which keyword or phrase to search for.";
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     const resultLimit = Math.max(1, Math.min(Number(action.count) || 10, 20));
-    const fetched = await channel.messages.fetch({ limit: 100 });
-    const matches = [...fetched.values()]
+    const fetched = await getRecentChannelMessages(channel, 100);
+    const matches = fetched
       .filter((item) => {
         const content = item.cleanContent.replace(/\s+/g, " ").toLowerCase();
         return query.includes(" ")
@@ -3659,6 +3747,7 @@ async function executeAction(client, action, approver) {
       return "I did not find any recent messages from that member that I can safely delete.";
     }
     const deleted = await channel.bulkDelete(matches, true);
+    removeCachedMessages(deleted);
     return `I have deleted ${deleted.size} recent message${deleted.size === 1 ? "" : "s"} from that member.`;
   }
 
@@ -3992,8 +4081,8 @@ async function makeRecentHistoryResponse(message) {
     return `I cannot read message history in #${targetChannel.name}. Make sure Duck can view the channel and read message history.`;
   }
 
-  const fetched = await targetChannel.messages.fetch({ limit: 25 });
-  const items = [...fetched.values()]
+  const fetched = await getRecentChannelMessages(targetChannel, 25);
+  const items = fetched
     .filter((item) => item.id !== message.id && item.content?.trim())
     .slice(0, 10)
     .map((item) => ({
@@ -4753,9 +4842,18 @@ client.on(Events.GuildMemberRemove, async (member) => {
   }
 });
 
+client.on(Events.MessageDelete, (message) => {
+  removeCachedMessage(message);
+});
+
+client.on(Events.MessageBulkDelete, (messages) => {
+  removeCachedMessages(messages);
+});
+
 client.on(Events.MessageCreate, async (message) => {
   const messageStartedAt = Date.now();
   try {
+    rememberMessage(message);
     if (!message.guild || message.author.bot) return;
 
     const guildSettings = getGuildSettings(message.guildId);
