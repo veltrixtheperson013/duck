@@ -302,6 +302,31 @@ const TOOL_DEFINITIONS = [
     description: "Send an approved message as Duck in the current or mentioned text channel.",
   },
   {
+    name: "pin_message",
+    risk: "medium",
+    description: "Pin a replied-to or specified message in a text channel.",
+  },
+  {
+    name: "unpin_message",
+    risk: "medium",
+    description: "Unpin a replied-to or specified message in a text channel.",
+  },
+  {
+    name: "create_thread",
+    risk: "medium",
+    description: "Create a public thread in the current or mentioned text channel.",
+  },
+  {
+    name: "set_role_color",
+    risk: "high",
+    description: "Change an editable role color.",
+  },
+  {
+    name: "create_poll",
+    risk: "medium",
+    description: "Create a simple reaction poll in a text channel.",
+  },
+  {
     name: "create_role",
     risk: "high",
     description: "Create a server role.",
@@ -320,6 +345,10 @@ const UTILITY_COMMANDS = [
   "`duck channelinfo #channel`",
   "`duck roleinfo @role`",
   "`duck warnings @user`",
+  "`duck poll \"Question\" \"Option A\" \"Option B\"`",
+  "Reply with `duck pin this` / `duck unpin this`",
+  "`duck create thread \"topic\" in #channel`",
+  "`duck set @role color #3B82F6`",
   "`duck quote` / `duck quote add <text>` / `duck quote list`",
   "`duck ship @user [@user]`",
   "`duck curse [@user]`",
@@ -384,6 +413,11 @@ const TOOL_REQUIREMENTS = {
   rename_channel: PermissionsBitField.Flags.ManageChannels,
   set_channel_topic: PermissionsBitField.Flags.ManageChannels,
   speak: PermissionsBitField.Flags.SendMessages,
+  pin_message: PermissionsBitField.Flags.ManageMessages,
+  unpin_message: PermissionsBitField.Flags.ManageMessages,
+  create_thread: [PermissionsBitField.Flags.CreatePublicThreads, PermissionsBitField.Flags.SendMessages],
+  set_role_color: PermissionsBitField.Flags.ManageRoles,
+  create_poll: [PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AddReactions],
   create_role: PermissionsBitField.Flags.ManageRoles,
   delete_role: PermissionsBitField.Flags.ManageRoles,
 };
@@ -890,6 +924,11 @@ function inferReasonFromRequest(message, toolName) {
     rename_channel: ["rename", "channel"],
     set_channel_topic: ["topic", "channel", "set"],
     speak: ["say", "speak", "send", "post", "announce", "message"],
+    pin_message: ["pin", "message"],
+    unpin_message: ["unpin", "remove", "pin", "message"],
+    create_thread: ["create", "make", "start", "new", "thread"],
+    set_role_color: ["set", "change", "update", "role", "color", "colour", "to"],
+    create_poll: ["create", "make", "start", "poll", "vote"],
     create_role: ["create", "make", "new", "role"],
     delete_role: ["delete", "remove", "role"],
   }[toolName] ?? [];
@@ -1091,6 +1130,96 @@ function hasExplicitSpeakMessage(text) {
   return /^(please\s+)?(say|speak)\s+\S/i.test(normalizeText(text));
 }
 
+function extractMessageTarget(text) {
+  const linkMatch = String(text || "").match(/discord(?:app)?\.com\/channels\/\d+\/(\d+)\/(\d+)/i);
+  if (linkMatch) return { channelId: linkMatch[1], messageId: linkMatch[2] };
+
+  const labeled = String(text || "").match(/\b(?:message|msg)\s*(?:id)?\s*:?\s*(\d{17,22})\b/i);
+  if (labeled) return { channelId: null, messageId: labeled[1] };
+
+  return null;
+}
+
+function extractMessageId(text) {
+  return extractMessageTarget(text)?.messageId ?? null;
+}
+
+function resolveMessageTargetForPlan(message, plan = {}) {
+  const linkTarget = extractMessageTarget(`${plan.messageUrl || ""} ${message.content || ""}`);
+  const messageId = String(plan.messageId || linkTarget?.messageId || message.reference?.messageId || "").trim();
+  const channelId = String(plan.channelId || linkTarget?.channelId || message.reference?.channelId || message.channelId || "").trim();
+  if (!messageId || !channelId) return null;
+
+  const channel = message.guild.channels.cache.get(channelId) ?? message.channel;
+  if (!channel?.isTextBased?.() || !("messages" in channel)) return null;
+  return { channel, messageId };
+}
+
+function extractThreadName(text) {
+  const quoted = extractQuotedName(text);
+  if (quoted) return extractPlainName(quoted, 100);
+
+  const raw = String(text || "")
+    .replace(/<#\d+>/g, " ")
+    .replace(/\b(create|make|start|new|public|thread|called|named|with|topic|about|in|channel|please|duck)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return extractPlainName(raw, 100);
+}
+
+const ROLE_COLOR_NAMES = {
+  red: 0xff0000,
+  orange: 0xff9500,
+  yellow: 0xffcc00,
+  green: 0x22c55e,
+  blue: 0x3b82f6,
+  purple: 0x8b5cf6,
+  pink: 0xec4899,
+  black: 0x000001,
+  white: 0xffffff,
+  gray: 0x808080,
+  grey: 0x808080,
+};
+
+function parseRoleColor(text) {
+  const input = String(text || "").trim().toLowerCase();
+  const hex = input.match(/#?([0-9a-f]{6})\b/i);
+  if (hex) return Number.parseInt(hex[1], 16);
+
+  for (const [name, value] of Object.entries(ROLE_COLOR_NAMES)) {
+    if (new RegExp(`\\b${name}\\b`, "i").test(input)) return value;
+  }
+
+  return null;
+}
+
+function formatRoleColor(color) {
+  return `#${Number(color).toString(16).padStart(6, "0").toUpperCase()}`;
+}
+
+function extractPollParts(text) {
+  const quoted = [...String(text || "").matchAll(/["']([^"']+)["']/g)].map((match) => match[1].trim()).filter(Boolean);
+  if (quoted.length >= 3) {
+    return {
+      question: limitDiscordContent(quoted[0], 200),
+      options: quoted.slice(1, 11).map((option) => limitDiscordContent(option, 80)),
+    };
+  }
+
+  const cleaned = String(text || "")
+    .replace(/<#\d+>/g, " ")
+    .replace(/\b(duck|can you|could you|would you|please|create|make|start|poll|vote|with|options?|choices?|in|channel)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const parts = cleaned.split(/\s*\|\s*|\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 3) return { question: null, options: [] };
+
+  return {
+    question: limitDiscordContent(parts[0], 200),
+    options: parts.slice(1, 11).map((option) => limitDiscordContent(option, 80)),
+  };
+}
+
 function extractRoleName(text) {
   return extractPlainName(text.replace(/\b(create|make|new|role|delete|remove)\b/gi, " "), 100);
 }
@@ -1180,8 +1309,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|grep|search|find|lock|unlock|create|make|say|speak|send|post|announce)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|color|colour|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|color|colour|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|grep|search|find|lock|unlock|create|make|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -1487,6 +1616,83 @@ function planModerationToolFromText(message, rawText) {
       messageText,
       reason: "Approved speak request.",
       summary: `send a message in ${summarizeChannel(channel)}`,
+    };
+  }
+
+  if (/\b(unpin|remove pin)\b/.test(normalized)) {
+    const target = resolveMessageTargetForPlan(message, {});
+    if (!target) return { error: "Reply to the message to unpin, or include a Discord message link." };
+    return {
+      tool: "unpin_message",
+      risk: "medium",
+      channelId: target.channel.id,
+      channelName: target.channel.name,
+      messageId: target.messageId,
+      reason: "Approved unpin request.",
+      summary: `unpin message ${target.messageId} in ${summarizeChannel(target.channel)}`,
+    };
+  }
+
+  if (/\b(pin|pin this|pin message)\b/.test(normalized)) {
+    const target = resolveMessageTargetForPlan(message, {});
+    if (!target) return { error: "Reply to the message to pin, or include a Discord message link." };
+    return {
+      tool: "pin_message",
+      risk: "medium",
+      channelId: target.channel.id,
+      channelName: target.channel.name,
+      messageId: target.messageId,
+      reason: "Approved pin request.",
+      summary: `pin message ${target.messageId} in ${summarizeChannel(target.channel)}`,
+    };
+  }
+
+  if (/\b(create|make|start|new)\b.*\bthread\b/.test(normalized)) {
+    const channel = getTextChannelTarget(message, text);
+    if (!channel || !("threads" in channel)) return { error: "I can only create threads in a text channel that supports threads." };
+    const threadName = extractThreadName(text);
+    if (!threadName) return { error: "Tell me the thread name in quotes." };
+    return {
+      tool: "create_thread",
+      risk: "medium",
+      channelId: channel.id,
+      channelName: channel.name,
+      threadName,
+      reason: "Approved thread creation request.",
+      summary: `create thread "${threadName}" in ${summarizeChannel(channel)}`,
+    };
+  }
+
+  if (/\b(color|colour)\b/.test(normalized) && /\brole\b/.test(normalized)) {
+    const role = findRoleByNameOrMention(message, text);
+    if (!role) return { error: "Tell me which role to recolor by mentioning it or quoting its name." };
+    const color = parseRoleColor(text);
+    if (color == null) return { error: "Tell me the role color as a hex value like `#3B82F6` or a basic color name." };
+    return {
+      tool: "set_role_color",
+      risk: "high",
+      roleId: role.id,
+      roleName: role.name,
+      color,
+      reason: extractReason(text, ["set", "change", "update", "role", "color", "colour", "to"]),
+      summary: `set @${role.name} color to ${formatRoleColor(color)}`,
+    };
+  }
+
+  if (/\b(create|make|start)\b.*\b(poll|vote)\b|\bpoll\b/.test(normalized)) {
+    const channel = getTextChannelTarget(message, text);
+    if (!channel || !("send" in channel)) return { error: "I can only create polls in a text channel." };
+    const { question, options } = extractPollParts(text);
+    if (!question || options.length < 2) return { error: "Use `duck poll \"Question\" \"Option A\" \"Option B\"` or separate options with `|`." };
+    return {
+      tool: "create_poll",
+      risk: "medium",
+      channelId: channel.id,
+      channelName: channel.name,
+      pollQuestion: question,
+      pollOptions: options,
+      reason: "Approved poll creation request.",
+      summary: `create poll "${question}" in ${summarizeChannel(channel)}`,
     };
   }
 
@@ -2591,6 +2797,96 @@ function validateAiPlan(message, plan, serverContext = null) {
     };
   }
 
+  if (tool.name === "pin_message" || tool.name === "unpin_message") {
+    const target = resolveMessageTargetForPlan(message, plan);
+    if (!target) return { error: "Reply to the message or include a Discord message link so I know exactly what to pin or unpin." };
+
+    return {
+      ...base,
+      channelId: target.channel.id,
+      channelName: target.channel.name,
+      messageId: target.messageId,
+      reason: base.reason === "No reason provided." ? `Approved ${tool.name === "pin_message" ? "pin" : "unpin"} request.` : base.reason,
+      summary: `${tool.name === "pin_message" ? "pin" : "unpin"} message ${target.messageId} in ${target.channel.name ? `#${target.channel.name}` : `channel ${target.channel.id}`}`,
+    };
+  }
+
+  if (tool.name === "create_thread") {
+    const targetChannelId = String(plan.channelId || message.channelId);
+    const channel = message.guild.channels.cache.get(targetChannelId)
+      ?? findChannelByToolTarget(message, plan.channelName || plan.targetName || "");
+    if (!channel?.isTextBased?.() || !("threads" in channel)) {
+      return { error: "I can only create public threads in a text channel that supports threads." };
+    }
+
+    const threadName = extractPlainName(plan.threadName || plan.name || plan.topic || plan.channelName || extractThreadName(message.content) || "", 100);
+    if (!threadName) return { error: "Tell me the thread name in quotes." };
+
+    return {
+      ...base,
+      channelId: channel.id,
+      channelName: channel.name,
+      threadName,
+      reason: base.reason === "No reason provided." ? "Approved thread creation request." : base.reason,
+      summary: `create thread "${threadName}" in ${channel.name ? `#${channel.name}` : `channel ${channel.id}`}`,
+    };
+  }
+
+  if (tool.name === "set_role_color") {
+    const role = message.guild.roles.cache.get(String(plan.roleId))
+      ?? findRoleByToolTarget(message, plan.roleName || plan.targetName || "");
+    if (!role || role.id === message.guild.id || role.managed) {
+      return { error: "Tell me which editable role to recolor by mentioning it or quoting its name." };
+    }
+
+    const numericColor = Number(plan.color);
+    const color = Number.isFinite(numericColor) && numericColor >= 0 && numericColor <= 0xffffff
+      ? numericColor
+      : parseRoleColor(plan.color || plan.roleColor || plan.reason || message.content);
+    if (color == null) return { error: "Tell me the role color as a hex value like `#3B82F6` or a basic color name." };
+
+    return {
+      ...base,
+      roleId: role.id,
+      roleName: role.name,
+      color,
+      summary: `set @${role.name} color to ${formatRoleColor(color)}`,
+    };
+  }
+
+  if (tool.name === "create_poll") {
+    const targetChannelId = String(plan.channelId || message.channelId);
+    const channel = message.guild.channels.cache.get(targetChannelId)
+      ?? findChannelByToolTarget(message, plan.channelName || plan.targetName || "");
+    if (!channel?.isTextBased?.() || !("send" in channel)) return { error: "I can only create polls in a text channel." };
+
+    const fallbackPoll = extractPollParts(message.content);
+    const question = limitDiscordContent(String(plan.pollQuestion || plan.question || fallbackPoll.question || "").replace(/\s+/g, " ").trim(), 200);
+    const rawOptions = Array.isArray(plan.pollOptions)
+      ? plan.pollOptions
+      : Array.isArray(plan.options)
+        ? plan.options
+        : fallbackPoll.options;
+    const options = rawOptions
+      .map((option) => limitDiscordContent(String(option).replace(/\s+/g, " ").trim(), 80))
+      .filter(Boolean)
+      .slice(0, 10);
+
+    if (!question || options.length < 2) {
+      return { error: "Use `duck poll \"Question\" \"Option A\" \"Option B\"` or separate options with `|`." };
+    }
+
+    return {
+      ...base,
+      channelId: channel.id,
+      channelName: channel.name,
+      pollQuestion: question,
+      pollOptions: options,
+      reason: base.reason === "No reason provided." ? "Approved poll creation request." : base.reason,
+      summary: `create poll "${question}" in ${channel.name ? `#${channel.name}` : `channel ${channel.id}`}`,
+    };
+  }
+
   if (tool.name === "create_text_channel" || tool.name === "create_voice_channel") {
     const channelName = typeof plan.channelName === "string" ? extractNewChannelName(plan.channelName) : extractNewChannelName(message.content);
     if (!channelName) return { error: "Tell me the channel name in quotes." };
@@ -2637,9 +2933,9 @@ async function makePlannerMessages(message, providedContext = null) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|grep_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"query\":\"keyword or phrase when using grep_messages\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|grep_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|pin_message|unpin_message|create_thread|set_role_color|create_poll|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"messageId\":\"message id when pinning/unpinning\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"threadName\":\"thread name when creating a thread\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"query\":\"keyword or phrase when using grep_messages\",\"pollQuestion\":\"poll question\",\"pollOptions\":[\"poll option\"],\"color\":\"role color hex or name\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, pin_message/unpin_message only for a replied-to message or explicit message link/ID, create_thread for a new public thread, set_role_color for role color changes, create_poll for reaction polls with 2-10 options, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Use serverContext.currentMessage.replyTo when the user is replying to another message. It contains the referenced message text, channel, author, timestamp, and authorMember when available.",
@@ -2703,6 +2999,11 @@ function makePlannerResponseFormat(kind) {
                 "rename_channel",
                 "set_channel_topic",
                 "speak",
+                "pin_message",
+                "unpin_message",
+                "create_thread",
+                "set_role_color",
+                "create_poll",
                 "create_role",
                 "delete_role",
               ],
@@ -2710,14 +3011,22 @@ function makePlannerResponseFormat(kind) {
             targetId: { type: "string" },
             targetName: { type: "string" },
             channelId: { type: "string" },
+            messageId: { type: "string" },
             roleId: { type: "string" },
             roleName: { type: "string" },
             targetRoleName: { type: "string" },
             channelName: { type: "string" },
             newName: { type: "string" },
+            threadName: { type: "string" },
             topic: { type: "string" },
             messageText: { type: "string" },
             query: { type: "string" },
+            pollQuestion: { type: "string" },
+            pollOptions: {
+              type: "array",
+              items: { type: "string" },
+            },
+            color: { type: "string" },
             nickname: { type: "string" },
             count: { type: "number" },
             durationMs: { type: "number" },
@@ -3073,10 +3382,10 @@ async function makeChatMessages(message) {
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
-        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, grep_messages, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, create_role, delete_role, or delete_channel.",
+        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, grep_messages, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, pin_message, unpin_message, create_thread, set_role_color, create_poll, create_role, delete_role, or delete_channel.",
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
-        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}, {{grep_messages::general|keyword::search request}}.",
+        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}, {{grep_messages::general|keyword::search request}}, {{create_thread::general|bug reports::organize reports}}, {{set_role_color::Member|#3B82F6::visual update}}, {{create_poll::general|Best snack?|chips|cookies::poll request}}.",
         "Only use speak when the user gives the exact message Duck should send. If the user asks you to draft, write, make, or prepare an announcement, draft the text and ask for confirmation without a marker.",
         "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
         "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
@@ -3369,6 +3678,17 @@ const INLINE_TOOL_MAP = {
   send_message: "speak",
   post: "speak",
   announce: "speak",
+  pin: "pin_message",
+  pin_message: "pin_message",
+  unpin: "unpin_message",
+  unpin_message: "unpin_message",
+  create_thread: "create_thread",
+  thread: "create_thread",
+  set_role_color: "set_role_color",
+  role_color: "set_role_color",
+  color_role: "set_role_color",
+  create_poll: "create_poll",
+  poll: "create_poll",
   create_role: "create_role",
   delete_role: "delete_role",
   delete_channel: "delete_channel",
@@ -3402,7 +3722,7 @@ function parseInlineToolCall(message, content) {
     roleId: primaryTarget.match(/^<@&(\d+)>$/)?.[1],
   };
 
-  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic", "speak", "grep_messages"].includes(tool)) {
+  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic", "speak", "grep_messages", "pin_message", "unpin_message", "create_thread", "create_poll"].includes(tool)) {
     const channel = tool === "delete_channel"
       ? findExactChannelByToolTarget(message, primaryTarget)
       : findChannelByToolTarget(message, primaryTarget);
@@ -3438,6 +3758,27 @@ function parseInlineToolCall(message, content) {
   if (tool === "speak") {
     rawPlan.channelName = primaryTarget;
     rawPlan.messageText = targetParts[1] ?? reason;
+  }
+  if (tool === "pin_message" || tool === "unpin_message") {
+    const messageTarget = extractMessageTarget(`${target} ${reason}`);
+    rawPlan.messageId = messageTarget?.messageId || message.reference?.messageId;
+    rawPlan.channelId = messageTarget?.channelId || rawPlan.channelId || message.reference?.channelId || message.channelId;
+  }
+  if (tool === "create_thread") {
+    rawPlan.channelName = primaryTarget;
+    rawPlan.threadName = targetParts[1] ?? reason;
+  }
+  if (tool === "set_role_color") {
+    const role = findRoleByToolTarget(message, primaryTarget);
+    if (role) rawPlan.roleId = role.id;
+    rawPlan.roleName = primaryTarget;
+    rawPlan.color = targetParts[1] ?? reason;
+  }
+  if (tool === "create_poll") {
+    rawPlan.channelName = primaryTarget;
+    const pollParts = extractPollParts(targetParts[1] ? targetParts.slice(1).join("|") : reason);
+    rawPlan.pollQuestion = pollParts.question ?? targetParts[1] ?? "";
+    rawPlan.pollOptions = pollParts.options;
   }
   if (tool === "create_role") rawPlan.roleName = target;
   if (tool === "delete_role") {
@@ -3508,7 +3849,18 @@ async function planModerationRequest(message) {
 }
 
 function hasPermission(member, permission) {
-  return member.permissions.has(permission) || member.permissions.has(PermissionsBitField.Flags.Administrator);
+  if (!permission) return true;
+  const permissions = Array.isArray(permission) ? permission : [permission];
+  return member.permissions.has(PermissionsBitField.Flags.Administrator)
+    || permissions.every((item) => member.permissions.has(item));
+}
+
+function describePermissionRequirement(permission) {
+  const permissions = Array.isArray(permission) ? permission : [permission];
+  return permissions.map((item) => {
+    const entry = Object.entries(PermissionsBitField.Flags).find(([, value]) => value === item);
+    return `\`${entry?.[0] ?? String(item)}\``;
+  }).join(", ");
 }
 
 function canApprove(action, member) {
@@ -3545,6 +3897,11 @@ function commandLabel(action) {
   if (action.tool === "rename_channel") return "Rename Channel";
   if (action.tool === "set_channel_topic") return "Set Channel Topic";
   if (action.tool === "speak") return "Speak";
+  if (action.tool === "pin_message") return "Pin Message";
+  if (action.tool === "unpin_message") return "Unpin Message";
+  if (action.tool === "create_thread") return "Create Thread";
+  if (action.tool === "set_role_color") return "Set Role Color";
+  if (action.tool === "create_poll") return "Create Poll";
   if (action.tool === "create_role") return "Create Role";
   if (action.tool === "delete_role") return "Delete Role";
   return "Moderate";
@@ -3601,10 +3958,15 @@ function makeActionEmbed(action) {
   if (action.count != null) details.push(`Count: ${action.count}`);
   if (action.nickname) details.push(`Nickname: ${action.nickname}`);
   if (action.roleName) details.push(`Role: @${action.roleName}`);
+  if (action.color != null) details.push(`Color: ${formatRoleColor(action.color)}`);
   if (action.newName) details.push(`New name: ${action.newName}`);
+  if (action.threadName) details.push(`Thread: ${action.threadName}`);
   if (action.topic) details.push(`Topic: ${action.topic}`);
+  if (action.messageId) details.push(`Message ID: ${action.messageId}`);
   if (action.messageText) details.push(`Message: ${action.messageText}`);
   if (action.query) details.push(`Query: ${action.query}`);
+  if (action.pollQuestion) details.push(`Poll: ${action.pollQuestion}`);
+  if (action.pollOptions?.length) details.push(`Options: ${action.pollOptions.join(" | ")}`);
   if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
   if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
   if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
@@ -3627,9 +3989,14 @@ function describeAction(action) {
   if (action.count != null) lines.push(`Count: ${action.count}`);
   if (action.nickname) lines.push(`Nickname: ${action.nickname}`);
   if (action.roleName) lines.push(`Role: @${action.roleName}`);
+  if (action.color != null) lines.push(`Color: ${formatRoleColor(action.color)}`);
+  if (action.messageId) lines.push(`Message ID: ${action.messageId}`);
+  if (action.threadName) lines.push(`Thread: ${action.threadName}`);
   if (action.channelName && action.tool !== "delete_channel") lines.push(`Channel: ${action.channelName}`);
   if (action.messageText) lines.push(`Message: ${action.messageText}`);
   if (action.query) lines.push(`Query: ${action.query}`);
+  if (action.pollQuestion) lines.push(`Poll: ${action.pollQuestion}`);
+  if (action.pollOptions?.length) lines.push(`Options: ${action.pollOptions.join(" | ")}`);
 
   return lines.join("\n");
 }
@@ -3691,7 +4058,7 @@ async function executeAction(client, action, approver) {
   const needed = TOOL_REQUIREMENTS[action.tool];
 
   if (needed && !hasPermission(botMember, needed)) {
-    const result = `I cannot run \`${action.tool}\` because Duck is missing the required Discord permission.`;
+    const result = `I cannot run \`${action.tool}\` because Duck is missing required Discord permission(s): ${describePermissionRequirement(needed)}.`;
     logWarn("moderation.execute.missing-bot-permission", { actionId: action.id, tool: action.tool, needed });
     return result;
   }
@@ -4018,6 +4385,79 @@ async function executeAction(client, action, approver) {
       allowedMentions: { parse: [] },
     });
     return `I sent the message in ${channel}.`;
+  }
+
+  if (action.tool === "pin_message" || action.tool === "unpin_message") {
+    const channel = await cachedChannel(guild, action.channelId);
+    if (!channel?.isTextBased?.() || !("messages" in channel)) return "I can only pin or unpin messages in a text channel.";
+
+    const targetMessage = await channel.messages.fetch(action.messageId).catch(() => null);
+    if (!targetMessage) return "I could not find that message.";
+
+    if (action.tool === "pin_message") {
+      await targetMessage.pin(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+      return `I have pinned that message in ${channel}.`;
+    }
+
+    await targetMessage.unpin(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return `I have unpinned that message in ${channel}.`;
+  }
+
+  if (action.tool === "create_thread") {
+    const channel = await cachedChannel(guild, action.channelId);
+    if (!channel?.isTextBased?.() || !("threads" in channel)) {
+      return "I can only create public threads in a text channel that supports threads.";
+    }
+
+    const thread = await channel.threads.create({
+      name: action.threadName,
+      autoArchiveDuration: 1440,
+      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+    });
+    resourceFetchCache.delete(`channel:${guild.id}:${action.channelId}`);
+    return `I have created thread ${thread}.`;
+  }
+
+  if (action.tool === "set_role_color") {
+    const role = await cachedRole(guild, action.roleId);
+    if (!canManageRole(botMember, role)) return "I cannot recolor that role because it is managed, missing, or at/above Duck's highest role.";
+
+    await role.setColor(action.color, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    resourceFetchCache.delete(`role:${guild.id}:${action.roleId}`);
+    return `I have set @${role.name}'s color to ${formatRoleColor(action.color)}.`;
+  }
+
+  if (action.tool === "create_poll") {
+    const channel = await cachedChannel(guild, action.channelId);
+    if (!channel?.isTextBased?.() || !("send" in channel)) return "I can only create polls in a text channel.";
+
+    const permissions = channel.permissionsFor(botMember);
+    if (!permissions?.has(PermissionsBitField.Flags.ViewChannel) || !permissions.has(PermissionsBitField.Flags.SendMessages)) {
+      return "Duck cannot send messages in that channel.";
+    }
+    if (!permissions.has(PermissionsBitField.Flags.AddReactions)) {
+      return "Duck needs Add Reactions permission to create a reaction poll.";
+    }
+
+    const optionLines = action.pollOptions.map((option, index) => {
+      const emoji = String.fromCodePoint(0x1f1e6 + index);
+      return `${emoji} ${option}`;
+    });
+    const pollMessage = await channel.send({
+      content: limitDiscordContent([
+        `Poll: ${action.pollQuestion}`,
+        ...optionLines,
+      ].join("\n"), 1900),
+      allowedMentions: { parse: [] },
+    });
+
+    for (let index = 0; index < action.pollOptions.length; index += 1) {
+      await pollMessage.react(String.fromCodePoint(0x1f1e6 + index)).catch((err) => {
+        logWarn("poll.react-failed", { actionId: action.id, messageId: pollMessage.id, index, error: err?.message || String(err) });
+      });
+    }
+    rememberMessage(pollMessage);
+    return `I have created the poll in ${channel}.`;
   }
 
   if (action.tool === "create_role") {
@@ -5254,7 +5694,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     const needed = TOOL_REQUIREMENTS[plan.tool];
     if (needed && !hasPermission(message.member, needed)) {
-      const content = `You need the Discord permission for \`${plan.tool}\` before I can prepare that action.`;
+      const content = `You need the Discord permission for \`${plan.tool}\` before I can prepare that action. Required: ${describePermissionRequirement(needed)}.`;
       logWarn("message.requester-missing-permission", {
         messageId: message.id,
         tool: plan.tool,
