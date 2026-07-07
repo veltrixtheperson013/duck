@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -24,6 +25,11 @@ const pendingByChannel = new Map();
 const pendingExpiryTimers = new Map();
 const serverContextCache = new Map();
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
+let buildInfo = {
+  commit: process.env.DUCK_COMMIT || process.env.COMMIT_SHA || process.env.GIT_COMMIT || "unknown",
+  commitName: process.env.DUCK_COMMIT_NAME || process.env.COMMIT_MESSAGE || "unknown",
+  branch: process.env.DUCK_BRANCH || process.env.BRANCH || process.env.GIT_BRANCH || "unknown",
+};
 
 try {
   packageInfo = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
@@ -32,7 +38,7 @@ try {
 }
 
 function isDebugEnabled() {
-  return /^(1|true|yes|on)$/i.test(process.env.DUCK_DEBUG || "");
+  return !/^(0|false|no|off)$/i.test(process.env.DUCK_DEBUG || "true");
 }
 
 function shouldLogAiBodies() {
@@ -74,6 +80,30 @@ function logError(event, err, details = {}) {
 
 function elapsedMs(startedAt) {
   return Date.now() - startedAt;
+}
+
+function readGitValue(args) {
+  try {
+    return execFileSync("git", args, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function loadBuildInfo() {
+  const commit = readGitValue(["rev-parse", "--short", "HEAD"]);
+  const commitName = readGitValue(["log", "-1", "--pretty=%s"]);
+  const branch = readGitValue(["branch", "--show-current"]);
+
+  buildInfo = {
+    commit: commit || buildInfo.commit,
+    commitName: commitName || buildInfo.commitName,
+    branch: branch || buildInfo.branch,
+  };
 }
 
 class AiServiceError extends Error {
@@ -360,9 +390,13 @@ function updateGuildSettings(guildId, patch) {
 function requireConfig() {
   loadDotEnv();
   loadJsonConfig();
+  loadBuildInfo();
   logInfo("startup.config", {
     package: packageInfo.name,
     version: packageInfo.version,
+    commit: buildInfo.commit,
+    commitName: buildInfo.commitName,
+    branch: buildInfo.branch,
     node: process.version,
     debug: isDebugEnabled(),
     aiProvider: process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "none"),
@@ -1691,13 +1725,17 @@ async function chatWithOpenAiCompatible(message, config) {
   }
 
   const body = await response.json();
-  const content = body.choices?.[0]?.message?.content;
+  const choiceMessage = body.choices?.[0]?.message;
+  const content = extractAiTextContent(choiceMessage);
   logDebug("ai.chat.result", {
     providerName: config.providerName,
     model: config.model,
     hasContent: typeof content === "string" && Boolean(content.trim()),
     ms: elapsedMs(startedAt),
     raw: shouldLogAiBodies() && typeof content === "string" ? content.slice(0, 1000) : undefined,
+    finishReason: body.choices?.[0]?.finish_reason,
+    contentType: Array.isArray(choiceMessage?.content) ? "array" : typeof choiceMessage?.content,
+    hasReasoning: typeof choiceMessage?.reasoning === "string" && Boolean(choiceMessage.reasoning.trim()),
   });
   if (typeof content === "string" && content.trim()) return content.trim().slice(0, 1800);
   throw new AiServiceError(`${config.providerName} chat returned an empty response.`, {
@@ -1755,7 +1793,7 @@ async function chatWithOllama(message) {
   }
 
   const body = await response.json();
-  const content = body.message?.content;
+  const content = extractAiTextContent(body.message);
   logDebug("ai.ollama.chat.result", {
     model,
     hasContent: typeof content === "string" && Boolean(content.trim()),
@@ -1764,6 +1802,26 @@ async function chatWithOllama(message) {
   });
   if (typeof content === "string" && content.trim()) return content.trim().slice(0, 1800);
   throw new AiServiceError("Ollama chat returned an empty response.", { model, baseUrl });
+}
+
+function extractAiTextContent(aiMessage) {
+  const content = aiMessage?.content;
+  if (typeof content === "string") return content;
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        if (typeof part?.content === "string") return part.content;
+        return "";
+      })
+      .join("")
+      .trim();
+  }
+
+  if (typeof aiMessage?.text === "string") return aiMessage.text;
+  return "";
 }
 
 async function generateChatResponse(message) {
@@ -2370,6 +2428,8 @@ client.once(Events.ClientReady, async () => {
     userId: client.user.id,
     guilds: client.guilds.cache.size,
     version: packageInfo.version,
+    commit: buildInfo.commit,
+    commitName: buildInfo.commitName,
   });
   client.user.setPresence({
     activities: [

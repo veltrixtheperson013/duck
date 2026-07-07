@@ -164,7 +164,7 @@ Common tool choices:
    Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
    Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
-   Debug logging is controlled by `DUCK_DEBUG`. `DUCK_DEBUG_AI_BODY` can log model output snippets, but should stay `false` unless you are actively debugging.
+   Debug logging is on by default. Set `DUCK_DEBUG=false` only when you want quieter logs. `DUCK_DEBUG_AI_BODY` can log model output snippets, but should stay `false` unless you are actively debugging.
 
    Current OpenRouter free models can rotate. As of July 6, 2026, OpenRouter's public model API lists `tencent/hy3:free` with zero prompt and completion pricing.
 
@@ -250,7 +250,9 @@ Duck also supports normal environment variables if your host adds them later.
 
 ## Debug Logs
 
-Set `DUCK_DEBUG=true` to log startup config, version, selected AI provider/model, context cache hits/misses, OpenRouter/Ollama HTTP status codes, slow/failing AI requests, planner results, queue timing, confirmation lifecycle, and moderation execution results.
+Debug logging is on by default. Set `DUCK_DEBUG=false` to quiet it down.
+
+Startup logs include package version, commit hash, commit name, branch, selected AI provider/model, and redacted API key information. Debug logs include context cache hits/misses, OpenRouter/Ollama HTTP status codes, slow/failing AI requests, planner results, queue timing, confirmation lifecycle, and moderation execution results.
 
 Set `DUCK_DEBUG_AI_BODY=true` only when needed. It logs short AI response snippets and may include message content from your server.
 
