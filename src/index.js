@@ -165,7 +165,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "delete_channel",
     risk: "critical",
-    description: "Delete a server channel. Administrator confirmation required.",
+    description: "Delete a server channel only when the request explicitly mentions the channel, gives its ID, or uses its exact name. Administrator confirmation required.",
   },
   {
     name: "purge_messages",
@@ -694,6 +694,22 @@ function findChannelByToolTarget(message, target) {
     ?? findChannelByNameOrMention(message, text);
 }
 
+function channelNameMatchesExactTarget(channel, target) {
+  const text = String(target || "").trim().replace(/^#/, "");
+  if (!text || !channel?.name) return false;
+
+  return channel.name.toLowerCase() === text.toLowerCase()
+    || normalizeMemberLookup(channel.name) === normalizeMemberLookup(text);
+}
+
+function findExactChannelByToolTarget(message, target) {
+  const text = String(target || "").trim();
+  const channelId = text.match(/^<#(\d+)>$/)?.[1] ?? (/^\d{10,}$/.test(text) ? text : null);
+  if (channelId) return message.guild.channels.cache.get(channelId) ?? null;
+
+  return message.guild.channels.cache.find((channel) => channelNameMatchesExactTarget(channel, text)) ?? null;
+}
+
 function findRoleByToolTarget(message, target) {
   const text = String(target || "").trim();
   const roleId = text.match(/^<@&(\d+)>$/)?.[1] ?? (/^\d{10,}$/.test(text) ? text : null);
@@ -1054,8 +1070,11 @@ function planModerationToolFromText(message, rawText) {
   }
 
   if (/\bdelete channel\b/.test(normalized)) {
-    const channel = findChannelByNameOrMention(message, text);
-    if (!channel) return { error: "I could not find that channel." };
+    const target = extractQuotedName(text) ?? text
+      .replace(/\b(can you|please|delete|remove|the|a|an|text|channel)\b/gi, " ")
+      .trim();
+    const channel = findExactChannelByToolTarget(message, target);
+    if (!channel) return { error: "Mention the channel, use its ID, or use its exact name so I can safely delete the right channel." };
     return {
       tool: "delete_channel",
       risk: "critical",
@@ -1624,13 +1643,32 @@ function validateAiPlan(message, plan, serverContext = null) {
     };
   }
 
-  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel"].includes(tool.name)) {
+  if (tool.name === "delete_channel") {
+    const targetText = plan.channelName || plan.targetName || "";
+    const channel = String(plan.channelId || "").trim()
+      ? message.guild.channels.cache.get(String(plan.channelId))
+      : findExactChannelByToolTarget(message, targetText);
+
+    if (!channel) {
+      return { error: "Mention the channel, use its ID, or use its exact name so I can safely delete the right channel." };
+    }
+
+    if (targetText && !channelNameMatchesExactTarget(channel, targetText) && !/^<#\d+>$/.test(String(targetText).trim()) && !/^\d{10,}$/.test(String(targetText).trim())) {
+      return { error: "That channel name does not exactly match the channel I found. Mention it or use the exact channel name." };
+    }
+
+    return {
+      ...base,
+      channelId: channel.id,
+      channelName: channel.name,
+      summary: `delete ${channel.name ? `#${channel.name}` : `channel ${channel.id}`}`,
+    };
+  }
+
+  if (["set_slowmode", "lock_channel", "unlock_channel"].includes(tool.name)) {
     const targetChannelId = String(plan.channelId || message.channelId);
     const allowed = message.guild.channels.cache.get(targetChannelId) ?? findChannelByToolTarget(message, plan.channelName || "");
     if (!allowed) return { error: "Mention the channel so I can target the right one." };
-    if (tool.name === "delete_channel" && !plan.channelId && !plan.channelName) {
-      return { error: "Mention the channel or use its exact name so I can safely target the right channel." };
-    }
 
     const result = {
       ...base,
@@ -2448,7 +2486,9 @@ function parseInlineToolCall(message, content) {
   };
 
   if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic"].includes(tool)) {
-    const channel = findChannelByToolTarget(message, primaryTarget);
+    const channel = tool === "delete_channel"
+      ? findExactChannelByToolTarget(message, primaryTarget)
+      : findChannelByToolTarget(message, primaryTarget);
     if (channel) rawPlan.channelId = channel.id;
   }
 
@@ -2812,6 +2852,9 @@ async function executeAction(client, action, approver) {
   if (action.tool === "delete_channel") {
     const channel = await guild.channels.fetch(action.channelId);
     if (!channel) return `I could not find the channel "${action.channelName}".`;
+    if (action.channelName && channel.name !== action.channelName) {
+      return `I did not delete anything because the target channel changed from "${action.channelName}" to "${channel.name}".`;
+    }
     await channel.delete(`Duck approved by ${approver.user.tag}`);
     return `I have deleted the channel "${action.channelName}".`;
   }
