@@ -3,4 +3,5 @@ node_modules/
 config.json
 data/settings.json
 data/pending-actions.json
+data/warnings.json
 *.log

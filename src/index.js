@@ -20,6 +20,7 @@ import {
 const dataDir = path.join(process.cwd(), "data");
 const settingsPath = path.join(dataDir, "settings.json");
 const pendingActionsPath = path.join(dataDir, "pending-actions.json");
+const warningsPath = path.join(dataDir, "warnings.json");
 
 const pendingActions = new Map();
 const pendingByChannel = new Map();
@@ -175,7 +176,17 @@ const TOOL_DEFINITIONS = [
   {
     name: "warn_member",
     risk: "medium",
-    description: "Warn a mentioned server member with a direct message when possible.",
+    description: "Warn a mentioned server member, store the warning, and direct message them when possible.",
+  },
+  {
+    name: "view_warnings",
+    risk: "medium",
+    description: "Show stored warnings for a mentioned server member.",
+  },
+  {
+    name: "clear_warnings",
+    risk: "medium",
+    description: "Clear a requested number of stored warnings for a mentioned server member.",
   },
   {
     name: "untimeout_member",
@@ -291,6 +302,8 @@ const TOOL_REQUIREMENTS = {
   delete_channel: PermissionsBitField.Flags.ManageChannels,
   purge_messages: PermissionsBitField.Flags.ManageMessages,
   warn_member: PermissionsBitField.Flags.ModerateMembers,
+  view_warnings: PermissionsBitField.Flags.ModerateMembers,
+  clear_warnings: PermissionsBitField.Flags.ModerateMembers,
   untimeout_member: PermissionsBitField.Flags.ModerateMembers,
   set_slowmode: PermissionsBitField.Flags.ManageChannels,
   lock_channel: PermissionsBitField.Flags.ManageChannels,
@@ -374,6 +387,50 @@ function loadSettings() {
 function saveSettings(settings) {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
+
+function loadWarnings() {
+  try {
+    if (!fs.existsSync(warningsPath)) return { guilds: {} };
+    const warnings = JSON.parse(fs.readFileSync(warningsPath, "utf8"));
+    warnings.guilds ??= {};
+    return warnings;
+  } catch {
+    return { guilds: {} };
+  }
+}
+
+function saveWarnings(warnings) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(warningsPath, JSON.stringify(warnings, null, 2));
+}
+
+function getMemberWarnings(guildId, memberId) {
+  const warnings = loadWarnings();
+  return [...(warnings.guilds?.[guildId]?.[memberId] ?? [])];
+}
+
+function addMemberWarning(guildId, memberId, warning) {
+  const warnings = loadWarnings();
+  warnings.guilds[guildId] ??= {};
+  warnings.guilds[guildId][memberId] ??= [];
+  warnings.guilds[guildId][memberId].push(warning);
+  saveWarnings(warnings);
+  return warnings.guilds[guildId][memberId].length;
+}
+
+function clearMemberWarnings(guildId, memberId, count) {
+  const warnings = loadWarnings();
+  const memberWarnings = warnings.guilds?.[guildId]?.[memberId] ?? [];
+  const removedCount = Math.min(memberWarnings.length, count);
+  if (removedCount <= 0) return { removedCount: 0, remainingCount: memberWarnings.length };
+
+  memberWarnings.splice(Math.max(0, memberWarnings.length - removedCount), removedCount);
+  if (memberWarnings.length === 0) {
+    delete warnings.guilds[guildId][memberId];
+  }
+  saveWarnings(warnings);
+  return { removedCount, remainingCount: memberWarnings.length };
 }
 
 function getPendingActionTtlMs() {
@@ -576,6 +633,13 @@ function parseMessageCount(text, fallback = 10) {
   return Math.max(1, Math.min(Number(match[1]), 99));
 }
 
+function parseWarningClearCount(text) {
+  if (/\b(all|every)\b/i.test(text)) return "all";
+  const match = text.match(/\b(\d{1,3})\b/);
+  if (!match) return null;
+  return Math.max(1, Math.min(Number(match[1]), 999));
+}
+
 function extractQuotedName(text) {
   const quoted = text.match(/["']([^"']+)["']/);
   if (quoted) return quoted[1].trim();
@@ -611,6 +675,8 @@ function inferReasonFromRequest(message, toolName) {
     kick_member: ["kick"],
     timeout_member: ["timeout", "mute"],
     warn_member: ["warn", "warning"],
+    view_warnings: ["view", "show", "list", "warning", "warnings", "warns"],
+    clear_warnings: ["clear", "remove", "delete", "warning", "warnings", "warns"],
     untimeout_member: ["untimeout", "unmute", "remove", "timeout", "mute"],
     delete_user_messages: ["delete", "purge", "messages"],
     set_nickname: ["nickname", "nick", "rename"],
@@ -856,8 +922,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|slowmode|lock|lockdown|unlock|purge|delete|remove|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|nickname|nick|voice|purge|delete|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -1034,6 +1100,31 @@ function planModerationToolFromText(message, rawText) {
       targetId: member.id,
       reason: extractReason(text, ["untimeout", "unmute", "remove", "timeout", "mute"]),
       summary: `remove timeout from ${member.displayName}, ${member.user.username}`,
+    };
+  }
+
+  if (/\b(view|show|list)\b.*\b(warning|warnings|warns)\b|\b(warning|warnings|warns)\b.*\b(for|on|of)\b|^(warning|warnings|warns)\b/.test(normalized)) {
+    if (!member) return { error: "Tell me whose warnings to view by mentioning them." };
+    return {
+      tool: "view_warnings",
+      risk: "medium",
+      targetId: member.id,
+      reason: "Warning history lookup.",
+      summary: `view warnings for ${member.displayName}, ${member.user.username}`,
+    };
+  }
+
+  if (/\b(clear|remove|delete)\b.*\b(warning|warnings|warns)\b/.test(normalized)) {
+    if (!member) return { error: "Tell me whose warnings to clear by mentioning them." };
+    const count = parseWarningClearCount(text);
+    if (!count) return { error: "Tell me how many warnings to clear, or say `all warnings`." };
+    return {
+      tool: "clear_warnings",
+      risk: "medium",
+      targetId: member.id,
+      count,
+      reason: extractReason(text, ["clear", "remove", "delete", "warning", "warnings", "warns"]),
+      summary: `clear ${count === "all" ? "all" : count} warning${count === 1 ? "" : "s"} for ${member.displayName}, ${member.user.username}`,
     };
   }
 
@@ -1668,6 +1759,8 @@ function validateAiPlan(message, plan, serverContext = null) {
     "kick_member",
     "timeout_member",
     "warn_member",
+    "view_warnings",
+    "clear_warnings",
     "untimeout_member",
     "softban_member",
     "set_nickname",
@@ -1705,6 +1798,19 @@ function validateAiPlan(message, plan, serverContext = null) {
       result.count = count;
       result.channelId = message.channelId;
       result.summary = `delete up to ${count} recent message${count === 1 ? "" : "s"} by ${member.displayName}, ${member.username}`;
+    }
+
+    if (tool.name === "view_warnings") {
+      result.reason = "Warning history lookup.";
+      result.summary = `view warnings for ${member.displayName}, ${member.username}`;
+    }
+
+    if (tool.name === "clear_warnings") {
+      const parsedCount = plan.count === "all" ? "all" : parseWarningClearCount(message.content);
+      const count = parsedCount === "all" ? "all" : Math.max(1, Math.min(Number(plan.count) || Number(parsedCount) || 0, 999));
+      if (!count) return { error: "Tell me how many warnings to clear, or say `all warnings`." };
+      result.count = count;
+      result.summary = `clear ${count === "all" ? "all" : count} warning${count === 1 ? "" : "s"} for ${member.displayName}, ${member.username}`;
     }
 
     if (tool.name === "set_nickname") {
@@ -1870,9 +1976,9 @@ async function makePlannerMessages(message) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
@@ -1911,6 +2017,8 @@ function makePlannerResponseFormat(kind) {
                 "delete_channel",
                 "purge_messages",
                 "warn_member",
+                "view_warnings",
+                "clear_warnings",
                 "untimeout_member",
                 "set_slowmode",
                 "lock_channel",
@@ -2289,7 +2397,7 @@ async function makeChatMessages(message) {
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
-        "Use tools ban, softban, kick, timeout, warn, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, create_role, delete_role, or delete_channel.",
+        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, create_role, delete_role, or delete_channel.",
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
         "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}.",
@@ -2523,6 +2631,15 @@ const INLINE_TOOL_MAP = {
   warn: "warn_member",
   warning: "warn_member",
   warn_member: "warn_member",
+  view_warnings: "view_warnings",
+  view_warning: "view_warnings",
+  view_warns: "view_warnings",
+  warnings: "view_warnings",
+  warning_list: "view_warnings",
+  warns: "view_warnings",
+  clear_warnings: "clear_warnings",
+  clear_warning: "clear_warnings",
+  clear_warns: "clear_warnings",
   untimeout: "untimeout_member",
   unmute: "untimeout_member",
   untimeout_member: "untimeout_member",
@@ -2616,6 +2733,7 @@ function parseInlineToolCall(message, content) {
   if (tool === "purge_messages" || tool === "delete_user_messages") {
     rawPlan.count = parseMessageCount(reason, parseMessageCount(message.content));
   }
+  if (tool === "clear_warnings") rawPlan.count = parseWarningClearCount(`${target} ${reason} ${message.content}`);
   if (tool === "timeout_member") rawPlan.durationMs = parseDurationMs(`${message.content} ${reason}`);
   if (tool === "set_slowmode") rawPlan.seconds = parseSlowmodeSeconds(`${target} ${reason} ${message.content}`);
   if (tool === "set_nickname") rawPlan.nickname = reason;
@@ -2706,6 +2824,8 @@ function commandLabel(action) {
   if (action.tool === "delete_channel") return "Delete Channel";
   if (action.tool === "purge_messages") return "Delete Messages";
   if (action.tool === "warn_member") return "Warn";
+  if (action.tool === "view_warnings") return "View Warnings";
+  if (action.tool === "clear_warnings") return "Clear Warnings";
   if (action.tool === "untimeout_member") return "Remove Timeout";
   if (action.tool === "set_slowmode") return "Set Slowmode";
   if (action.tool === "lock_channel") return "Lock Channel";
@@ -2743,6 +2863,24 @@ function makeConfirmationRows(actionId) {
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
+}
+
+function formatWarningsForMember(member, warnings) {
+  if (!warnings.length) {
+    return `${member.displayName}, ${member.user.username} has no stored warnings.`;
+  }
+
+  const lines = warnings.map((warning, index) => {
+    const timestampText = warning.createdAt ? `<t:${Math.floor(new Date(warning.createdAt).getTime() / 1000)}:f>` : "unknown time";
+    const moderator = warning.moderatorTag || warning.moderatorId || "unknown moderator";
+    const reason = String(warning.reason || "No reason provided.").slice(0, 300);
+    return `${index + 1}. ${timestampText} - warned by ${moderator}: ${reason}`;
+  });
+
+  return [
+    `Stored warnings for ${member.displayName}, ${member.user.username}:`,
+    ...lines,
+  ].join("\n");
 }
 
 function makeActionEmbed(action) {
@@ -2898,7 +3036,30 @@ async function executeAction(client, action, approver) {
     const member = await guild.members.fetch(action.targetId);
     const warning = `You were warned in ${guild.name}: ${action.reason}`;
     await member.send(warning).catch(() => null);
-    return `I have warned ${member.displayName}, ${member.user.username}.`;
+    const totalWarnings = addMemberWarning(guild.id, member.id, {
+      id: `${Date.now()}_${action.id}`,
+      createdAt: new Date().toISOString(),
+      moderatorId: approver.id,
+      moderatorTag: approver.user.tag,
+      reason: action.reason || "No reason provided.",
+    });
+    return `I have warned ${member.displayName}, ${member.user.username}. They now have ${totalWarnings} stored warning${totalWarnings === 1 ? "" : "s"}.`;
+  }
+
+  if (action.tool === "view_warnings") {
+    const member = await guild.members.fetch(action.targetId);
+    return formatWarningsForMember(member, getMemberWarnings(guild.id, member.id));
+  }
+
+  if (action.tool === "clear_warnings") {
+    const member = await guild.members.fetch(action.targetId);
+    const existingWarnings = getMemberWarnings(guild.id, member.id);
+    const count = action.count === "all" ? existingWarnings.length : Math.max(1, Math.min(Number(action.count) || 0, 999));
+    if (!existingWarnings.length) return `${member.displayName}, ${member.user.username} has no stored warnings to clear.`;
+    if (!count) return "Tell me how many warnings to clear, or say `all warnings`.";
+
+    const { removedCount, remainingCount } = clearMemberWarnings(guild.id, member.id, count);
+    return `I have cleared ${removedCount} warning${removedCount === 1 ? "" : "s"} for ${member.displayName}, ${member.user.username}. ${remainingCount} warning${remainingCount === 1 ? "" : "s"} remain.`;
   }
 
   if (action.tool === "set_nickname") {
@@ -3151,10 +3312,15 @@ async function approveAction(source, actionId, client) {
 }
 
 async function sendApprovalResult(source, result, action) {
-  const safeResult = limitDiscordContent(result);
+  const chunks = splitDiscordLines(String(result ?? "").split(/\r?\n/));
   if ("update" in source && source.isButton?.()) {
     try {
-      await source.update({ content: safeResult, embeds: [], components: [] });
+      await source.update({ content: chunks[0], embeds: [], components: [] });
+      for (const chunk of chunks.slice(1)) {
+        if ("followUp" in source) {
+          await source.followUp({ content: chunk, ephemeral: true }).catch(() => {});
+        }
+      }
       return;
     } catch (err) {
       logWarn("moderation.result-update-failed", {
@@ -3166,11 +3332,18 @@ async function sendApprovalResult(source, result, action) {
   }
 
   if ("reply" in source) {
-    await source.reply(safeResult).catch(async () => {
+    await source.reply(chunks[0]).catch(async () => {
       if ("followUp" in source) {
-        await source.followUp({ content: safeResult, ephemeral: true }).catch(() => {});
+        await source.followUp({ content: chunks[0], ephemeral: true }).catch(() => {});
       }
     });
+    for (const chunk of chunks.slice(1)) {
+      if ("followUp" in source) {
+        await source.followUp({ content: chunk, ephemeral: true }).catch(() => {});
+      } else {
+        await source.reply(chunk).catch(() => {});
+      }
+    }
   }
 }
 
