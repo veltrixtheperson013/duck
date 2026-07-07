@@ -231,6 +231,31 @@ const TOOL_DEFINITIONS = [
     risk: "high",
     description: "Create a text channel.",
   },
+  {
+    name: "create_voice_channel",
+    risk: "high",
+    description: "Create a voice channel.",
+  },
+  {
+    name: "rename_channel",
+    risk: "high",
+    description: "Rename a text or voice channel.",
+  },
+  {
+    name: "set_channel_topic",
+    risk: "medium",
+    description: "Set a text channel topic.",
+  },
+  {
+    name: "create_role",
+    risk: "high",
+    description: "Create a server role.",
+  },
+  {
+    name: "delete_role",
+    risk: "high",
+    description: "Delete a server role.",
+  },
 ];
 
 const TOOL_REQUIREMENTS = {
@@ -256,6 +281,11 @@ const TOOL_REQUIREMENTS = {
   deafen_member: PermissionsBitField.Flags.DeafenMembers,
   undeafen_member: PermissionsBitField.Flags.DeafenMembers,
   create_text_channel: PermissionsBitField.Flags.ManageChannels,
+  create_voice_channel: PermissionsBitField.Flags.ManageChannels,
+  rename_channel: PermissionsBitField.Flags.ManageChannels,
+  set_channel_topic: PermissionsBitField.Flags.ManageChannels,
+  create_role: PermissionsBitField.Flags.ManageRoles,
+  delete_role: PermissionsBitField.Flags.ManageRoles,
 };
 
 const RISK_COPY = {
@@ -326,6 +356,18 @@ function getPendingActionTtlMs() {
 
 function getServerContextCacheTtlMs() {
   return Math.max(0, Number(process.env.AI_CONTEXT_CACHE_TTL_MS) || 15_000);
+}
+
+function getAiContextMemberLimit() {
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MEMBER_LIMIT) || 500, 1000));
+}
+
+function getAiContextChannelLimit() {
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNEL_LIMIT) || 250, 500));
+}
+
+function getAiContextRoleLimit() {
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_ROLE_LIMIT) || 250, 500));
 }
 
 function getQueueMessage() {
@@ -427,10 +469,13 @@ function requireConfig() {
     aiProvider: process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "none"),
     openRouterModel: process.env.OPENROUTER_MODEL || null,
     openRouterKey: redact(process.env.OPENROUTER_API_KEY),
-    contextChannels: process.env.AI_CONTEXT_CHANNELS || "5",
-    contextMessagesPerChannel: process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL || "8",
-    contextMaxMessages: process.env.AI_CONTEXT_MAX_MESSAGES || "40",
+    contextChannels: process.env.AI_CONTEXT_CHANNELS || "20",
+    contextMessagesPerChannel: process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL || "10",
+    contextMaxMessages: process.env.AI_CONTEXT_MAX_MESSAGES || "120",
     contextCacheTtlMs: getServerContextCacheTtlMs(),
+    contextMemberLimit: getAiContextMemberLimit(),
+    contextChannelLimit: getAiContextChannelLimit(),
+    contextRoleLimit: getAiContextRoleLimit(),
     pendingActionTtlMs: getPendingActionTtlMs(),
   });
 
@@ -526,6 +571,11 @@ function inferReasonFromRequest(message, toolName) {
     voice_unmute_member: ["voice", "server", "unmute"],
     deafen_member: ["deafen"],
     undeafen_member: ["undeafen"],
+    create_voice_channel: ["create", "make", "new", "voice", "channel"],
+    rename_channel: ["rename", "channel"],
+    set_channel_topic: ["topic", "channel", "set"],
+    create_role: ["create", "make", "new", "role"],
+    delete_role: ["delete", "remove", "role"],
   }[toolName] ?? [];
 
   const reason = extractReason(message.content, commandWords);
@@ -622,6 +672,10 @@ function findRoleByToolTarget(message, target) {
   return message.guild.roles.cache.find((role) => role.name.toLowerCase() === exact) ?? null;
 }
 
+function canManageRole(botMember, role) {
+  return role && !role.managed && role.id !== role.guild.id && role.position < botMember.roles.highest.position;
+}
+
 function extractNewChannelName(text) {
   const quoted = extractQuotedName(text);
   const raw = quoted ?? text.replace(/\b(create|make|new|text|channel)\b/gi, "").trim();
@@ -634,6 +688,24 @@ function extractNewChannelName(text) {
     .replace(/^-|-$/g, "");
 
   return name.slice(0, 100) || null;
+}
+
+function extractPlainName(text, maxLength = 100) {
+  const quoted = extractQuotedName(text);
+  const raw = (quoted ?? text).trim();
+  return raw
+    .replace(/[<>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength) || null;
+}
+
+function extractRoleName(text) {
+  return extractPlainName(text.replace(/\b(create|make|new|role|delete|remove)\b/gi, " "), 100);
+}
+
+function extractVoiceChannelName(text) {
+  return extractNewChannelName(text.replace(/\b(create|make|new|voice|channel)\b/gi, " "));
 }
 
 function getTextChannelTarget(message, text) {
@@ -717,8 +789,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|slowmode|lock|lockdown|unlock|purge|delete|remove|nickname|nick|rename|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|nickname|nick|voice|purge|delete|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|slowmode|lock|lockdown|unlock|purge|delete|remove|nickname|nick|rename|topic|role|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|nickname|nick|voice|purge|delete|lock|unlock|create|make)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -988,6 +1060,18 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
+  if (/\b(create|make|new)\b.*\bvoice\s+channel\b|\b(create|make|new)\b.*\bvc\b/.test(normalized)) {
+    const channelName = extractVoiceChannelName(text);
+    if (!channelName) return { error: "Tell me the voice channel name in quotes." };
+    return {
+      tool: "create_voice_channel",
+      risk: "high",
+      channelName,
+      reason: extractChannelReason(text, ["create", "make", "new", "voice", "channel", "vc"]),
+      summary: `create voice channel ${channelName}`,
+    };
+  }
+
   if (/\b(create|make|new)\b.*\b(text\s+)?channel\b/.test(normalized)) {
     const channelName = extractNewChannelName(text);
     if (!channelName) return { error: "Tell me the channel name in quotes." };
@@ -997,6 +1081,63 @@ function planModerationToolFromText(message, rawText) {
       channelName,
       reason: extractChannelReason(text, ["create", "make", "new", "text", "channel"]),
       summary: `create #${channelName}`,
+    };
+  }
+
+  if (/\brename\b.*\bchannel\b|\bchannel\b.*\brename\b/.test(normalized)) {
+    const channel = getTextChannelTarget(message, text) ?? findChannelByNameOrMention(message, text);
+    if (!channel) return { error: "Tell me which channel to rename." };
+    const newName = extractNewChannelName(text.replace(channel.name ?? "", ""));
+    if (!newName) return { error: "Tell me the new channel name in quotes." };
+    return {
+      tool: "rename_channel",
+      risk: "high",
+      channelId: channel.id,
+      channelName: channel.name,
+      newName,
+      reason: extractChannelReason(text, ["rename", "channel", "to"]),
+      summary: `rename ${summarizeChannel(channel)} to ${newName}`,
+    };
+  }
+
+  if (/\b(set|change|update)\b.*\b(topic)\b/.test(normalized)) {
+    const channel = getTextChannelTarget(message, text) ?? findChannelByNameOrMention(message, text);
+    if (!channel || !("setTopic" in channel)) return { error: "I can only set topics in a text channel." };
+    const topic = extractPlainName(text.replace(/\b(set|change|update|topic|channel|to)\b/gi, " "), 1024);
+    if (!topic) return { error: "Tell me the new channel topic in quotes." };
+    return {
+      tool: "set_channel_topic",
+      risk: "medium",
+      channelId: channel.id,
+      channelName: channel.name,
+      topic,
+      reason: "Channel topic update.",
+      summary: `set ${summarizeChannel(channel)} topic`,
+    };
+  }
+
+  if (/\b(create|make|new)\b.*\brole\b/.test(normalized)) {
+    const roleName = extractRoleName(text);
+    if (!roleName) return { error: "Tell me the role name in quotes." };
+    return {
+      tool: "create_role",
+      risk: "high",
+      roleName,
+      reason: extractReason(text, ["create", "make", "new", "role"]),
+      summary: `create role @${roleName}`,
+    };
+  }
+
+  if (/\b(delete|remove)\b.*\brole\b/.test(normalized)) {
+    const role = findRoleByNameOrMention(message, text);
+    if (!role) return { error: "Tell me which role to delete by mentioning it or quoting its name." };
+    return {
+      tool: "delete_role",
+      risk: "high",
+      roleId: role.id,
+      roleName: role.name,
+      reason: extractReason(text, ["delete", "remove", "role"]),
+      summary: `delete role @${role.name}`,
     };
   }
 
@@ -1066,9 +1207,9 @@ function summarizeChannelForContext(channel) {
 
 async function collectRecentMessages(message) {
   const startedAt = Date.now();
-  const maxChannels = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 5, 20));
-  const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 8, 25));
-  const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 40, 150));
+  const maxChannels = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 20, 100));
+  const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 10, 50));
+  const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 120, 500));
   const seen = new Set();
   const candidates = [
     message.channel,
@@ -1144,12 +1285,12 @@ async function collectServerContext(message) {
   const memberCandidates = message.guild.members.cache
     .filter((member) => !member.user.bot)
     .map(summarizeMember)
-    .slice(0, 100);
+    .slice(0, getAiContextMemberLimit());
   const channels = message.guild.channels.cache
-    .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)
+    .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice || channel.type === ChannelType.GuildCategory)
     .sort((a, b) => a.rawPosition - b.rawPosition)
     .map(summarizeChannelForContext)
-    .slice(0, 100);
+    .slice(0, getAiContextChannelLimit());
   const roles = message.guild.roles.cache
     .filter((role) => role.id !== message.guild.id && !role.managed)
     .sort((a, b) => b.position - a.position)
@@ -1158,7 +1299,7 @@ async function collectServerContext(message) {
       name: role.name,
       position: role.position,
     }))
-    .slice(0, 80);
+    .slice(0, getAiContextRoleLimit());
 
   const context = {
     guild: {
@@ -1293,7 +1434,7 @@ function validateAiPlan(message, plan, serverContext = null) {
     }
 
     if (tool.name === "add_role" || tool.name === "remove_role") {
-      const role = message.guild.roles.cache.get(String(plan.roleId));
+      const role = message.guild.roles.cache.get(String(plan.roleId)) ?? findRoleByToolTarget(message, plan.roleName || plan.targetRoleName || "");
       if (!role || role.id === message.guild.id || role.managed) {
         return { error: "Tell me which editable role to use by mentioning it or quoting its name." };
       }
@@ -1303,7 +1444,7 @@ function validateAiPlan(message, plan, serverContext = null) {
     }
 
     if (tool.name === "move_member") {
-      const channel = message.guild.channels.cache.get(String(plan.channelId));
+      const channel = message.guild.channels.cache.get(String(plan.channelId)) ?? findChannelByToolTarget(message, plan.channelName || "");
       if (!channel || channel.type !== ChannelType.GuildVoice) {
         return { error: "Tell me which voice channel to move them to." };
       }
@@ -1331,9 +1472,9 @@ function validateAiPlan(message, plan, serverContext = null) {
 
   if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel"].includes(tool.name)) {
     const targetChannelId = String(plan.channelId || message.channelId);
-    const allowed = message.guild.channels.cache.get(targetChannelId);
+    const allowed = message.guild.channels.cache.get(targetChannelId) ?? findChannelByToolTarget(message, plan.channelName || "");
     if (!allowed) return { error: "Mention the channel so I can target the right one." };
-    if (tool.name === "delete_channel" && !plan.channelId) {
+    if (tool.name === "delete_channel" && !plan.channelId && !plan.channelName) {
       return { error: "Mention the channel or use its exact name so I can safely target the right channel." };
     }
 
@@ -1353,13 +1494,66 @@ function validateAiPlan(message, plan, serverContext = null) {
     return result;
   }
 
-  if (tool.name === "create_text_channel") {
+  if (["rename_channel", "set_channel_topic"].includes(tool.name)) {
+    const targetChannelId = String(plan.channelId || "");
+    const channel = message.guild.channels.cache.get(targetChannelId) ?? findChannelByToolTarget(message, plan.channelName || plan.targetName || "");
+    if (!channel) return { error: "Mention the channel or use its exact name so I can target the right channel." };
+
+    const result = {
+      ...base,
+      channelId: channel.id,
+      channelName: channel.name,
+      summary: `${commandLabel({ tool: tool.name }).toLowerCase()} ${channel.name ? `#${channel.name}` : `channel ${channel.id}`}`,
+    };
+
+    if (tool.name === "rename_channel") {
+      const newName = extractNewChannelName(plan.newName || plan.channelName || message.content);
+      if (!newName) return { error: "Tell me the new channel name in quotes." };
+      result.newName = newName;
+      result.summary = `rename ${channel.name ? `#${channel.name}` : `channel ${channel.id}`} to ${newName}`;
+    }
+
+    if (tool.name === "set_channel_topic") {
+      if (!("setTopic" in channel)) return { error: "I can only set topics in a text channel." };
+      const topic = extractPlainName(plan.topic || plan.channelTopic || plan.reason || "", 1024);
+      if (!topic) return { error: "Tell me the new channel topic." };
+      result.topic = topic;
+      result.summary = `set ${channel.name ? `#${channel.name}` : `channel ${channel.id}`} topic`;
+    }
+
+    return result;
+  }
+
+  if (tool.name === "create_text_channel" || tool.name === "create_voice_channel") {
     const channelName = typeof plan.channelName === "string" ? extractNewChannelName(plan.channelName) : extractNewChannelName(message.content);
     if (!channelName) return { error: "Tell me the channel name in quotes." };
     return {
       ...base,
       channelName,
-      summary: `create #${channelName}`,
+      summary: tool.name === "create_voice_channel" ? `create voice channel ${channelName}` : `create #${channelName}`,
+    };
+  }
+
+  if (tool.name === "create_role") {
+    const roleName = extractPlainName(plan.roleName || plan.targetName || plan.reason || "", 100);
+    if (!roleName) return { error: "Tell me the role name in quotes." };
+    return {
+      ...base,
+      roleName,
+      summary: `create role @${roleName}`,
+    };
+  }
+
+  if (tool.name === "delete_role") {
+    const role = message.guild.roles.cache.get(String(plan.roleId)) ?? findRoleByToolTarget(message, plan.roleName || plan.targetName || "");
+    if (!role || role.id === message.guild.id || role.managed) {
+      return { error: "Tell me which editable role to delete by mentioning it or quoting its name." };
+    }
+    return {
+      ...base,
+      roleId: role.id,
+      roleName: role.name,
+      summary: `delete role @${role.name}`,
     };
   }
 
@@ -1376,9 +1570,9 @@ async function makePlannerMessages(message) {
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"channelName\":\"new channel name when needed\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
+        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|warn_member|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"topic\":\"new channel topic\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
         "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel for new text channels, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member for a warning DM, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
         "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
@@ -1432,13 +1626,22 @@ function makePlannerResponseFormat(kind) {
                 "deafen_member",
                 "undeafen_member",
                 "create_text_channel",
+                "create_voice_channel",
+                "rename_channel",
+                "set_channel_topic",
+                "create_role",
+                "delete_role",
               ],
             },
             targetId: { type: "string" },
             targetName: { type: "string" },
             channelId: { type: "string" },
             roleId: { type: "string" },
+            roleName: { type: "string" },
+            targetRoleName: { type: "string" },
             channelName: { type: "string" },
+            newName: { type: "string" },
+            topic: { type: "string" },
             nickname: { type: "string" },
             count: { type: "number" },
             durationMs: { type: "number" },
@@ -1784,10 +1987,10 @@ async function makeChatMessages(message) {
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
-        "Use tools ban, softban, kick, timeout, warn, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, or delete_channel.",
+        "Use tools ban, softban, kick, timeout, warn, untimeout, purge, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, create_role, delete_role, or delete_channel.",
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
-        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}.",
+        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}.",
         "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
         "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
         "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
@@ -1819,22 +2022,24 @@ async function chatWithOpenAiCompatible(message, config) {
     channelId: message.channelId,
   });
 
+  const requestChat = () => fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json",
+      ...config.extraHeaders,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      temperature: 0.4,
+      max_tokens: 220,
+      messages,
+    }),
+  });
+
   let response;
   try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-        ...config.extraHeaders,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0.4,
-        max_tokens: 220,
-        messages,
-      }),
-    });
+    response = await requestChat();
   } catch (err) {
     logError("ai.chat.request-failed", err, {
       providerName: config.providerName,
@@ -1863,9 +2068,40 @@ async function chatWithOpenAiCompatible(message, config) {
     });
   }
 
-  const body = await response.json();
-  const choiceMessage = body.choices?.[0]?.message;
-  const content = extractAiTextContent(choiceMessage);
+  let body = await response.json();
+  let choiceMessage = body.choices?.[0]?.message;
+  let content = extractAiTextContent(choiceMessage);
+
+  if (!(typeof content === "string" && content.trim()) && typeof choiceMessage?.reasoning === "string" && choiceMessage.reasoning.trim()) {
+    logWarn("ai.chat.reasoning-without-content", {
+      providerName: config.providerName,
+      model: config.model,
+      finishReason: body.choices?.[0]?.finish_reason,
+      ms: elapsedMs(startedAt),
+    });
+
+    messages.push({
+      role: "user",
+      content: "Return a short visible final answer in message.content. Do not put the answer only in reasoning.",
+    });
+
+    try {
+      response = await requestChat();
+    } catch (err) {
+      logError("ai.chat.retry-request-failed", err, {
+        providerName: config.providerName,
+        model: config.model,
+        ms: elapsedMs(startedAt),
+      });
+    }
+
+    if (response?.ok) {
+      body = await response.json();
+      choiceMessage = body.choices?.[0]?.message;
+      content = extractAiTextContent(choiceMessage);
+    }
+  }
+
   logDebug("ai.chat.result", {
     providerName: config.providerName,
     model: config.model,
@@ -1877,6 +2113,11 @@ async function chatWithOpenAiCompatible(message, config) {
     hasReasoning: typeof choiceMessage?.reasoning === "string" && Boolean(choiceMessage.reasoning.trim()),
   });
   if (typeof content === "string" && content.trim()) return content.trim().slice(0, 1800);
+
+  if (typeof choiceMessage?.reasoning === "string" && choiceMessage.reasoning.trim()) {
+    return "I got the request, but OpenRouter returned internal reasoning without a visible answer. Try once more, or ask me directly for the action you want.";
+  }
+
   throw new AiServiceError(`${config.providerName} chat returned an empty response.`, {
     providerName: config.providerName,
     model: config.model,
@@ -2011,6 +2252,14 @@ const INLINE_TOOL_MAP = {
   undeafen_member: "undeafen_member",
   create_channel: "create_text_channel",
   create_text_channel: "create_text_channel",
+  create_voice_channel: "create_voice_channel",
+  create_vc: "create_voice_channel",
+  rename_channel: "rename_channel",
+  set_topic: "set_channel_topic",
+  set_channel_topic: "set_channel_topic",
+  topic: "set_channel_topic",
+  create_role: "create_role",
+  delete_role: "delete_role",
   delete_channel: "delete_channel",
 };
 
@@ -2042,7 +2291,7 @@ function parseInlineToolCall(message, content) {
     roleId: primaryTarget.match(/^<@&(\d+)>$/)?.[1],
   };
 
-  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel"].includes(tool)) {
+  if (["set_slowmode", "lock_channel", "unlock_channel", "delete_channel", "rename_channel", "set_channel_topic"].includes(tool)) {
     const channel = findChannelByToolTarget(message, primaryTarget);
     if (channel) rawPlan.channelId = channel.id;
   }
@@ -2064,6 +2313,15 @@ function parseInlineToolCall(message, content) {
   if (tool === "set_slowmode") rawPlan.seconds = parseSlowmodeSeconds(`${target} ${reason} ${message.content}`);
   if (tool === "set_nickname") rawPlan.nickname = reason;
   if (tool === "create_text_channel") rawPlan.channelName = target;
+  if (tool === "create_voice_channel") rawPlan.channelName = target;
+  if (tool === "rename_channel") rawPlan.newName = targetParts[1] ?? reason;
+  if (tool === "set_channel_topic") rawPlan.topic = reason;
+  if (tool === "create_role") rawPlan.roleName = target;
+  if (tool === "delete_role") {
+    const role = findRoleByToolTarget(message, primaryTarget);
+    if (role) rawPlan.roleId = role.id;
+    rawPlan.roleName = primaryTarget;
+  }
 
   const plan = validateAiPlan(message, rawPlan);
   return {
@@ -2157,6 +2415,11 @@ function commandLabel(action) {
   if (action.tool === "deafen_member") return "Deafen";
   if (action.tool === "undeafen_member") return "Undeafen";
   if (action.tool === "create_text_channel") return "Create Text Channel";
+  if (action.tool === "create_voice_channel") return "Create Voice Channel";
+  if (action.tool === "rename_channel") return "Rename Channel";
+  if (action.tool === "set_channel_topic") return "Set Channel Topic";
+  if (action.tool === "create_role") return "Create Role";
+  if (action.tool === "delete_role") return "Delete Role";
   return "Moderate";
 }
 
@@ -2193,6 +2456,8 @@ function makeActionEmbed(action) {
   if (action.count != null) details.push(`Count: ${action.count}`);
   if (action.nickname) details.push(`Nickname: ${action.nickname}`);
   if (action.roleName) details.push(`Role: @${action.roleName}`);
+  if (action.newName) details.push(`New name: ${action.newName}`);
+  if (action.topic) details.push(`Topic: ${action.topic}`);
   if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
   if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
   if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
@@ -2339,8 +2604,7 @@ async function executeAction(client, action, approver) {
     const role = await guild.roles.fetch(action.roleId);
     if (!role || role.managed || role.id === guild.id) return "I cannot use that role.";
 
-    const botMemberTop = botMember.roles.highest;
-    if (role.position >= botMemberTop.position) {
+    if (!canManageRole(botMember, role)) {
       return `I cannot manage @${role.name} because it is at or above Duck's highest role.`;
     }
 
@@ -2465,6 +2729,46 @@ async function executeAction(client, action, approver) {
       reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
     });
     return `I have created ${channel}.`;
+  }
+
+  if (action.tool === "create_voice_channel") {
+    const channel = await guild.channels.create({
+      name: action.channelName,
+      type: ChannelType.GuildVoice,
+      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+    });
+    return `I have created voice channel ${channel.name}.`;
+  }
+
+  if (action.tool === "rename_channel") {
+    const channel = await guild.channels.fetch(action.channelId);
+    if (!channel || !("setName" in channel)) return "I can only rename a guild channel.";
+    const oldName = channel.name;
+    await channel.setName(action.newName, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return `I have renamed ${oldName} to ${action.newName}.`;
+  }
+
+  if (action.tool === "set_channel_topic") {
+    const channel = await guild.channels.fetch(action.channelId);
+    if (!channel || !("setTopic" in channel)) return "I can only set topics in a text channel.";
+    await channel.setTopic(action.topic, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return `I have updated the topic in ${channel}.`;
+  }
+
+  if (action.tool === "create_role") {
+    const role = await guild.roles.create({
+      name: action.roleName,
+      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+    });
+    return `I have created @${role.name}.`;
+  }
+
+  if (action.tool === "delete_role") {
+    const role = await guild.roles.fetch(action.roleId);
+    if (!canManageRole(botMember, role)) return "I cannot delete that role because it is managed, missing, or at/above Duck's highest role.";
+    const roleName = role.name;
+    await role.delete(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return `I have deleted @${roleName}.`;
   }
 
   return "I do not know how to run that tool.";

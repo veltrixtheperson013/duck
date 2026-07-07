@@ -98,7 +98,7 @@ Duck removes the marker from the visible response and turns it into a confirmati
 {{move::Ryzen 9 9950X3D2|General Voice::testing purposes}}
 ```
 
-Supported marker tool names include `ban`, `softban`, `kick`, `timeout`, `warn`, `untimeout`, `purge`, `delete_user_messages`, `slowmode`, `lock`, `unlock`, `nickname`, `add_role`, `remove_role`, `disconnect`, `move`, `voice_mute`, `voice_unmute`, `deafen`, `undeafen`, `create_channel`, and `delete_channel`.
+Supported marker tool names include `ban`, `softban`, `kick`, `timeout`, `warn`, `untimeout`, `purge`, `delete_user_messages`, `slowmode`, `lock`, `unlock`, `nickname`, `add_role`, `remove_role`, `disconnect`, `move`, `voice_mute`, `voice_unmute`, `deafen`, `undeafen`, `create_channel`, `create_voice_channel`, `rename_channel`, `set_topic`, `create_role`, `delete_role`, and `delete_channel`.
 
 The planner is instructed to:
 
@@ -138,6 +138,10 @@ Common tool choices:
 - `voice_mute_member` / `voice_unmute_member`: server mute or unmute a member in voice.
 - `deafen_member` / `undeafen_member`: server deafen or undeafen a member in voice.
 - `create_text_channel`: create a text channel.
+- `create_voice_channel`: create a voice channel.
+- `rename_channel`: rename a text or voice channel.
+- `set_channel_topic`: set a text channel topic.
+- `create_role` / `delete_role`: create or delete server roles.
 - `delete_channel`: delete an explicitly requested channel.
 
 ## Setup
@@ -157,9 +161,12 @@ Common tool choices:
      "AI_PROVIDER": "openrouter",
      "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
      "OPENROUTER_MODEL": "tencent/hy3:free",
-     "AI_CONTEXT_CHANNELS": "5",
-     "AI_CONTEXT_MESSAGES_PER_CHANNEL": "8",
-     "AI_CONTEXT_MAX_MESSAGES": "40",
+     "AI_CONTEXT_CHANNELS": "20",
+     "AI_CONTEXT_MESSAGES_PER_CHANNEL": "10",
+     "AI_CONTEXT_MAX_MESSAGES": "120",
+     "AI_CONTEXT_MEMBER_LIMIT": "500",
+     "AI_CONTEXT_CHANNEL_LIMIT": "250",
+     "AI_CONTEXT_ROLE_LIMIT": "250",
      "AI_CONTEXT_CACHE_TTL_MS": "15000",
      "PENDING_ACTION_TTL_MS": "1800000",
      "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
@@ -179,7 +186,7 @@ Common tool choices:
    - Hosted, requires an account/API key: set `AI_PROVIDER` to `openai-compatible`, then set `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL`.
    - Groq is still supported with `AI_PROVIDER=groq`, `GROQ_API_KEY`, and `GROQ_MODEL`, but do not use it if Groq login is broken for you.
 
-   AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, and `AI_CONTEXT_MAX_MESSAGES`.
+   AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, `AI_CONTEXT_MAX_MESSAGES`, `AI_CONTEXT_MEMBER_LIMIT`, `AI_CONTEXT_CHANNEL_LIMIT`, and `AI_CONTEXT_ROLE_LIMIT`.
    Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
    Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
@@ -247,9 +254,12 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "OPENROUTER_MODEL": "tencent/hy3:free",
   "OPENROUTER_SITE_URL": "https://duck.local",
   "OPENROUTER_APP_NAME": "Duck Discord Bot",
-  "AI_CONTEXT_CHANNELS": "5",
-  "AI_CONTEXT_MESSAGES_PER_CHANNEL": "8",
-  "AI_CONTEXT_MAX_MESSAGES": "40",
+  "AI_CONTEXT_CHANNELS": "20",
+  "AI_CONTEXT_MESSAGES_PER_CHANNEL": "10",
+  "AI_CONTEXT_MAX_MESSAGES": "120",
+  "AI_CONTEXT_MEMBER_LIMIT": "500",
+  "AI_CONTEXT_CHANNEL_LIMIT": "250",
+  "AI_CONTEXT_ROLE_LIMIT": "250",
   "AI_CONTEXT_CACHE_TTL_MS": "15000",
   "PENDING_ACTION_TTL_MS": "1800000",
   "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
@@ -297,6 +307,11 @@ Set `DUCK_DEBUG_AI_BODY=true` only when needed. It logs short AI response snippe
 - `undeafen @user reason`
 - `delete 10 messages from @user`
 - `create text channel "mod-log"`
+- `create voice channel "General Voice"`
+- `rename channel #general "main-chat"`
+- `set topic #general "Main server chat"`
+- `create role "Helper"`
+- `delete role "Old Role"`
 - `delete channel "General"`
 - `purge 25`
 - `delete 10 messages`
