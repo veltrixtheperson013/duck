@@ -890,36 +890,121 @@ async function makePlannerMessages(message) {
   ];
 }
 
-async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, model, extraHeaders = {}) {
+function makePlannerResponseFormat(kind) {
+  if (kind === "json_schema") {
+    return {
+      type: "json_schema",
+      json_schema: {
+        name: "duck_moderation_plan",
+        schema: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              enum: [
+                "none",
+                "ban_member",
+                "kick_member",
+                "timeout_member",
+                "delete_channel",
+                "purge_messages",
+                "warn_member",
+                "untimeout_member",
+                "set_slowmode",
+                "lock_channel",
+                "unlock_channel",
+                "softban_member",
+                "delete_user_messages",
+                "set_nickname",
+                "add_role",
+                "remove_role",
+                "disconnect_member",
+                "move_member",
+                "create_text_channel",
+              ],
+            },
+            targetId: { type: "string" },
+            channelId: { type: "string" },
+            roleId: { type: "string" },
+            channelName: { type: "string" },
+            nickname: { type: "string" },
+            count: { type: "number" },
+            durationMs: { type: "number" },
+            deleteMessageSeconds: { type: "number" },
+            seconds: { type: "number" },
+            reason: { type: "string" },
+          },
+          required: ["tool"],
+          additionalProperties: false,
+        },
+      },
+    };
+  }
+
+  if (kind === "json_object") {
+    return { type: "json_object" };
+  }
+
+  return null;
+}
+
+async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, model, extraHeaders = {}, responseFormatKind = "json_object") {
   if (!apiKey || !model) return null;
 
-  let response;
   const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   const plannerMessages = await makePlannerMessages(message);
 
-  try {
-    response = await fetch(url, {
+  const requestPlanner = (formatKind) => {
+    const responseFormat = makePlannerResponseFormat(formatKind);
+    const body = {
+      model,
+      temperature: 0,
+      messages: plannerMessages,
+    };
+
+    if (responseFormat) {
+      body.response_format = responseFormat;
+    }
+
+    return fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         ...extraHeaders,
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: plannerMessages,
-      }),
+      body: JSON.stringify(body),
     });
+  };
+
+  let response;
+  try {
+    response = await requestPlanner(responseFormatKind);
   } catch (err) {
     console.error(`${providerName} planner request failed:`, err);
     return null;
   }
 
   if (!response.ok) {
-    console.error(`${providerName} planner failed: ${response.status} ${await response.text()}`);
-    return null;
+    const errorText = await response.text();
+    const canRetryWithoutFormat = responseFormatKind !== "none"
+      && response.status === 400
+      && /response_?format|json_object|json_schema/i.test(errorText);
+
+    if (canRetryWithoutFormat) {
+      console.warn(`${providerName} rejected structured response format; retrying without response_format.`);
+      try {
+        response = await requestPlanner("none");
+      } catch (err) {
+        console.error(`${providerName} planner retry failed:`, err);
+        return null;
+      }
+    }
+
+    if (!response.ok) {
+      console.error(`${providerName} planner failed: ${response.status} ${await response.text()}`);
+      return null;
+    }
   }
 
   const body = await response.json();
@@ -1006,6 +1091,7 @@ async function planWithConfiguredAi(message) {
         "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.local",
         "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
       },
+      "json_schema",
     );
   }
 
