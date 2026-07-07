@@ -12,6 +12,8 @@
   "AI_CONTEXT_CACHE_TTL_MS": "15000",
   "PENDING_ACTION_TTL_MS": "1800000",
   "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
+  "DUCK_DEBUG": "true",
+  "DUCK_DEBUG_AI_BODY": "false",
   "OLLAMA_MODEL": "llama3.1:8b",
   "OLLAMA_BASE_URL": "http://localhost:11434",
   "AI_API_KEY": "optional_hosted_ai_key_here",

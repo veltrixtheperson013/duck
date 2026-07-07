@@ -142,7 +142,9 @@ Common tool choices:
      "AI_CONTEXT_MAX_MESSAGES": "40",
      "AI_CONTEXT_CACHE_TTL_MS": "15000",
      "PENDING_ACTION_TTL_MS": "1800000",
-     "DUCK_QUEUE_MESSAGE": "Duck is thinking..."
+     "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
+     "DUCK_DEBUG": "true",
+     "DUCK_DEBUG_AI_BODY": "false"
    }
    ```
 
@@ -161,6 +163,7 @@ Common tool choices:
    Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
    Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
+   Debug logging is controlled by `DUCK_DEBUG`. `DUCK_DEBUG_AI_BODY` can log model output snippets, but should stay `false` unless you are actively debugging.
 
    Current OpenRouter free models can rotate. As of July 6, 2026, OpenRouter's public model API lists `tencent/hy3:free` with zero prompt and completion pricing.
 
@@ -228,6 +231,8 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "AI_CONTEXT_CACHE_TTL_MS": "15000",
   "PENDING_ACTION_TTL_MS": "1800000",
   "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
+  "DUCK_DEBUG": "true",
+  "DUCK_DEBUG_AI_BODY": "false",
   "OLLAMA_MODEL": "llama3.1:8b",
   "OLLAMA_BASE_URL": "http://localhost:11434",
   "AI_API_KEY": "optional_hosted_ai_key_here",
@@ -241,6 +246,12 @@ If your Wispbyte panel does not have environment variables, copy `config.example
 Upload `config.json` with the rest of the bot files. Keep it private because it contains your bot token.
 
 Duck also supports normal environment variables if your host adds them later.
+
+## Debug Logs
+
+Set `DUCK_DEBUG=true` to log startup config, version, selected AI provider/model, context cache hits/misses, OpenRouter/Ollama HTTP status codes, slow/failing AI requests, planner results, queue timing, confirmation lifecycle, and moderation execution results.
+
+Set `DUCK_DEBUG_AI_BODY=true` only when needed. It logs short AI response snippets and may include message content from your server.
 
 ## Supported Requests
 

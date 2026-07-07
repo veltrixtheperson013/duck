@@ -23,6 +23,58 @@ const pendingActions = new Map();
 const pendingByChannel = new Map();
 const pendingExpiryTimers = new Map();
 const serverContextCache = new Map();
+let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
+
+try {
+  packageInfo = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+} catch {
+  // Version logging is best-effort.
+}
+
+function isDebugEnabled() {
+  return /^(1|true|yes|on)$/i.test(process.env.DUCK_DEBUG || "");
+}
+
+function shouldLogAiBodies() {
+  return /^(1|true|yes|on)$/i.test(process.env.DUCK_DEBUG_AI_BODY || "");
+}
+
+function timestamp() {
+  return new Date().toISOString();
+}
+
+function redact(value) {
+  if (value == null) return value;
+  const text = String(value);
+  if (!text || /^(optional_|your_|placeholder)/i.test(text)) return text;
+  if (text.length <= 8) return "***";
+  return `${text.slice(0, 4)}...${text.slice(-4)}`;
+}
+
+function logInfo(event, details = {}) {
+  console.log(`[${timestamp()}] [duck] ${event}`, details);
+}
+
+function logDebug(event, details = {}) {
+  if (isDebugEnabled()) {
+    console.log(`[${timestamp()}] [duck:debug] ${event}`, details);
+  }
+}
+
+function logWarn(event, details = {}) {
+  console.warn(`[${timestamp()}] [duck:warn] ${event}`, details);
+}
+
+function logError(event, err, details = {}) {
+  console.error(`[${timestamp()}] [duck:error] ${event}`, {
+    ...details,
+    error: err?.stack || err?.message || String(err),
+  });
+}
+
+function elapsedMs(startedAt) {
+  return Date.now() - startedAt;
+}
 
 const TOOL_DEFINITIONS = [
   {
@@ -148,6 +200,7 @@ function loadDotEnv() {
   const envPath = path.join(process.cwd(), ".env");
   if (!fs.existsSync(envPath)) return;
 
+  let loaded = 0;
   const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
   for (const line of lines) {
     const trimmed = line.trim();
@@ -160,8 +213,10 @@ function loadDotEnv() {
     const value = trimmed.slice(splitAt + 1).trim().replace(/^["']|["']$/g, "");
     if (key && process.env[key] == null) {
       process.env[key] = value;
+      loaded += 1;
     }
   }
+  logDebug("dotenv.loaded", { path: envPath, keys: loaded });
 }
 
 function loadJsonConfig() {
@@ -170,11 +225,14 @@ function loadJsonConfig() {
 
   try {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    let loaded = 0;
     for (const [key, value] of Object.entries(config)) {
       if (process.env[key] == null && typeof value === "string") {
         process.env[key] = value;
+        loaded += 1;
       }
     }
+    logDebug("config-json.loaded", { path: configPath, keys: loaded });
   } catch (err) {
     throw new Error(`Could not read config.json: ${err.message}`);
   }
@@ -209,6 +267,7 @@ function getQueueMessage() {
 function savePendingActions() {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(pendingActionsPath, JSON.stringify([...pendingActions.values()], null, 2));
+  logDebug("pending-actions.saved", { count: pendingActions.size });
 }
 
 function schedulePendingExpiry(action) {
@@ -219,6 +278,7 @@ function schedulePendingExpiry(action) {
   const expiresAt = action.expiresAt ?? action.createdAt + getPendingActionTtlMs();
   const delay = Math.max(0, expiresAt - Date.now());
   const timer = setTimeout(() => {
+    logInfo("pending-action.expired", { actionId: action.id, tool: action.tool, channelId: action.channelId });
     pendingActions.delete(action.id);
     pendingExpiryTimers.delete(action.id);
     if (pendingByChannel.get(action.channelId) === action.id) {
@@ -246,11 +306,15 @@ function loadPendingActions() {
     const now = Date.now();
     const ttl = getPendingActionTtlMs();
 
+    let skipped = 0;
     for (const action of saved) {
       if (!action?.id || !action.channelId || !action.guildId) continue;
 
       const expiresAt = action.expiresAt ?? action.createdAt + ttl;
-      if (expiresAt <= now) continue;
+      if (expiresAt <= now) {
+        skipped += 1;
+        continue;
+      }
 
       const hydrated = { ...action, expiresAt };
       pendingActions.set(hydrated.id, hydrated);
@@ -259,8 +323,9 @@ function loadPendingActions() {
 
     rebuildPendingByChannel();
     savePendingActions();
+    logInfo("pending-actions.loaded", { restored: pendingActions.size, expiredSkipped: skipped });
   } catch (err) {
-    console.error("Could not restore pending Duck confirmations:", err);
+    logError("pending-actions.load-failed", err);
   }
 }
 
@@ -282,6 +347,20 @@ function updateGuildSettings(guildId, patch) {
 function requireConfig() {
   loadDotEnv();
   loadJsonConfig();
+  logInfo("startup.config", {
+    package: packageInfo.name,
+    version: packageInfo.version,
+    node: process.version,
+    debug: isDebugEnabled(),
+    aiProvider: process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "none"),
+    openRouterModel: process.env.OPENROUTER_MODEL || null,
+    openRouterKey: redact(process.env.OPENROUTER_API_KEY),
+    contextChannels: process.env.AI_CONTEXT_CHANNELS || "5",
+    contextMessagesPerChannel: process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL || "8",
+    contextMaxMessages: process.env.AI_CONTEXT_MAX_MESSAGES || "40",
+    contextCacheTtlMs: getServerContextCacheTtlMs(),
+    pendingActionTtlMs: getPendingActionTtlMs(),
+  });
 
   if (!process.env.DISCORD_TOKEN) {
     throw new Error("Missing DISCORD_TOKEN. Copy config.example.json to config.json and fill it in.");
@@ -817,6 +896,7 @@ function summarizeChannelForContext(channel) {
 }
 
 async function collectRecentMessages(message) {
+  const startedAt = Date.now();
   const maxChannels = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 5, 20));
   const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 8, 25));
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 40, 150));
@@ -829,6 +909,7 @@ async function collectRecentMessages(message) {
       .values(),
   ];
   const recentMessages = [];
+  const errors = [];
 
   for (const channel of candidates) {
     if (seen.has(channel.id) || seen.size >= maxChannels || recentMessages.length >= maxTotal) continue;
@@ -851,18 +932,33 @@ async function collectRecentMessages(message) {
         });
       }
     } catch {
-      // Ignore channels Duck cannot read.
+      errors.push(channel.id);
     }
   }
+
+  logDebug("context.recent-messages", {
+    guildId: message.guildId,
+    channelId: message.channelId,
+    channelReads: seen.size,
+    messages: recentMessages.length,
+    failedChannels: errors.length,
+    ms: elapsedMs(startedAt),
+  });
 
   return recentMessages;
 }
 
 async function collectServerContext(message) {
+  const startedAt = Date.now();
   const cacheTtl = getServerContextCacheTtlMs();
   const cacheKey = `${message.guildId}:${message.channelId}`;
   const cached = serverContextCache.get(cacheKey);
   if (cacheTtl > 0 && cached && cached.expiresAt > Date.now()) {
+    logDebug("context.cache-hit", {
+      cacheKey,
+      ttlRemainingMs: cached.expiresAt - Date.now(),
+      ms: elapsedMs(startedAt),
+    });
     return {
       ...cached.context,
       currentMessage: {
@@ -927,6 +1023,16 @@ async function collectServerContext(message) {
       context,
     });
   }
+
+  logDebug("context.cache-miss", {
+    cacheKey,
+    ttlMs: cacheTtl,
+    channels: channels.length,
+    roles: roles.length,
+    memberCandidates: memberCandidates.length,
+    recentMessages: context.recentMessages.length,
+    ms: elapsedMs(startedAt),
+  });
 
   return context;
 }
@@ -1172,8 +1278,16 @@ function makePlannerResponseFormat(kind) {
 async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, model, extraHeaders = {}, responseFormatKind = "json_object") {
   if (!apiKey || !model) return null;
 
+  const startedAt = Date.now();
   const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   const plannerMessages = await makePlannerMessages(message);
+  logDebug("ai.planner.request", {
+    providerName,
+    model,
+    responseFormatKind,
+    messageId: message.id,
+    channelId: message.channelId,
+  });
 
   const requestPlanner = (formatKind) => {
     const responseFormat = makePlannerResponseFormat(formatKind);
@@ -1202,9 +1316,17 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
   try {
     response = await requestPlanner(responseFormatKind);
   } catch (err) {
-    console.error(`${providerName} planner request failed:`, err);
+    logError("ai.planner.request-failed", err, { providerName, model, ms: elapsedMs(startedAt) });
     return null;
   }
+
+  logDebug("ai.planner.http", {
+    providerName,
+    model,
+    status: response.status,
+    ok: response.ok,
+    ms: elapsedMs(startedAt),
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -1213,29 +1335,68 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
       && /response_?format|json_object|json_schema/i.test(errorText);
 
     if (canRetryWithoutFormat) {
-      console.warn(`${providerName} rejected structured response format; retrying without response_format.`);
+      logWarn("ai.planner.response-format-retry", {
+        providerName,
+        model,
+        status: response.status,
+        ms: elapsedMs(startedAt),
+        error: errorText.slice(0, 500),
+      });
       try {
         response = await requestPlanner("none");
       } catch (err) {
-        console.error(`${providerName} planner retry failed:`, err);
+        logError("ai.planner.retry-failed", err, { providerName, model, ms: elapsedMs(startedAt) });
         return null;
       }
+      logDebug("ai.planner.retry-http", {
+        providerName,
+        model,
+        status: response.status,
+        ok: response.ok,
+        ms: elapsedMs(startedAt),
+      });
     }
 
     if (!response.ok) {
-      console.error(`${providerName} planner failed: ${response.status} ${await response.text()}`);
+      const retryError = await response.text();
+      logWarn("ai.planner.http-failed", {
+        providerName,
+        model,
+        status: response.status,
+        ms: elapsedMs(startedAt),
+        error: retryError.slice(0, 800),
+      });
       return null;
     }
   }
 
   const body = await response.json();
   const content = body.choices?.[0]?.message?.content;
-  if (!content) return null;
+  if (!content) {
+    logWarn("ai.planner.empty-content", { providerName, model, ms: elapsedMs(startedAt) });
+    return null;
+  }
 
   try {
-    return validateAiPlan(message, JSON.parse(cleanJsonResponse(content)));
+    const parsed = JSON.parse(cleanJsonResponse(content));
+    const plan = validateAiPlan(message, parsed);
+    logDebug("ai.planner.result", {
+      providerName,
+      model,
+      tool: parsed.tool,
+      valid: Boolean(plan),
+      error: plan?.error,
+      ms: elapsedMs(startedAt),
+      raw: shouldLogAiBodies() ? content.slice(0, 1000) : undefined,
+    });
+    return plan;
   } catch (err) {
-    console.error(`${providerName} planner returned invalid JSON:`, err);
+    logError("ai.planner.invalid-json", err, {
+      providerName,
+      model,
+      ms: elapsedMs(startedAt),
+      raw: shouldLogAiBodies() ? content.slice(0, 1000) : undefined,
+    });
     return null;
   }
 }
@@ -1243,8 +1404,10 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
 async function planWithOllama(message) {
   const model = process.env.OLLAMA_MODEL || process.env.AI_MODEL || "llama3.1:8b";
   const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+  const startedAt = Date.now();
   let response;
   const plannerMessages = await makePlannerMessages(message);
+  logDebug("ai.ollama.planner.request", { model, baseUrl, messageId: message.id, channelId: message.channelId });
 
   try {
     response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
@@ -1263,29 +1426,57 @@ async function planWithOllama(message) {
       }),
     });
   } catch (err) {
-    console.error("Ollama planner request failed:", err);
+    logError("ai.ollama.planner.request-failed", err, { model, baseUrl, ms: elapsedMs(startedAt) });
     return null;
   }
 
   if (!response.ok) {
-    console.error(`Ollama planner failed: ${response.status} ${await response.text()}`);
+    logWarn("ai.ollama.planner.http-failed", {
+      model,
+      baseUrl,
+      status: response.status,
+      ms: elapsedMs(startedAt),
+      error: (await response.text()).slice(0, 800),
+    });
     return null;
   }
 
   const body = await response.json();
   const content = body.message?.content;
-  if (!content) return null;
+  if (!content) {
+    logWarn("ai.ollama.planner.empty-content", { model, baseUrl, ms: elapsedMs(startedAt) });
+    return null;
+  }
 
   try {
-    return validateAiPlan(message, JSON.parse(cleanJsonResponse(content)));
+    const parsed = JSON.parse(cleanJsonResponse(content));
+    const plan = validateAiPlan(message, parsed);
+    logDebug("ai.ollama.planner.result", {
+      model,
+      tool: parsed.tool,
+      valid: Boolean(plan),
+      error: plan?.error,
+      ms: elapsedMs(startedAt),
+      raw: shouldLogAiBodies() ? content.slice(0, 1000) : undefined,
+    });
+    return plan;
   } catch (err) {
-    console.error("Ollama planner returned invalid JSON:", err);
+    logError("ai.ollama.planner.invalid-json", err, {
+      model,
+      ms: elapsedMs(startedAt),
+      raw: shouldLogAiBodies() ? content.slice(0, 1000) : undefined,
+    });
     return null;
   }
 }
 
 async function planWithConfiguredAi(message) {
   const provider = (process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "")).toLowerCase();
+  logDebug("ai.planner.provider", {
+    provider,
+    messageId: message.id,
+    channelId: message.channelId,
+  });
 
   if (provider === "ollama") {
     return planWithOllama(message);
@@ -1407,8 +1598,15 @@ async function makeChatMessages(message) {
 async function chatWithOpenAiCompatible(message, config) {
   if (!config?.apiKey || !config?.model) return null;
 
+  const startedAt = Date.now();
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const messages = await makeChatMessages(message);
+  logDebug("ai.chat.request", {
+    providerName: config.providerName,
+    model: config.model,
+    messageId: message.id,
+    channelId: message.channelId,
+  });
 
   let response;
   try {
@@ -1427,24 +1625,43 @@ async function chatWithOpenAiCompatible(message, config) {
       }),
     });
   } catch (err) {
-    console.error(`${config.providerName} chat request failed:`, err);
+    logError("ai.chat.request-failed", err, {
+      providerName: config.providerName,
+      model: config.model,
+      ms: elapsedMs(startedAt),
+    });
     return null;
   }
 
   if (!response.ok) {
-    console.error(`${config.providerName} chat failed: ${response.status} ${await response.text()}`);
+    logWarn("ai.chat.http-failed", {
+      providerName: config.providerName,
+      model: config.model,
+      status: response.status,
+      ms: elapsedMs(startedAt),
+      error: (await response.text()).slice(0, 800),
+    });
     return null;
   }
 
   const body = await response.json();
   const content = body.choices?.[0]?.message?.content;
+  logDebug("ai.chat.result", {
+    providerName: config.providerName,
+    model: config.model,
+    hasContent: typeof content === "string" && Boolean(content.trim()),
+    ms: elapsedMs(startedAt),
+    raw: shouldLogAiBodies() && typeof content === "string" ? content.slice(0, 1000) : undefined,
+  });
   return typeof content === "string" && content.trim() ? content.trim().slice(0, 1800) : null;
 }
 
 async function chatWithOllama(message) {
   const model = process.env.OLLAMA_MODEL || process.env.AI_MODEL || "llama3.1:8b";
   const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+  const startedAt = Date.now();
   const messages = await makeChatMessages(message);
+  logDebug("ai.ollama.chat.request", { model, baseUrl, messageId: message.id, channelId: message.channelId });
 
   let response;
   try {
@@ -1464,22 +1681,35 @@ async function chatWithOllama(message) {
       }),
     });
   } catch (err) {
-    console.error("Ollama chat request failed:", err);
+    logError("ai.ollama.chat.request-failed", err, { model, baseUrl, ms: elapsedMs(startedAt) });
     return null;
   }
 
   if (!response.ok) {
-    console.error(`Ollama chat failed: ${response.status} ${await response.text()}`);
+    logWarn("ai.ollama.chat.http-failed", {
+      model,
+      baseUrl,
+      status: response.status,
+      ms: elapsedMs(startedAt),
+      error: (await response.text()).slice(0, 800),
+    });
     return null;
   }
 
   const body = await response.json();
   const content = body.message?.content;
+  logDebug("ai.ollama.chat.result", {
+    model,
+    hasContent: typeof content === "string" && Boolean(content.trim()),
+    ms: elapsedMs(startedAt),
+    raw: shouldLogAiBodies() && typeof content === "string" ? content.slice(0, 1000) : undefined,
+  });
   return typeof content === "string" && content.trim() ? content.trim().slice(0, 1800) : null;
 }
 
 async function generateChatResponse(message) {
   const provider = getConfiguredAiProvider();
+  logDebug("ai.chat.provider", { provider, messageId: message.id, channelId: message.channelId });
   if (provider === "ollama") {
     return chatWithOllama(message);
   }
@@ -1495,7 +1725,14 @@ async function generateChatResponse(message) {
 async function planModerationRequest(message) {
   const aiPlan = await planWithConfiguredAi(message);
   if (aiPlan) return aiPlan;
-  return planLocalModerationTool(message);
+  const localPlan = planLocalModerationTool(message);
+  logDebug("planner.local-fallback", {
+    messageId: message.id,
+    hasPlan: Boolean(localPlan),
+    tool: localPlan?.tool,
+    error: localPlan?.error,
+  });
+  return localPlan;
 }
 
 function hasPermission(member, permission) {
@@ -1563,6 +1800,7 @@ function describeAction(action) {
 }
 
 async function promptForConfirmation(message, action) {
+  const startedAt = Date.now();
   const actionId = `${Date.now()}_${message.id}`;
   const createdAt = Date.now();
   const pending = {
@@ -1586,21 +1824,43 @@ async function promptForConfirmation(message, action) {
   pendingByChannel.set(message.channelId, actionId);
   schedulePendingExpiry(pending);
   savePendingActions();
+  logInfo("moderation.prompt-created", {
+    actionId,
+    tool: action.tool,
+    risk: action.risk,
+    guildId: message.guildId,
+    channelId: message.channelId,
+    requestedBy: message.author.id,
+    promptId: prompt.id,
+    ms: elapsedMs(startedAt),
+  });
 }
 
 async function executeAction(client, action, approver) {
+  const startedAt = Date.now();
+  logInfo("moderation.execute.start", {
+    actionId: action.id,
+    tool: action.tool,
+    guildId: action.guildId,
+    channelId: action.channelId,
+    approverId: approver.id,
+  });
   const guild = await client.guilds.fetch(action.guildId);
   const botMember = await guild.members.fetchMe();
   const needed = TOOL_REQUIREMENTS[action.tool];
 
   if (needed && !hasPermission(botMember, needed)) {
-    return `I cannot run \`${action.tool}\` because Duck is missing the required Discord permission.`;
+    const result = `I cannot run \`${action.tool}\` because Duck is missing the required Discord permission.`;
+    logWarn("moderation.execute.missing-bot-permission", { actionId: action.id, tool: action.tool, needed });
+    return result;
   }
 
   if (action.tool === "ban_member") {
     const member = await guild.members.fetch(action.targetId);
     await member.ban({ reason: `Duck approved by ${approver.user.tag}: ${action.reason}` });
-    return `I have banned ${member.displayName}, ${member.user.username}.`;
+    const result = `I have banned ${member.displayName}, ${member.user.username}.`;
+    logInfo("moderation.execute.done", { actionId: action.id, tool: action.tool, ms: elapsedMs(startedAt) });
+    return result;
   }
 
   if (action.tool === "kick_member") {
@@ -1767,6 +2027,7 @@ async function resolveApprover(interactionOrMessage) {
 async function approveAction(source, actionId, client) {
   const action = pendingActions.get(actionId);
   if (!action) {
+    logWarn("moderation.approve.missing-action", { actionId });
     if ("reply" in source) {
       await source.reply({ content: "That Duck confirmation expired or was already handled.", ephemeral: true }).catch(() => {});
     }
@@ -1776,6 +2037,11 @@ async function approveAction(source, actionId, client) {
   const approver = await resolveApprover(source);
   if (!approver || !canApprove(action, approver)) {
     const content = "I need confirmation from a person that has Administrator.";
+    logWarn("moderation.approve.denied", {
+      actionId,
+      tool: action.tool,
+      approverId: approver?.id,
+    });
 
     if ("reply" in source && source.isButton?.()) {
       await source.reply({ content, ephemeral: true });
@@ -1794,8 +2060,21 @@ async function approveAction(source, actionId, client) {
     pendingByChannel.delete(action.channelId);
   }
   savePendingActions();
+  logInfo("moderation.approve.accepted", {
+    actionId,
+    tool: action.tool,
+    approverId: approver.id,
+  });
 
+  const executeStartedAt = Date.now();
   const result = await executeAction(client, action, approver);
+  logInfo("moderation.execute.result", {
+    actionId,
+    tool: action.tool,
+    approverId: approver.id,
+    ms: elapsedMs(executeStartedAt),
+    result: result.slice(0, 300),
+  });
 
   if ("update" in source && source.isButton?.()) {
     await source.update({ content: result, components: [] });
@@ -1807,12 +2086,19 @@ async function approveAction(source, actionId, client) {
 async function cancelAction(interaction, actionId) {
   const action = pendingActions.get(actionId);
   if (!action) {
+    logWarn("moderation.cancel.missing-action", { actionId });
     await interaction.reply({ content: "That Duck confirmation expired or was already handled.", ephemeral: true });
     return;
   }
 
   const member = await resolveApprover(interaction);
   if (!member || (member.id !== action.requestedBy && !canApprove(action, member))) {
+    logWarn("moderation.cancel.denied", {
+      actionId,
+      tool: action.tool,
+      memberId: member?.id,
+      requestedBy: action.requestedBy,
+    });
     await interaction.reply({ content: "Only the requester or an authorized moderator can cancel this.", ephemeral: true });
     return;
   }
@@ -1826,6 +2112,7 @@ async function cancelAction(interaction, actionId) {
     pendingByChannel.delete(action.channelId);
   }
   savePendingActions();
+  logInfo("moderation.cancelled", { actionId, tool: action.tool, memberId: member.id });
 
   await interaction.update({ content: "Cancelled. I did not run the moderation tool.", components: [] });
 }
@@ -1955,6 +2242,7 @@ async function getDuckInvocation(message, client) {
 }
 
 async function registerCommands(client) {
+  const startedAt = Date.now();
   const setupCommand = new SlashCommandBuilder()
     .setName("setup")
     .setDescription("Choose the channel where Duck listens for AI moderation requests.")
@@ -1974,6 +2262,7 @@ async function registerCommands(client) {
   await rest.put(Routes.applicationCommands(client.user.id), {
     body: [setupCommand.toJSON(), toolsCommand.toJSON()],
   });
+  logInfo("discord.commands-registered", { appId: client.user.id, ms: elapsedMs(startedAt) });
 }
 
 requireConfig();
@@ -1990,7 +2279,12 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, async () => {
-  console.log(`Duck is online as ${client.user.tag}`);
+  logInfo("discord.ready", {
+    user: client.user.tag,
+    userId: client.user.id,
+    guilds: client.guilds.cache.size,
+    version: packageInfo.version,
+  });
   client.user.setPresence({
     activities: [
       {
@@ -2001,12 +2295,11 @@ client.once(Events.ClientReady, async () => {
     status: "online",
   });
 
-  console.log(`Restored ${pendingActions.size} pending Duck confirmation${pendingActions.size === 1 ? "" : "s"}.`);
+  logInfo("pending-actions.ready", { count: pendingActions.size });
   try {
     await registerCommands(client);
-    console.log("Duck slash commands registered.");
   } catch (err) {
-    console.error("Failed to register slash commands:", err);
+    logError("discord.commands-register-failed", err);
   }
 });
 
@@ -2021,6 +2314,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const channel = interaction.options.getChannel("channel", true);
         updateGuildSettings(interaction.guildId, { modChannelId: channel.id });
+        logInfo("settings.mod-channel-updated", {
+          guildId: interaction.guildId,
+          channelId: channel.id,
+          userId: interaction.user.id,
+        });
         await interaction.reply(`Duck will now listen in ${channel}.`);
         return;
       }
@@ -2051,6 +2349,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.on(Events.MessageCreate, async (message) => {
+  const messageStartedAt = Date.now();
   try {
     if (!message.guild || message.author.bot) return;
 
@@ -2058,6 +2357,15 @@ client.on(Events.MessageCreate, async (message) => {
     const configuredChannelId = guildSettings.modChannelId;
     const invocation = await getDuckInvocation(message, client);
     const inConfiguredChannel = configuredChannelId && message.channelId === configuredChannelId;
+    logDebug("message.received", {
+      messageId: message.id,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      authorId: message.author.id,
+      inConfiguredChannel: Boolean(inConfiguredChannel),
+      invoked: invocation.invoked,
+      contentLength: message.content.length,
+    });
 
     const isConfirmText = normalizeText(message.content) === "i confirm";
     if (isConfirmText) {
@@ -2086,9 +2394,21 @@ client.on(Events.MessageCreate, async (message) => {
     const queueMessage = hasConfiguredAi()
       ? await message.reply({ content: getQueueMessage(), allowedMentions: { repliedUser: false } }).catch(() => null)
       : null;
+    if (queueMessage) {
+      logDebug("message.queue-posted", {
+        messageId: message.id,
+        queueMessageId: queueMessage.id,
+        ms: elapsedMs(messageStartedAt),
+      });
+    }
 
     if (wantsRecentHistory(planningMessage.content)) {
       const content = await makeRecentHistoryResponse(message);
+      logInfo("message.history-response", {
+        messageId: message.id,
+        queueMessageId: queueMessage?.id,
+        ms: elapsedMs(messageStartedAt),
+      });
       if (queueMessage) {
         await queueMessage.edit({ content }).catch(() => {});
       } else {
@@ -2098,11 +2418,25 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const plan = await planModerationRequest(planningMessage);
+    logDebug("message.plan-finished", {
+      messageId: message.id,
+      hasPlan: Boolean(plan),
+      tool: plan?.tool,
+      planError: plan?.error,
+      ms: elapsedMs(messageStartedAt),
+    });
     if (!plan) {
       const chatResponse = hasConfiguredAi()
         ? await generateChatResponse(planningMessage)
         : null;
       const content = chatResponse ?? (invocation.invoked ? makeDuckHelp(invocation.content) : null);
+      logInfo("message.chat-fallback", {
+        messageId: message.id,
+        hasChatResponse: Boolean(chatResponse),
+        hasContent: Boolean(content),
+        queueMessageId: queueMessage?.id,
+        ms: elapsedMs(messageStartedAt),
+      });
 
       if (content && queueMessage) {
         await queueMessage.edit({ content, allowedMentions: { repliedUser: false } }).catch(() => {});
@@ -2115,6 +2449,12 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     if (plan.error) {
+      logWarn("message.plan-error", {
+        messageId: message.id,
+        error: plan.error,
+        queueMessageId: queueMessage?.id,
+        ms: elapsedMs(messageStartedAt),
+      });
       if (queueMessage) {
         await queueMessage.edit({ content: plan.error }).catch(() => {});
       } else {
@@ -2126,6 +2466,12 @@ client.on(Events.MessageCreate, async (message) => {
     const needed = TOOL_REQUIREMENTS[plan.tool];
     if (needed && !hasPermission(message.member, needed)) {
       const content = `You need the Discord permission for \`${plan.tool}\` before I can prepare that action.`;
+      logWarn("message.requester-missing-permission", {
+        messageId: message.id,
+        tool: plan.tool,
+        requesterId: message.author.id,
+        needed,
+      });
       if (queueMessage) {
         await queueMessage.edit({ content }).catch(() => {});
       } else {
@@ -2138,8 +2484,19 @@ client.on(Events.MessageCreate, async (message) => {
       await queueMessage.edit({ content: "Prepared a moderation plan. Waiting for Administrator confirmation." }).catch(() => {});
     }
     await promptForConfirmation(message, plan);
+    logInfo("message.moderation-planned", {
+      messageId: message.id,
+      tool: plan.tool,
+      queueMessageId: queueMessage?.id,
+      ms: elapsedMs(messageStartedAt),
+    });
   } catch (err) {
-    console.error("Message handler failed:", err);
+    logError("message.handler-failed", err, {
+      messageId: message.id,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      ms: elapsedMs(messageStartedAt),
+    });
     await message.reply("Duck hit an error while planning that moderation action.").catch(() => {});
   }
 });
