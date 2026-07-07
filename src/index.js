@@ -22,6 +22,7 @@ const pendingActionsPath = path.join(dataDir, "pending-actions.json");
 const pendingActions = new Map();
 const pendingByChannel = new Map();
 const pendingExpiryTimers = new Map();
+const serverContextCache = new Map();
 
 const TOOL_DEFINITIONS = [
   {
@@ -195,6 +196,14 @@ function saveSettings(settings) {
 
 function getPendingActionTtlMs() {
   return Math.max(60_000, Number(process.env.PENDING_ACTION_TTL_MS) || 30 * 60 * 1000);
+}
+
+function getServerContextCacheTtlMs() {
+  return Math.max(0, Number(process.env.AI_CONTEXT_CACHE_TTL_MS) || 15_000);
+}
+
+function getQueueMessage() {
+  return process.env.DUCK_QUEUE_MESSAGE || "Duck is thinking...";
 }
 
 function savePendingActions() {
@@ -826,6 +835,22 @@ async function collectRecentMessages(message) {
 }
 
 async function collectServerContext(message) {
+  const cacheTtl = getServerContextCacheTtlMs();
+  const cacheKey = `${message.guildId}:${message.channelId}`;
+  const cached = serverContextCache.get(cacheKey);
+  if (cacheTtl > 0 && cached && cached.expiresAt > Date.now()) {
+    return {
+      ...cached.context,
+      currentMessage: {
+        id: message.id,
+        authorId: message.author.id,
+        authorTag: message.author.tag,
+        content: message.cleanContent.replace(/\s+/g, " ").slice(0, 500),
+        createdAt: message.createdAt.toISOString(),
+      },
+    };
+  }
+
   const mentioned = getMentionContext(message);
   const memberCandidates = message.guild.members.cache
     .filter((member) => !member.user.bot)
@@ -846,7 +871,7 @@ async function collectServerContext(message) {
     }))
     .slice(0, 80);
 
-  return {
+  const context = {
     guild: {
       id: message.guild.id,
       name: message.guild.name,
@@ -863,7 +888,23 @@ async function collectServerContext(message) {
     availableChannels: channels,
     availableRoles: roles,
     recentMessages: await collectRecentMessages(message),
+    currentMessage: {
+      id: message.id,
+      authorId: message.author.id,
+      authorTag: message.author.tag,
+      content: message.cleanContent.replace(/\s+/g, " ").slice(0, 500),
+      createdAt: message.createdAt.toISOString(),
+    },
   };
+
+  if (cacheTtl > 0) {
+    serverContextCache.set(cacheKey, {
+      expiresAt: Date.now() + cacheTtl,
+      context,
+    });
+  }
+
+  return context;
 }
 
 function resolveMemberForPlan(message, plan, allowedMembers) {
@@ -1259,6 +1300,169 @@ async function planWithConfiguredAi(message) {
       process.env.GROQ_API_KEY,
       process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
     );
+  }
+
+  return null;
+}
+
+function getConfiguredAiProvider() {
+  return (process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "")).toLowerCase();
+}
+
+function getOpenAiCompatibleConfig() {
+  const provider = getConfiguredAiProvider();
+
+  if (provider === "openrouter") {
+    return {
+      providerName: "OpenRouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY,
+      model: process.env.OPENROUTER_MODEL || process.env.AI_MODEL || "tencent/hy3:free",
+      extraHeaders: {
+        "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.local",
+        "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
+      },
+    };
+  }
+
+  if (provider === "openai-compatible") {
+    return {
+      providerName: process.env.AI_PROVIDER_NAME || "OpenAI-compatible",
+      baseUrl: process.env.AI_BASE_URL || "https://openrouter.ai/api/v1",
+      apiKey: process.env.AI_API_KEY,
+      model: process.env.AI_MODEL,
+      extraHeaders: {},
+    };
+  }
+
+  if (provider === "groq") {
+    return {
+      providerName: "Groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: process.env.GROQ_API_KEY,
+      model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+      extraHeaders: {},
+    };
+  }
+
+  return null;
+}
+
+function hasConfiguredAi() {
+  const provider = getConfiguredAiProvider();
+  if (provider === "ollama") return true;
+
+  const config = getOpenAiCompatibleConfig();
+  return Boolean(config?.apiKey && config?.model);
+}
+
+async function makeChatMessages(message) {
+  const context = await collectServerContext(message);
+  return [
+    {
+      role: "system",
+      content: [
+        "You are Duck, a concise Discord moderation assistant.",
+        "Respond naturally to the current message using the server context and recent chat.",
+        "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
+        "You cannot execute moderation directly. If a user asks for moderation, tell them you can prepare it and an Administrator must confirm.",
+        "Do not claim an action was done unless Duck has already confirmed execution.",
+      ].join(" "),
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        request: message.content,
+        currentChannelId: message.channelId,
+        serverContext: context,
+      }),
+    },
+  ];
+}
+
+async function chatWithOpenAiCompatible(message, config) {
+  if (!config?.apiKey || !config?.model) return null;
+
+  const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  const messages = await makeChatMessages(message);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+        ...config.extraHeaders,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: 0.4,
+        max_tokens: 220,
+        messages,
+      }),
+    });
+  } catch (err) {
+    console.error(`${config.providerName} chat request failed:`, err);
+    return null;
+  }
+
+  if (!response.ok) {
+    console.error(`${config.providerName} chat failed: ${response.status} ${await response.text()}`);
+    return null;
+  }
+
+  const body = await response.json();
+  const content = body.choices?.[0]?.message?.content;
+  return typeof content === "string" && content.trim() ? content.trim().slice(0, 1800) : null;
+}
+
+async function chatWithOllama(message) {
+  const model = process.env.OLLAMA_MODEL || process.env.AI_MODEL || "llama3.1:8b";
+  const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+  const messages = await makeChatMessages(message);
+
+  let response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        options: {
+          temperature: 0.4,
+          num_predict: 220,
+        },
+        messages,
+      }),
+    });
+  } catch (err) {
+    console.error("Ollama chat request failed:", err);
+    return null;
+  }
+
+  if (!response.ok) {
+    console.error(`Ollama chat failed: ${response.status} ${await response.text()}`);
+    return null;
+  }
+
+  const body = await response.json();
+  const content = body.message?.content;
+  return typeof content === "string" && content.trim() ? content.trim().slice(0, 1800) : null;
+}
+
+async function generateChatResponse(message) {
+  const provider = getConfiguredAiProvider();
+  if (provider === "ollama") {
+    return chatWithOllama(message);
+  }
+
+  const config = getOpenAiCompatibleConfig();
+  if (config) {
+    return chatWithOpenAiCompatible(message, config);
   }
 
   return null;
@@ -1790,25 +1994,50 @@ client.on(Events.MessageCreate, async (message) => {
       ? makeMessageWithContent(message, invocation.content)
       : message;
 
+    const queueMessage = hasConfiguredAi()
+      ? await message.reply({ content: getQueueMessage(), allowedMentions: { repliedUser: false } }).catch(() => null)
+      : null;
+
     const plan = await planModerationRequest(planningMessage);
     if (!plan) {
-      if (invocation.invoked) {
-        await message.reply({ content: makeDuckHelp(invocation.content), allowedMentions: { repliedUser: false } });
+      const chatResponse = hasConfiguredAi()
+        ? await generateChatResponse(planningMessage)
+        : null;
+      const content = chatResponse ?? (invocation.invoked ? makeDuckHelp(invocation.content) : null);
+
+      if (content && queueMessage) {
+        await queueMessage.edit({ content, allowedMentions: { repliedUser: false } }).catch(() => {});
+      } else if (content) {
+        await message.reply({ content, allowedMentions: { repliedUser: false } });
+      } else if (queueMessage) {
+        await queueMessage.edit({ content: "I heard you, but I do not have a useful response for that yet." }).catch(() => {});
       }
       return;
     }
 
     if (plan.error) {
-      await message.reply(plan.error);
+      if (queueMessage) {
+        await queueMessage.edit({ content: plan.error }).catch(() => {});
+      } else {
+        await message.reply(plan.error);
+      }
       return;
     }
 
     const needed = TOOL_REQUIREMENTS[plan.tool];
     if (needed && !hasPermission(message.member, needed)) {
-      await message.reply(`You need the Discord permission for \`${plan.tool}\` before I can prepare that action.`);
+      const content = `You need the Discord permission for \`${plan.tool}\` before I can prepare that action.`;
+      if (queueMessage) {
+        await queueMessage.edit({ content }).catch(() => {});
+      } else {
+        await message.reply(content);
+      }
       return;
     }
 
+    if (queueMessage) {
+      await queueMessage.edit({ content: "Prepared a moderation plan. Waiting for Administrator confirmation." }).catch(() => {});
+    }
     await promptForConfirmation(message, plan);
   } catch (err) {
     console.error("Message handler failed:", err);

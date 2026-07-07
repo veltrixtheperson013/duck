@@ -9,8 +9,11 @@ Duck can use OpenRouter as an optional AI planner for more flexible wording. Ope
 ## Features
 
 - `/setup channel:#channel` chooses the channel where Duck listens.
-- Natural language moderation requests in the setup channel.
+- Duck responds to all user messages in the setup channel when AI is configured.
+- Natural language moderation requests in the setup channel become confirmation-gated plans.
 - Duck also responds when someone says `duck`, mentions `@Duck`, or replies to one of Duck's messages.
+- Queue/thinking messages are posted while AI is working, then edited with the result.
+- Server context and recent-message reads are cached briefly to reduce wait times.
 - Confirmation buttons for every moderation action.
 - Text confirmation with `I confirm` for the latest pending action in the channel.
 - Pending confirmations are saved to disk so quick process/server restarts do not lose them.
@@ -34,6 +37,14 @@ Duck replies with usage examples.
 ```
 
 Duck prepares a warning even outside the setup channel because it was mentioned.
+
+In the setup channel, normal chat also gets an AI response:
+
+```text
+how is chat looking?
+```
+
+Duck replies conversationally using recent server context.
 
 You can also reply to one of Duck's messages:
 
@@ -129,7 +140,9 @@ Common tool choices:
      "AI_CONTEXT_CHANNELS": "5",
      "AI_CONTEXT_MESSAGES_PER_CHANNEL": "8",
      "AI_CONTEXT_MAX_MESSAGES": "40",
-     "PENDING_ACTION_TTL_MS": "1800000"
+     "AI_CONTEXT_CACHE_TTL_MS": "15000",
+     "PENDING_ACTION_TTL_MS": "1800000",
+     "DUCK_QUEUE_MESSAGE": "Duck is thinking..."
    }
    ```
 
@@ -145,6 +158,8 @@ Common tool choices:
    - Groq is still supported with `AI_PROVIDER=groq`, `GROQ_API_KEY`, and `GROQ_MODEL`, but do not use it if Groq login is broken for you.
 
    AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, and `AI_CONTEXT_MAX_MESSAGES`.
+   Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
+   Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
 
    Current OpenRouter free models can rotate. As of July 6, 2026, OpenRouter's public model API lists `tencent/hy3:free` with zero prompt and completion pricing.
@@ -210,7 +225,9 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "AI_CONTEXT_CHANNELS": "5",
   "AI_CONTEXT_MESSAGES_PER_CHANNEL": "8",
   "AI_CONTEXT_MAX_MESSAGES": "40",
+  "AI_CONTEXT_CACHE_TTL_MS": "15000",
   "PENDING_ACTION_TTL_MS": "1800000",
+  "DUCK_QUEUE_MESSAGE": "Duck is thinking...",
   "OLLAMA_MODEL": "llama3.1:8b",
   "OLLAMA_BASE_URL": "http://localhost:11434",
   "AI_API_KEY": "optional_hosted_ai_key_here",
