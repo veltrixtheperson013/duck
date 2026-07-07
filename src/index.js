@@ -2398,11 +2398,20 @@ async function executeAction(client, action, approver) {
 
   if (action.tool === "purge_messages") {
     const channel = await guild.channels.fetch(action.channelId);
-    if (!channel?.isTextBased() || !("bulkDelete" in channel)) {
+    if (!channel?.isTextBased() || !("messages" in channel) || !("bulkDelete" in channel)) {
       return "I can only delete messages in a text channel.";
     }
 
-    const deleted = await channel.bulkDelete(action.count, true);
+    const fetched = await channel.messages.fetch({ limit: Math.min(100, action.count + 10) });
+    const matches = fetched
+      .filter((item) => item.id !== action.promptId)
+      .first(action.count);
+
+    if (!matches.length) {
+      return "I did not find any recent messages I can safely delete.";
+    }
+
+    const deleted = await channel.bulkDelete(matches, true);
     return `I have deleted ${deleted.size} message${deleted.size === 1 ? "" : "s"}.`;
   }
 
@@ -2522,10 +2531,29 @@ async function approveAction(source, actionId, client) {
     result: result.slice(0, 300),
   });
 
+  await sendApprovalResult(source, result, action);
+}
+
+async function sendApprovalResult(source, result, action) {
   if ("update" in source && source.isButton?.()) {
-    await source.update({ content: result, components: [] });
-  } else {
-    await source.reply(result).catch(() => {});
+    try {
+      await source.update({ content: result, embeds: [], components: [] });
+      return;
+    } catch (err) {
+      logWarn("moderation.result-update-failed", {
+        actionId: action.id,
+        tool: action.tool,
+        error: err?.message || String(err),
+      });
+    }
+  }
+
+  if ("reply" in source) {
+    await source.reply(result).catch(async () => {
+      if ("followUp" in source) {
+        await source.followUp({ content: result, ephemeral: true }).catch(() => {});
+      }
+    });
   }
 }
 
