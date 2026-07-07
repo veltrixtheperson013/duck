@@ -396,6 +396,11 @@ function getAiContextRoleLimit() {
   return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_ROLE_LIMIT) || 250, 500));
 }
 
+function getAiContextMessageChannelLimit() {
+  if (/^all$/i.test(process.env.AI_CONTEXT_CHANNELS || "")) return 500;
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 500, 500));
+}
+
 function getQueueMessage() {
   return process.env.DUCK_QUEUE_MESSAGE || "Duck is thinking...";
 }
@@ -495,9 +500,9 @@ function requireConfig() {
     aiProvider: process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "none"),
     openRouterModel: process.env.OPENROUTER_MODEL || null,
     openRouterKey: redact(process.env.OPENROUTER_API_KEY),
-    contextChannels: process.env.AI_CONTEXT_CHANNELS || "20",
+    contextChannels: process.env.AI_CONTEXT_CHANNELS || "all",
     contextMessagesPerChannel: process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL || "10",
-    contextMaxMessages: process.env.AI_CONTEXT_MAX_MESSAGES || "120",
+    contextMaxMessages: process.env.AI_CONTEXT_MAX_MESSAGES || "500",
     contextCacheTtlMs: getServerContextCacheTtlMs(),
     contextMemberLimit: getAiContextMemberLimit(),
     contextChannelLimit: getAiContextChannelLimit(),
@@ -1231,12 +1236,28 @@ function summarizeChannelForContext(channel) {
   };
 }
 
+function channelIsPrivate(channel) {
+  const everyone = channel.guild.roles.everyone;
+  return !channel.permissionsFor(everyone)?.has(PermissionsBitField.Flags.ViewChannel);
+}
+
+function canIncludeChannelMessages(message, channel, botMember) {
+  const botPermissions = channel.permissionsFor(botMember);
+  if (!botPermissions?.has(PermissionsBitField.Flags.ViewChannel) || !botPermissions.has(PermissionsBitField.Flags.ReadMessageHistory)) {
+    return false;
+  }
+
+  if (!channelIsPrivate(channel)) return true;
+  return message.member?.permissions?.has(PermissionsBitField.Flags.Administrator);
+}
+
 async function collectRecentMessages(message) {
   const startedAt = Date.now();
-  const maxChannels = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 20, 100));
+  const maxChannels = getAiContextMessageChannelLimit();
   const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 10, 50));
-  const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 120, 500));
+  const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
   const seen = new Set();
+  const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
   const candidates = [
     message.channel,
     ...message.guild.channels.cache
@@ -1247,11 +1268,29 @@ async function collectRecentMessages(message) {
   const recentMessages = [];
   const channelMessages = [];
   const errors = [];
+  const skippedPrivate = [];
+  const skippedUnreadable = [];
 
   for (const channel of candidates) {
     if (seen.has(channel.id) || seen.size >= maxChannels || recentMessages.length >= maxTotal) continue;
     seen.add(channel.id);
     if (!channel.isTextBased?.() || !("messages" in channel)) continue;
+    const isPrivate = channelIsPrivate(channel);
+    if (!canIncludeChannelMessages(message, channel, botMember)) {
+      if (isPrivate) skippedPrivate.push(channel.id);
+      else skippedUnreadable.push(channel.id);
+      channelMessages.push({
+        channelId: channel.id,
+        channelName: channel.name,
+        channelType: channel.type,
+        parentName: channel.parent?.name ?? null,
+        private: isPrivate,
+        readable: false,
+        skippedReason: isPrivate ? "private_channel_requires_requester_admin" : "bot_missing_view_or_history_permission",
+        messages: [],
+      });
+      continue;
+    }
 
     try {
       const fetched = await channel.messages.fetch({ limit: perChannel });
@@ -1284,6 +1323,7 @@ async function collectRecentMessages(message) {
         channelName: channel.name,
         channelType: channel.type,
         parentName: channel.parent?.name ?? null,
+        private: isPrivate,
         readable: true,
         messages: messagesForChannel,
       });
@@ -1298,7 +1338,9 @@ async function collectRecentMessages(message) {
         channelName: channel.name,
         channelType: channel.type,
         parentName: channel.parent?.name ?? null,
+        private: isPrivate,
         readable: false,
+        skippedReason: "message_fetch_failed",
         messages: [],
       });
     }
@@ -1311,6 +1353,8 @@ async function collectRecentMessages(message) {
     messages: recentMessages.length,
     channelMessageGroups: channelMessages.length,
     failedChannels: errors.length,
+    skippedPrivateChannels: skippedPrivate.length,
+    skippedUnreadableChannels: skippedUnreadable.length,
     ms: elapsedMs(startedAt),
   });
 

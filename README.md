@@ -161,9 +161,9 @@ Common tool choices:
      "AI_PROVIDER": "openrouter",
      "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
      "OPENROUTER_MODEL": "tencent/hy3:free",
-     "AI_CONTEXT_CHANNELS": "20",
+     "AI_CONTEXT_CHANNELS": "all",
      "AI_CONTEXT_MESSAGES_PER_CHANNEL": "10",
-     "AI_CONTEXT_MAX_MESSAGES": "120",
+     "AI_CONTEXT_MAX_MESSAGES": "500",
      "AI_CONTEXT_MEMBER_LIMIT": "500",
      "AI_CONTEXT_CHANNEL_LIMIT": "250",
      "AI_CONTEXT_ROLE_LIMIT": "250",
@@ -187,6 +187,8 @@ Common tool choices:
    - Groq is still supported with `AI_PROVIDER=groq`, `GROQ_API_KEY`, and `GROQ_MODEL`, but do not use it if Groq login is broken for you.
 
    AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, `AI_CONTEXT_MAX_MESSAGES`, `AI_CONTEXT_MEMBER_LIMIT`, `AI_CONTEXT_CHANNEL_LIMIT`, and `AI_CONTEXT_ROLE_LIMIT`.
+   Set `AI_CONTEXT_CHANNELS` to `all` to scan every cached readable text channel up to Duck's safety cap.
+   Private channel message history is only included when the requester has Administrator and Duck has permission to view/read that channel.
    Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
    Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
@@ -254,9 +256,9 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "OPENROUTER_MODEL": "tencent/hy3:free",
   "OPENROUTER_SITE_URL": "https://duck.local",
   "OPENROUTER_APP_NAME": "Duck Discord Bot",
-  "AI_CONTEXT_CHANNELS": "20",
+  "AI_CONTEXT_CHANNELS": "all",
   "AI_CONTEXT_MESSAGES_PER_CHANNEL": "10",
-  "AI_CONTEXT_MAX_MESSAGES": "120",
+  "AI_CONTEXT_MAX_MESSAGES": "500",
   "AI_CONTEXT_MEMBER_LIMIT": "500",
   "AI_CONTEXT_CHANNEL_LIMIT": "250",
   "AI_CONTEXT_ROLE_LIMIT": "250",
