@@ -820,6 +820,39 @@ function canManageRole(botMember, role) {
   return role && !role.managed && role.id !== role.guild.id && role.position < botMember.roles.highest.position;
 }
 
+function summarizeMemberName(member) {
+  return `${member.displayName}, ${member.user.username}`;
+}
+
+function memberActionBlockReason(action, botMember, member) {
+  if (!member) return "I could not find that member.";
+  if (member.id === botMember.id) return "I cannot target myself with that moderation action.";
+  if (member.id === member.guild.ownerId) return `I cannot ${commandLabel(action).toLowerCase()} the server owner.`;
+
+  const name = summarizeMemberName(member);
+  if (action.tool === "ban_member" || action.tool === "softban_member") {
+    return member.bannable ? null : `I cannot ban ${name} because they are at/above Duck's highest role or otherwise protected.`;
+  }
+
+  if (action.tool === "kick_member") {
+    return member.kickable ? null : `I cannot kick ${name} because they are at/above Duck's highest role or otherwise protected.`;
+  }
+
+  if (action.tool === "timeout_member" || action.tool === "untimeout_member") {
+    return member.moderatable ? null : `I cannot update timeout for ${name} because they are an Administrator, at/above Duck's highest role, or otherwise protected.`;
+  }
+
+  if (action.tool === "set_nickname") {
+    return member.manageable ? null : `I cannot change ${name}'s nickname because they are at/above Duck's highest role or otherwise protected.`;
+  }
+
+  if (["add_role", "remove_role", "disconnect_member", "move_member", "voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"].includes(action.tool)) {
+    return member.manageable ? null : `I cannot manage ${name} because they are at/above Duck's highest role or otherwise protected.`;
+  }
+
+  return null;
+}
+
 function extractNewChannelName(text) {
   const quoted = extractQuotedName(text);
   const raw = quoted ?? text.replace(/\b(create|make|new|text|channel)\b/gi, "").trim();
@@ -2998,14 +3031,18 @@ async function executeAction(client, action, approver) {
 
   if (action.tool === "ban_member") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     await member.ban({ reason: `Duck approved by ${approver.user.tag}: ${action.reason}` });
-    const result = `I have banned ${member.displayName}, ${member.user.username}.`;
+    const result = `I have banned ${summarizeMemberName(member)}.`;
     logInfo("moderation.execute.done", { actionId: action.id, tool: action.tool, ms: elapsedMs(startedAt) });
     return result;
   }
 
   if (action.tool === "kick_member") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     const displayName = member.displayName;
     const username = member.user.username;
     await member.kick(`Duck approved by ${approver.user.tag}: ${action.reason}`);
@@ -3014,6 +3051,8 @@ async function executeAction(client, action, approver) {
 
   if (action.tool === "softban_member") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     const displayName = member.displayName;
     const username = member.user.username;
     await guild.members.ban(member.id, {
@@ -3026,14 +3065,18 @@ async function executeAction(client, action, approver) {
 
   if (action.tool === "timeout_member") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     await member.timeout(action.durationMs, `Duck approved by ${approver.user.tag}: ${action.reason}`);
-    return `I have timed out ${member.displayName}, ${member.user.username}.`;
+    return `I have timed out ${summarizeMemberName(member)}.`;
   }
 
   if (action.tool === "untimeout_member") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     await member.timeout(null, `Duck approved by ${approver.user.tag}: ${action.reason}`);
-    return `I have removed timeout from ${member.displayName}, ${member.user.username}.`;
+    return `I have removed timeout from ${summarizeMemberName(member)}.`;
   }
 
   if (action.tool === "warn_member") {
@@ -3068,12 +3111,16 @@ async function executeAction(client, action, approver) {
 
   if (action.tool === "set_nickname") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     await member.setNickname(action.nickname, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return `I have set ${member.user.username}'s nickname to "${action.nickname}".`;
   }
 
   if (action.tool === "add_role" || action.tool === "remove_role") {
     const member = await guild.members.fetch(action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     const role = await guild.roles.fetch(action.roleId);
     if (!role || role.managed || role.id === guild.id) return "I cannot use that role.";
 
@@ -3093,6 +3140,8 @@ async function executeAction(client, action, approver) {
   if (action.tool === "disconnect_member") {
     const member = await guild.members.fetch(action.targetId);
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     await member.voice.disconnect(`Duck approved by ${approver.user.tag}: ${action.reason}`);
     return `I have disconnected ${member.displayName}, ${member.user.username} from voice.`;
   }
@@ -3102,6 +3151,8 @@ async function executeAction(client, action, approver) {
     const channel = await guild.channels.fetch(action.channelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) return "I can only move members to a voice channel.";
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     await member.voice.setChannel(channel, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return `I have moved ${member.displayName}, ${member.user.username} to ${channel.name}.`;
   }
@@ -3109,6 +3160,8 @@ async function executeAction(client, action, approver) {
   if (action.tool === "voice_mute_member" || action.tool === "voice_unmute_member") {
     const member = await guild.members.fetch(action.targetId);
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     const mute = action.tool === "voice_mute_member";
     await member.voice.setMute(mute, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return mute
@@ -3119,6 +3172,8 @@ async function executeAction(client, action, approver) {
   if (action.tool === "deafen_member" || action.tool === "undeafen_member") {
     const member = await guild.members.fetch(action.targetId);
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
     const deaf = action.tool === "deafen_member";
     await member.voice.setDeaf(deaf, `Duck approved by ${approver.user.tag}: ${action.reason}`);
     return deaf
@@ -3165,6 +3220,9 @@ async function executeAction(client, action, approver) {
     const matches = fetched
       .filter((item) => item.author.id === action.targetId)
       .first(action.count);
+    if (!matches.length) {
+      return "I did not find any recent messages from that member that I can safely delete.";
+    }
     const deleted = await channel.bulkDelete(matches, true);
     return `I have deleted ${deleted.size} recent message${deleted.size === 1 ? "" : "s"} from that member.`;
   }
@@ -3303,7 +3361,18 @@ async function approveAction(source, actionId, client) {
   });
 
   const executeStartedAt = Date.now();
-  const result = await executeAction(client, action, approver);
+  let result;
+  try {
+    result = await executeAction(client, action, approver);
+  } catch (err) {
+    logError("moderation.execute.failed", err, {
+      actionId,
+      tool: action.tool,
+      approverId: approver.id,
+      ms: elapsedMs(executeStartedAt),
+    });
+    result = `Duck hit an error while running \`${action.tool}\`: ${err?.message || String(err)}`;
+  }
   logInfo("moderation.execute.result", {
     actionId,
     tool: action.tool,
