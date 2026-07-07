@@ -113,6 +113,8 @@ Common tool choices:
 
    AI config is optional. Leave it out if you want the completely local zero-cost rule planner.
 
+   You can also copy `.env.template` to `.env` and fill that in instead. `.env` is ignored by Git and should not be uploaded publicly.
+
    AI planner options:
 
    - OpenRouter hosted AI: set `AI_PROVIDER` to `openrouter`, set `OPENROUTER_API_KEY`, and choose an `OPENROUTER_MODEL`.
