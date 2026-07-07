@@ -401,6 +401,14 @@ function getAiContextMessageChannelLimit() {
   return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 500, 500));
 }
 
+function getAiContextMaxChars() {
+  return Math.max(8_000, Math.min(Number(process.env.AI_CONTEXT_MAX_CHARS) || 32_000, 120_000));
+}
+
+function getAiContextMessageChars() {
+  return Math.max(60, Math.min(Number(process.env.AI_CONTEXT_MESSAGE_CHARS) || 160, 500));
+}
+
 function getQueueMessage() {
   return process.env.DUCK_QUEUE_MESSAGE || "Duck is thinking...";
 }
@@ -517,6 +525,8 @@ function requireConfig() {
     contextMemberLimit: getAiContextMemberLimit(),
     contextChannelLimit: getAiContextChannelLimit(),
     contextRoleLimit: getAiContextRoleLimit(),
+    contextMaxChars: getAiContextMaxChars(),
+    contextMessageChars: getAiContextMessageChars(),
     pendingActionTtlMs: getPendingActionTtlMs(),
   });
 
@@ -1330,6 +1340,7 @@ async function collectRecentMessages(message) {
   const maxChannels = getAiContextMessageChannelLimit();
   const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 10, 50));
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
+  const maxMessageChars = getAiContextMessageChars();
   const seen = new Set();
   const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
   const priorityChannels = getContextPriorityChannels(message);
@@ -1379,7 +1390,7 @@ async function collectRecentMessages(message) {
           authorId: item.author.id,
           authorTag: item.author.tag,
           createdAt: item.createdAt.toISOString(),
-          content: item.cleanContent.replace(/\s+/g, " ").slice(0, 220),
+          content: item.cleanContent.replace(/\s+/g, " ").slice(0, maxMessageChars),
           attachmentCount: item.attachments.size,
         };
         recentMessages.push(summary);
@@ -1436,6 +1447,90 @@ async function collectRecentMessages(message) {
   return { recentMessages, channelMessages };
 }
 
+function measureContextChars(context) {
+  return JSON.stringify(context).length;
+}
+
+function compactServerContext(context) {
+  const maxChars = getAiContextMaxChars();
+  const compacted = {
+    ...context,
+    memberCandidates: [...context.memberCandidates],
+    availableChannels: [...context.availableChannels],
+    availableRoles: [...context.availableRoles],
+    recentMessages: [...context.recentMessages],
+    channelMessages: context.channelMessages.map((channel) => ({
+      ...channel,
+      messages: [...channel.messages],
+    })),
+  };
+
+  let truncated = false;
+  const original = {
+    chars: measureContextChars(compacted),
+    recentMessages: compacted.recentMessages.length,
+    channelMessages: compacted.channelMessages.reduce((sum, channel) => sum + channel.messages.length, 0),
+    memberCandidates: compacted.memberCandidates.length,
+    availableRoles: compacted.availableRoles.length,
+    availableChannels: compacted.availableChannels.length,
+  };
+
+  // recentMessages duplicates channelMessages, so keep only a small compatibility view.
+  if (measureContextChars(compacted) > maxChars && compacted.recentMessages.length > 40) {
+    compacted.recentMessages = compacted.recentMessages.slice(0, 40);
+    truncated = true;
+  }
+
+  while (measureContextChars(compacted) > maxChars) {
+    const channel = [...compacted.channelMessages]
+      .reverse()
+      .find((candidate) => candidate.messages.length > 1);
+    if (!channel) break;
+    channel.messages.pop();
+    truncated = true;
+  }
+
+  while (measureContextChars(compacted) > maxChars) {
+    const channel = [...compacted.channelMessages]
+      .reverse()
+      .find((candidate) => candidate.messages.length > 0);
+    if (!channel) break;
+    channel.messages.pop();
+    truncated = true;
+  }
+
+  if (measureContextChars(compacted) > maxChars && compacted.memberCandidates.length > 100) {
+    compacted.memberCandidates = compacted.memberCandidates.slice(0, 100);
+    truncated = true;
+  }
+
+  if (measureContextChars(compacted) > maxChars && compacted.availableRoles.length > 100) {
+    compacted.availableRoles = compacted.availableRoles.slice(0, 100);
+    truncated = true;
+  }
+
+  if (measureContextChars(compacted) > maxChars && compacted.availableChannels.length > 150) {
+    compacted.availableChannels = compacted.availableChannels.slice(0, 150);
+    truncated = true;
+  }
+
+  compacted.contextBudget = {
+    maxChars,
+    actualChars: measureContextChars(compacted),
+    truncated,
+    original,
+    final: {
+      recentMessages: compacted.recentMessages.length,
+      channelMessages: compacted.channelMessages.reduce((sum, channel) => sum + channel.messages.length, 0),
+      memberCandidates: compacted.memberCandidates.length,
+      availableRoles: compacted.availableRoles.length,
+      availableChannels: compacted.availableChannels.length,
+    },
+  };
+
+  return compacted;
+}
+
 async function collectServerContext(message) {
   const startedAt = Date.now();
   const cacheTtl = getServerContextCacheTtlMs();
@@ -1482,7 +1577,7 @@ async function collectServerContext(message) {
     .slice(0, getAiContextRoleLimit());
 
   const messageContext = await collectRecentMessages(message);
-  const context = {
+  const rawContext = {
     guild: {
       id: message.guild.id,
       name: message.guild.name,
@@ -1508,6 +1603,7 @@ async function collectServerContext(message) {
       createdAt: message.createdAt.toISOString(),
     },
   };
+  const context = compactServerContext(rawContext);
 
   if (cacheTtl > 0) {
     serverContextCache.set(cacheKey, {
@@ -1524,6 +1620,8 @@ async function collectServerContext(message) {
     memberCandidates: memberCandidates.length,
     recentMessages: context.recentMessages.length,
     channelMessageGroups: context.channelMessages.length,
+    contextChars: context.contextBudget.actualChars,
+    contextTruncated: context.contextBudget.truncated,
     ms: elapsedMs(startedAt),
   });
 
@@ -2319,7 +2417,10 @@ async function chatWithOpenAiCompatible(message, config) {
   if (typeof content === "string" && content.trim()) return content.trim().slice(0, 1800);
 
   if (typeof choiceMessage?.reasoning === "string" && choiceMessage.reasoning.trim()) {
-    return "I got the request, but OpenRouter returned internal reasoning without a visible answer. Try once more, or ask me directly for the action you want.";
+    throw new AiServiceError(`${config.providerName} chat returned internal reasoning without visible message content.`, {
+      providerName: config.providerName,
+      model: config.model,
+    });
   }
 
   throw new AiServiceError(`${config.providerName} chat returned an empty response.`, {
