@@ -1432,6 +1432,17 @@ function getMentionContext(message) {
       username: member.user.username,
     }));
 
+  const repliedUserId = message.mentions.repliedUser?.id;
+  const repliedMember = repliedUserId ? message.guild.members.cache.get(repliedUserId) : null;
+  if (repliedMember && !repliedMember.user.bot && !members.some((member) => member.id === repliedMember.id)) {
+    members.push({
+      id: repliedMember.id,
+      displayName: repliedMember.displayName,
+      username: repliedMember.user.username,
+      replyAuthor: true,
+    });
+  }
+
   const mentionedChannels = [...message.mentions.channels.values()].map((channel) => ({
     id: channel.id,
     name: channel.name,
@@ -1476,6 +1487,66 @@ function summarizeChannelForContext(channel) {
     type: channel.type,
     parentName: channel.parent?.name ?? null,
   };
+}
+
+function summarizeMessageForContext(item, channel) {
+  return {
+    id: item.id,
+    channelId: channel.id,
+    channelName: channel.name,
+    authorId: item.author.id,
+    authorTag: item.author.tag,
+    authorDisplayName: item.member?.displayName ?? item.author.globalName ?? item.author.username,
+    createdAt: item.createdAt.toISOString(),
+    content: item.cleanContent.replace(/\s+/g, " ").slice(0, getAiContextMessageCharLimit()),
+    attachmentCount: item.attachments.size,
+    embedCount: item.embeds.length,
+  };
+}
+
+async function getReferencedMessageContext(message) {
+  const reference = message.reference;
+  if (!reference?.messageId) return null;
+
+  const channel = message.guild.channels.cache.get(reference.channelId ?? message.channelId) ?? message.channel;
+  if (!channel?.isTextBased?.() || !("messages" in channel)) {
+    return {
+      id: reference.messageId,
+      channelId: reference.channelId ?? message.channelId,
+      readable: false,
+      skippedReason: "referenced_channel_not_text",
+    };
+  }
+
+  const botMember = message.guild.members.me ?? await message.guild.members.fetchMe();
+  if (!canIncludeChannelMessages(message, channel, botMember)) {
+    return {
+      id: reference.messageId,
+      channelId: channel.id,
+      channelName: channel.name,
+      readable: false,
+      skippedReason: channelIsPrivate(channel) ? "private_channel_requires_requester_admin" : "bot_missing_view_or_history_permission",
+    };
+  }
+
+  try {
+    const referenced = await channel.messages.fetch(reference.messageId);
+    const summary = summarizeMessageForContext(referenced, channel);
+    const member = referenced.member ?? message.guild.members.cache.get(referenced.author.id);
+    return {
+      ...summary,
+      readable: true,
+      authorMember: member && !member.user.bot ? summarizeMember(member) : null,
+    };
+  } catch {
+    return {
+      id: reference.messageId,
+      channelId: channel.id,
+      channelName: channel.name,
+      readable: false,
+      skippedReason: "referenced_message_fetch_failed",
+    };
+  }
 }
 
 function channelIsPrivate(channel) {
@@ -1526,6 +1597,7 @@ function findHistoryChannelTarget(message, text) {
 function getContextPriorityChannels(message) {
   const channels = [
     findHistoryChannelTarget(message, message.content),
+    message.reference?.channelId ? message.guild.channels.cache.get(message.reference.channelId) : null,
     message.channel,
     ...message.mentions.channels.filter((channel) => channel.isTextBased?.() && "messages" in channel).values(),
   ];
@@ -1734,6 +1806,17 @@ function compactServerContext(context) {
   return compacted;
 }
 
+async function buildCurrentMessageContext(message) {
+  return {
+    id: message.id,
+    authorId: message.author.id,
+    authorTag: message.author.tag,
+    content: message.cleanContent.replace(/\s+/g, " ").slice(0, 500),
+    createdAt: message.createdAt.toISOString(),
+    replyTo: await getReferencedMessageContext(message),
+  };
+}
+
 async function collectServerContext(message) {
   const startedAt = Date.now();
   const cacheTtl = getServerContextCacheTtlMs();
@@ -1749,13 +1832,7 @@ async function collectServerContext(message) {
     });
     return {
       ...cached.context,
-      currentMessage: {
-        id: message.id,
-        authorId: message.author.id,
-        authorTag: message.author.tag,
-        content: message.cleanContent.replace(/\s+/g, " ").slice(0, 500),
-        createdAt: message.createdAt.toISOString(),
-      },
+      currentMessage: await buildCurrentMessageContext(message),
     };
   }
 
@@ -1798,13 +1875,7 @@ async function collectServerContext(message) {
     availableRoles: roles,
     recentMessages: messageContext.recentMessages,
     channelMessages: messageContext.channelMessages,
-    currentMessage: {
-      id: message.id,
-      authorId: message.author.id,
-      authorTag: message.author.tag,
-      content: message.cleanContent.replace(/\s+/g, " ").slice(0, 500),
-      createdAt: message.createdAt.toISOString(),
-    },
+    currentMessage: await buildCurrentMessageContext(message),
   };
   const context = compactServerContext(rawContext);
 
@@ -1837,6 +1908,9 @@ function resolveMemberForPlan(message, plan, allowedMembers) {
   if (allowed) return allowed;
 
   const cached = targetId ? message.guild.members.cache.get(targetId) : null;
+  if (cached && !cached.user.bot && message.mentions.repliedUser?.id === cached.id) {
+    return summarizeMember(cached);
+  }
   if (cached && !cached.user.bot && textReferencesMember(message.content, cached)) {
     return summarizeMember(cached);
   }
@@ -1886,7 +1960,10 @@ function validateAiPlan(message, plan, serverContext = null) {
     "undeafen_member",
     "delete_user_messages",
   ].includes(tool.name)) {
-    const allowedMembers = context.members ?? context.mentionedMembers ?? [];
+    const allowedMembers = [
+      ...(context.members ?? context.mentionedMembers ?? []),
+      ...(context.currentMessage?.replyTo?.authorMember ? [context.currentMessage.replyTo.authorMember] : []),
+    ];
     const member = resolveMemberForPlan(message, plan, allowedMembers);
     if (!member) return { error: "I know the action, but I could not resolve the member. Use a real Discord mention or their exact server name." };
 
@@ -2107,8 +2184,8 @@ function validateAiPlan(message, plan, serverContext = null) {
   return null;
 }
 
-async function makePlannerMessages(message) {
-  const context = await collectServerContext(message);
+async function makePlannerMessages(message, providedContext = null) {
+  const context = providedContext ?? await collectServerContext(message);
   const tools = TOOL_DEFINITIONS.map((tool) => `${tool.name} (${tool.risk})`).join(", ");
   return [
     {
@@ -2122,6 +2199,7 @@ async function makePlannerMessages(message) {
         "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
+        "Use serverContext.currentMessage.replyTo when the user is replying to another message. It contains the referenced message text, channel, author, timestamp, and authorMember when available.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
         "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
@@ -2221,7 +2299,8 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
 
   const startedAt = Date.now();
   const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
-  const plannerMessages = await makePlannerMessages(message);
+  const serverContext = await collectServerContext(message);
+  const plannerMessages = await makePlannerMessages(message, serverContext);
   logDebug("ai.planner.request", {
     providerName,
     model,
@@ -2335,7 +2414,7 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
 
   try {
     const parsed = JSON.parse(cleanJsonResponse(content));
-    const plan = validateAiPlan(message, parsed);
+    const plan = validateAiPlan(message, parsed, serverContext);
     logDebug("ai.planner.result", {
       providerName,
       model,
@@ -2365,7 +2444,8 @@ async function planWithOllama(message) {
   const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   const startedAt = Date.now();
   let response;
-  const plannerMessages = await makePlannerMessages(message);
+  const serverContext = await collectServerContext(message);
+  const plannerMessages = await makePlannerMessages(message, serverContext);
   logDebug("ai.ollama.planner.request", { model, baseUrl, messageId: message.id, channelId: message.channelId });
 
   try {
@@ -2412,7 +2492,7 @@ async function planWithOllama(message) {
 
   try {
     const parsed = JSON.parse(cleanJsonResponse(content));
-    const plan = validateAiPlan(message, parsed);
+    const plan = validateAiPlan(message, parsed, serverContext);
     logDebug("ai.ollama.planner.result", {
       model,
       tool: parsed.tool,
@@ -2541,6 +2621,7 @@ async function makeChatMessages(message) {
       content: [
         "You are Duck, a concise Discord AI chatbot with moderation tools.",
         "Respond naturally to the current message using the server context and recent chat.",
+        "If the current message is a reply, use serverContext.currentMessage.replyTo as direct reply context before broader channel history.",
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
