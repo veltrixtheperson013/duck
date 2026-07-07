@@ -367,12 +367,36 @@ function findChannelByNameOrMention(message, text) {
   if (mentioned) return mentioned;
 
   const quotedName = extractQuotedName(text);
-  const rawName = quotedName ?? text.replace(/delete\s+channel/i, "").trim();
-  const wanted = rawName.replace(/^#/, "").toLowerCase();
+  const rawName = quotedName ?? text
+    .replace(/\b(can you|please|delete|remove|the|a|an|text|channel)\b/gi, " ")
+    .trim();
+  const wanted = normalizeMemberLookup(rawName);
 
-  return message.guild.channels.cache.find((channel) => {
-    return channel.name?.toLowerCase() === wanted;
-  });
+  if (!wanted) return null;
+
+  let best = null;
+  let bestScore = 0;
+  for (const channel of message.guild.channels.cache.values()) {
+    if (!channel.name) continue;
+    const channelName = normalizeMemberLookup(channel.name);
+    if (!channelName) continue;
+
+    let score = 0;
+    if (channelName === wanted) score = 1000;
+    else if (wanted.includes(channelName) || channelName.includes(wanted)) score = Math.min(channelName.length, wanted.length);
+    else {
+      const wantedWords = rawName.toLowerCase().split(/\s+/).filter(Boolean);
+      const matches = wantedWords.filter((word) => channel.name.toLowerCase().includes(word.replace(/^#/, ""))).length;
+      score = matches * 10;
+    }
+
+    if (score > bestScore) {
+      best = channel;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= 10 ? best : null;
 }
 
 function findRoleByNameOrMention(message, text) {
@@ -1828,6 +1852,67 @@ function makeDuckHelp(content = "") {
   ].join("\n");
 }
 
+function isNegativeConfirmation(text) {
+  const normalized = normalizeText(text);
+  return /^(i\s+)?(do\s+not|don't|dont)\s+confirm\b/.test(normalized)
+    || /\b(cancel|nevermind|never mind|abort|stop|nah|nope)\b/.test(normalized);
+}
+
+async function cancelLatestActionFromMessage(message) {
+  const actionId = pendingByChannel.get(message.channelId);
+  if (!actionId) return false;
+
+  const action = pendingActions.get(actionId);
+  if (!action) {
+    pendingByChannel.delete(message.channelId);
+    savePendingActions();
+    return false;
+  }
+
+  const member = await resolveApprover(message);
+  if (!member || (member.id !== action.requestedBy && !canApprove(action, member))) {
+    await message.reply("Only the requester or an Administrator can cancel that pending action.").catch(() => {});
+    return true;
+  }
+
+  pendingActions.delete(actionId);
+  if (pendingExpiryTimers.has(actionId)) {
+    clearTimeout(pendingExpiryTimers.get(actionId));
+    pendingExpiryTimers.delete(actionId);
+  }
+  if (pendingByChannel.get(action.channelId) === actionId) {
+    pendingByChannel.delete(action.channelId);
+  }
+  savePendingActions();
+
+  await message.reply("Cancelled. I did not run the moderation tool.").catch(() => {});
+  return true;
+}
+
+function wantsRecentHistory(text) {
+  const normalized = normalizeText(text);
+  return /\b(recent|last|pull up|show|summarize|summary)\b/.test(normalized)
+    && /\b(message|messages|chat|history|logs?)\b/.test(normalized);
+}
+
+async function makeRecentHistoryResponse(message) {
+  const recent = await collectRecentMessages(message);
+  const items = recent
+    .filter((item) => item.channelId === message.channelId && item.id !== message.id && item.content)
+    .slice(0, 8);
+
+  if (!items.length) {
+    return "I do not have readable recent message history for this channel yet.";
+  }
+
+  const lines = items.map((item) => {
+    const content = item.content.length > 140 ? `${item.content.slice(0, 137)}...` : item.content;
+    return `- ${item.authorTag}: ${content}`;
+  });
+
+  return [`Recent messages in #${message.channel.name}:`, ...lines].join("\n");
+}
+
 function makeMessageWithContent(message, content) {
   const planningMessage = Object.create(message);
   Object.defineProperty(planningMessage, "content", {
@@ -1983,6 +2068,10 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
+    if (isNegativeConfirmation(message.content) && await cancelLatestActionFromMessage(message)) {
+      return;
+    }
+
     if (!inConfiguredChannel && !invocation.invoked) return;
 
     if (invocation.invoked && !invocation.content) {
@@ -1997,6 +2086,16 @@ client.on(Events.MessageCreate, async (message) => {
     const queueMessage = hasConfiguredAi()
       ? await message.reply({ content: getQueueMessage(), allowedMentions: { repliedUser: false } }).catch(() => null)
       : null;
+
+    if (wantsRecentHistory(planningMessage.content)) {
+      const content = await makeRecentHistoryResponse(message);
+      if (queueMessage) {
+        await queueMessage.edit({ content }).catch(() => {});
+      } else {
+        await message.reply({ content, allowedMentions: { repliedUser: false } });
+      }
+      return;
+    }
 
     const plan = await planModerationRequest(planningMessage);
     if (!plan) {
