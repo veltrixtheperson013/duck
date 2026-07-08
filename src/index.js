@@ -618,6 +618,10 @@ function getAiVisionMaxImages() {
   return Math.max(0, Math.min(Number(process.env.AI_VISION_MAX_IMAGES) || 4, 12));
 }
 
+function getAiVisionBatchSize() {
+  return Math.max(1, Math.min(Number(process.env.AI_VISION_BATCH_SIZE) || 2, 6));
+}
+
 function getAiVisionMaxAttachmentBytes() {
   return Math.max(64 * 1024, Math.min(Number(process.env.AI_VISION_MAX_ATTACHMENT_BYTES) || 8 * 1024 * 1024, 25 * 1024 * 1024));
 }
@@ -830,6 +834,7 @@ function requireConfig() {
     excludeReasoning: !/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "true"),
     visionEnabled: isAiVisionEnabled(),
     visionMaxImages: getAiVisionMaxImages(),
+    visionBatchSize: getAiVisionBatchSize(),
     visionMaxAttachmentBytes: getAiVisionMaxAttachmentBytes(),
     visionDetail: getAiVisionDetail(),
     pendingActionTtlMs: getPendingActionTtlMs(),
@@ -3162,23 +3167,40 @@ function collectVisionAttachmentsFromContext(context) {
   return candidates.slice(0, getAiVisionMaxImages());
 }
 
-function makeUserContentWithVision(payload, context, includeVision = false) {
+function makeUserMessagesWithVision(payload, context, includeVision = false) {
   const text = JSON.stringify(payload);
-  if (!includeVision) return text;
+  const messages = [{ role: "user", content: text }];
+  if (!includeVision) return messages;
 
   const attachments = collectVisionAttachmentsFromContext(context);
-  if (!attachments.length) return text;
+  const batchSize = getAiVisionBatchSize();
+  for (let index = 0; index < attachments.length; index += batchSize) {
+    const batch = attachments.slice(index, index + batchSize);
+    const batchNumber = Math.floor(index / batchSize) + 1;
+    const batchCount = Math.ceil(attachments.length / batchSize);
+    messages.push({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `OpenRouter vision attachment batch ${batchNumber}/${batchCount}. Inspect these images/GIFs for the current request without downloading or storing them.`,
+        },
+        ...batch.map((attachment) => ({
+          type: "image_url",
+          image_url: {
+            url: attachment.url,
+            detail: getAiVisionDetail(),
+          },
+        })),
+      ],
+    });
+  }
 
-  return [
-    { type: "text", text },
-    ...attachments.map((attachment) => ({
-      type: "image_url",
-      image_url: {
-        url: attachment.url,
-        detail: getAiVisionDetail(),
-      },
-    })),
-  ];
+  return messages;
+}
+
+function isOpenRouterProvider(providerName) {
+  return String(providerName || "").toLowerCase() === "openrouter";
 }
 
 async function makePlannerMessages(message, providedContext = null, options = {}) {
@@ -3210,10 +3232,7 @@ async function makePlannerMessages(message, providedContext = null, options = {}
         "If the request is not a moderation action, return {\"tool\":\"none\"}.",
       ].join(" "),
     },
-    {
-      role: "user",
-      content: makeUserContentWithVision(payload, context, options.includeVision),
-    },
+    ...makeUserMessagesWithVision(payload, context, options.includeVision),
   ];
 }
 
@@ -3314,8 +3333,9 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
   const startedAt = Date.now();
   const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   const serverContext = await collectServerContext(message);
-  const plannerMessages = await makePlannerMessages(message, serverContext, { includeVision: true });
-  const visionImages = collectVisionAttachmentsFromContext(serverContext).length;
+  const includeVision = isOpenRouterProvider(providerName);
+  const plannerMessages = await makePlannerMessages(message, serverContext, { includeVision });
+  const visionImages = includeVision ? collectVisionAttachmentsFromContext(serverContext).length : 0;
   logDebug("ai.planner.request", {
     providerName,
     model,
@@ -3642,7 +3662,7 @@ async function makeChatMessages(message, options = {}) {
       content: [
         "You are Duck, a concise Discord AI chatbot with moderation tools.",
         "Respond naturally to the current message using the server context and recent chat.",
-        "When current or replied-to image/GIF attachments are supplied and the provider supports vision, inspect them directly. If animated GIF frame understanding is limited, say that briefly.",
+        "When OpenRouter vision batches include current or replied-to image/GIF attachments, inspect them directly. If animated GIF frame understanding is limited, say that briefly.",
         "If the current message is a reply, use serverContext.currentMessage.replyTo as direct reply context before broader channel history.",
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
@@ -3662,10 +3682,7 @@ async function makeChatMessages(message, options = {}) {
         "Do not claim an action was done unless Duck has already confirmed execution.",
       ].join(" "),
     },
-    {
-      role: "user",
-      content: makeUserContentWithVision(payload, context, options.includeVision),
-    },
+    ...makeUserMessagesWithVision(payload, context, options.includeVision),
   ];
 }
 
@@ -3675,8 +3692,9 @@ async function chatWithOpenAiCompatible(message, config) {
   const startedAt = Date.now();
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const context = await collectServerContext(message);
-  const messages = await makeChatMessages(message, { includeVision: true, providedContext: context });
-  const visionImages = collectVisionAttachmentsFromContext(context).length;
+  const includeVision = isOpenRouterProvider(config.providerName);
+  const messages = await makeChatMessages(message, { includeVision, providedContext: context });
+  const visionImages = includeVision ? collectVisionAttachmentsFromContext(context).length : 0;
   logDebug("ai.chat.request", {
     providerName: config.providerName,
     model: config.model,
