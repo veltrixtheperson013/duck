@@ -606,6 +606,27 @@ function getAiContextFetchConcurrency() {
   return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_FETCH_CONCURRENCY) || 6, 20));
 }
 
+function getAiContextAttachmentLimit() {
+  return Math.max(0, Math.min(Number(process.env.AI_CONTEXT_ATTACHMENT_LIMIT) || 6, 20));
+}
+
+function isAiVisionEnabled() {
+  return !/^(0|false|no|off)$/i.test(process.env.AI_VISION_ENABLED || "true");
+}
+
+function getAiVisionMaxImages() {
+  return Math.max(0, Math.min(Number(process.env.AI_VISION_MAX_IMAGES) || 4, 12));
+}
+
+function getAiVisionMaxAttachmentBytes() {
+  return Math.max(64 * 1024, Math.min(Number(process.env.AI_VISION_MAX_ATTACHMENT_BYTES) || 8 * 1024 * 1024, 25 * 1024 * 1024));
+}
+
+function getAiVisionDetail() {
+  const detail = String(process.env.AI_VISION_DETAIL || "low").toLowerCase();
+  return ["low", "high", "auto"].includes(detail) ? detail : "low";
+}
+
 function getMessageCacheTtlMs() {
   return Math.max(5_000, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_TTL_MS) || 60_000, 10 * 60 * 1000));
 }
@@ -803,9 +824,14 @@ function requireConfig() {
     contextRoleLimit: getAiContextRoleLimit(),
     contextMaxChars: getAiContextMaxChars(),
     contextMessageChars: getAiContextMessageChars(),
+    contextAttachmentLimit: getAiContextAttachmentLimit(),
     chatMaxTokens: getAiChatMaxTokens(),
     chatMaxAttempts: getAiChatMaxAttempts(),
     excludeReasoning: !/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "true"),
+    visionEnabled: isAiVisionEnabled(),
+    visionMaxImages: getAiVisionMaxImages(),
+    visionMaxAttachmentBytes: getAiVisionMaxAttachmentBytes(),
+    visionDetail: getAiVisionDetail(),
     pendingActionTtlMs: getPendingActionTtlMs(),
   });
 
@@ -1891,6 +1917,35 @@ function summarizeChannelForContext(channel) {
   };
 }
 
+function isImageLikeAttachment(attachment) {
+  const contentType = String(attachment.contentType || "").toLowerCase();
+  const name = String(attachment.name || "").toLowerCase();
+  return contentType.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(name);
+}
+
+function summarizeAttachment(attachment) {
+  const imageLike = isImageLikeAttachment(attachment);
+  const size = attachment.size ?? null;
+  return {
+    id: attachment.id,
+    name: attachment.name || null,
+    contentType: attachment.contentType || null,
+    size,
+    width: attachment.width ?? null,
+    height: attachment.height ?? null,
+    url: attachment.url,
+    proxyURL: attachment.proxyURL || null,
+    imageLike,
+    visionEligible: imageLike && (!size || size <= getAiVisionMaxAttachmentBytes()),
+  };
+}
+
+function summarizeAttachments(attachments) {
+  return [...(attachments?.values?.() ?? [])]
+    .slice(0, getAiContextAttachmentLimit())
+    .map(summarizeAttachment);
+}
+
 function summarizeMessageForContext(item, channel) {
   return {
     id: item.id,
@@ -1900,8 +1955,9 @@ function summarizeMessageForContext(item, channel) {
     authorTag: item.author.tag,
     authorDisplayName: item.member?.displayName ?? item.author.globalName ?? item.author.username,
     createdAt: item.createdAt.toISOString(),
-    content: item.cleanContent.replace(/\s+/g, " ").slice(0, getAiContextMessageCharLimit()),
+    content: item.cleanContent.replace(/\s+/g, " ").slice(0, getAiContextMessageChars()),
     attachmentCount: item.attachments.size,
+    attachments: summarizeAttachments(item.attachments),
     embedCount: item.embeds.length,
   };
 }
@@ -2416,6 +2472,7 @@ async function collectRecentMessages(message) {
         createdAt: item.createdAt.toISOString(),
         content: item.cleanContent.replace(/\s+/g, " ").slice(0, maxMessageChars),
         attachmentCount: item.attachments.size,
+        attachments: summarizeAttachments(item.attachments),
       }));
 
       estimatedMessages += messagesForChannel.length;
@@ -2435,6 +2492,7 @@ async function collectRecentMessages(message) {
             createdAt: summary.createdAt,
             content: summary.content,
             attachmentCount: summary.attachmentCount,
+            attachments: summary.attachments,
           })),
         },
         messages: messagesForChannel,
@@ -2595,6 +2653,7 @@ async function buildCurrentMessageContext(message) {
     authorTag: message.author.tag,
     content: message.cleanContent.replace(/\s+/g, " ").slice(0, 500),
     createdAt: message.createdAt.toISOString(),
+    attachments: summarizeAttachments(message.attachments),
     replyTo: await getReferencedMessageContext(message),
   };
 }
@@ -3083,9 +3142,53 @@ function validateAiPlan(message, plan, serverContext = null) {
   return null;
 }
 
-async function makePlannerMessages(message, providedContext = null) {
+function collectVisionAttachmentsFromContext(context) {
+  if (!isAiVisionEnabled()) return [];
+
+  const candidates = [];
+  const pushAttachment = (attachment, source) => {
+    if (!attachment?.visionEligible || !attachment.url) return;
+    candidates.push({ ...attachment, source });
+  };
+
+  for (const attachment of context.currentMessage?.attachments ?? []) {
+    pushAttachment(attachment, "current_message");
+  }
+
+  for (const attachment of context.currentMessage?.replyTo?.attachments ?? []) {
+    pushAttachment(attachment, "reply_message");
+  }
+
+  return candidates.slice(0, getAiVisionMaxImages());
+}
+
+function makeUserContentWithVision(payload, context, includeVision = false) {
+  const text = JSON.stringify(payload);
+  if (!includeVision) return text;
+
+  const attachments = collectVisionAttachmentsFromContext(context);
+  if (!attachments.length) return text;
+
+  return [
+    { type: "text", text },
+    ...attachments.map((attachment) => ({
+      type: "image_url",
+      image_url: {
+        url: attachment.url,
+        detail: getAiVisionDetail(),
+      },
+    })),
+  ];
+}
+
+async function makePlannerMessages(message, providedContext = null, options = {}) {
   const context = providedContext ?? await collectServerContext(message);
   const tools = TOOL_DEFINITIONS.map((tool) => `${tool.name} (${tool.risk})`).join(", ");
+  const payload = {
+    request: message.content,
+    currentChannelId: message.channelId,
+    serverContext: context,
+  };
   return [
     {
       role: "system",
@@ -3099,6 +3202,7 @@ async function makePlannerMessages(message, providedContext = null) {
         "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Use serverContext.currentMessage.replyTo when the user is replying to another message. It contains the referenced message text, channel, author, timestamp, and authorMember when available.",
+        "If image or GIF attachments are supplied with the current or replied-to message, use them only to understand the current request and still return JSON only.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
         "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
@@ -3108,11 +3212,7 @@ async function makePlannerMessages(message, providedContext = null) {
     },
     {
       role: "user",
-      content: JSON.stringify({
-        request: message.content,
-        currentChannelId: message.channelId,
-        serverContext: context,
-      }),
+      content: makeUserContentWithVision(payload, context, options.includeVision),
     },
   ];
 }
@@ -3214,11 +3314,13 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
   const startedAt = Date.now();
   const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   const serverContext = await collectServerContext(message);
-  const plannerMessages = await makePlannerMessages(message, serverContext);
+  const plannerMessages = await makePlannerMessages(message, serverContext, { includeVision: true });
+  const visionImages = collectVisionAttachmentsFromContext(serverContext).length;
   logDebug("ai.planner.request", {
     providerName,
     model,
     responseFormatKind,
+    visionImages,
     messageId: message.id,
     channelId: message.channelId,
   });
@@ -3527,14 +3629,20 @@ function hasConfiguredAi() {
   return Boolean(config?.apiKey && config?.model);
 }
 
-async function makeChatMessages(message) {
-  const context = await collectServerContext(message);
+async function makeChatMessages(message, options = {}) {
+  const context = options.providedContext ?? await collectServerContext(message);
+  const payload = {
+    request: message.content,
+    currentChannelId: message.channelId,
+    serverContext: context,
+  };
   return [
     {
       role: "system",
       content: [
         "You are Duck, a concise Discord AI chatbot with moderation tools.",
         "Respond naturally to the current message using the server context and recent chat.",
+        "When current or replied-to image/GIF attachments are supplied and the provider supports vision, inspect them directly. If animated GIF frame understanding is limited, say that briefly.",
         "If the current message is a reply, use serverContext.currentMessage.replyTo as direct reply context before broader channel history.",
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
@@ -3556,11 +3664,7 @@ async function makeChatMessages(message) {
     },
     {
       role: "user",
-      content: JSON.stringify({
-        request: message.content,
-        currentChannelId: message.channelId,
-        serverContext: context,
-      }),
+      content: makeUserContentWithVision(payload, context, options.includeVision),
     },
   ];
 }
@@ -3570,13 +3674,16 @@ async function chatWithOpenAiCompatible(message, config) {
 
   const startedAt = Date.now();
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
-  const messages = await makeChatMessages(message);
+  const context = await collectServerContext(message);
+  const messages = await makeChatMessages(message, { includeVision: true, providedContext: context });
+  const visionImages = collectVisionAttachmentsFromContext(context).length;
   logDebug("ai.chat.request", {
     providerName: config.providerName,
     model: config.model,
     maxTokens: getAiChatMaxTokens(),
     maxAttempts: getAiChatMaxAttempts(),
     excludeReasoning: shouldExcludeReasoning(config),
+    visionImages,
     messageId: message.id,
     channelId: message.channelId,
   });
