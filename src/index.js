@@ -5344,6 +5344,51 @@ async function makeUtilityResponse(message, text) {
   return null;
 }
 
+async function makeSlashDuckResponse(interaction, prompt) {
+  const normalized = normalizeText(prompt || "commands");
+
+  if (/^(help|commands|tools|what can you do)\b/.test(normalized)) {
+    return [
+      makeUtilityHelp(),
+      "",
+      "Slash commands:",
+      "- `/duck prompt:commands`",
+      "- `/duck-tools`",
+      "- `/setup`",
+      "- `/entry-setup`",
+      "",
+      "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
+    ].join("\n");
+  }
+
+  if (/^(ping|latency)\b/.test(normalized)) {
+    return `Pong. Discord gateway ping: ${Math.round(client.ws.ping)}ms.`;
+  }
+
+  if (/^(rules|sendrules)\b/.test(normalized)) {
+    return formatRulesText();
+  }
+
+  if (/^(botinfo|bot info|about duck|version)\b/.test(normalized)) {
+    return [
+      "Duck bot info",
+      `Version: ${packageInfo.version}`,
+      `Commit: ${buildInfo.commit}`,
+      `Commit name: ${buildInfo.commitName}`,
+      `Branch: ${buildInfo.branch}`,
+      `Node: ${process.version}`,
+      `AI provider: ${process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "none")}`,
+    ].join("\n");
+  }
+
+  logInfo("discord.duck-slash-prompt-redirected", {
+    guildId: interaction.guildId,
+    userId: interaction.user.id,
+    promptLength: String(prompt || "").length,
+  });
+  return "For AI requests, use normal chat so Duck can see message context. Example: `hey duck show me commands`.";
+}
+
 async function sendMessageChunks(message, content) {
   const chunks = splitDiscordLines(String(content ?? "").split(/\r?\n/));
   const first = await message.reply({ content: chunks[0], allowedMentions: { repliedUser: false } });
@@ -5554,6 +5599,16 @@ async function registerCommands(client) {
     .setName("duck-tools")
     .setDescription("Show Duck's moderation tools.");
 
+  const duckCommand = new SlashCommandBuilder()
+    .setName("duck")
+    .setDescription("Show Duck help or run a simple Duck utility.")
+    .addStringOption((option) =>
+      option
+        .setName("prompt")
+        .setDescription("Try commands, help, ping, botinfo, rules, or use normal chat for AI requests.")
+        .setRequired(false),
+    );
+
   const entrySetupCommand = new SlashCommandBuilder()
     .setName("entry-setup")
     .setDescription("Configure Duck's private new-user entry channels.")
@@ -5592,7 +5647,7 @@ async function registerCommands(client) {
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), {
-    body: [setupCommand.toJSON(), toolsCommand.toJSON(), entrySetupCommand.toJSON()],
+    body: [duckCommand.toJSON(), setupCommand.toJSON(), toolsCommand.toJSON(), entrySetupCommand.toJSON()],
   });
   logInfo("discord.commands-registered", { appId: client.user.id, ms: elapsedMs(startedAt) });
 }
@@ -5604,6 +5659,19 @@ startCacheMaintenance();
 process.once("beforeExit", flushJsonWrites);
 process.once("SIGINT", () => flushRuntimeStateAndExit("SIGINT"));
 process.once("SIGTERM", () => flushRuntimeStateAndExit("SIGTERM"));
+process.on("unhandledRejection", (reason) => {
+  logError("process.unhandled-rejection", reason instanceof Error ? reason : new Error(String(reason)));
+});
+process.on("uncaughtException", (err) => {
+  logError("process.uncaught-exception", err);
+});
+process.on("warning", (warning) => {
+  logWarn("process.warning", {
+    name: warning.name,
+    message: warning.message,
+    stack: warning.stack,
+  });
+});
 
 const client = new Client({
   intents: [
@@ -5613,6 +5681,35 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
   ],
+});
+
+client.on(Events.Error, (err) => {
+  logError("discord.client-error", err);
+});
+
+client.on(Events.Warn, (message) => {
+  logWarn("discord.client-warning", { message });
+});
+
+client.on(Events.ShardError, (err, shardId) => {
+  logError("discord.shard-error", err, { shardId });
+});
+
+client.on(Events.ShardDisconnect, (event, shardId) => {
+  logWarn("discord.shard-disconnect", {
+    shardId,
+    code: event?.code,
+    reason: event?.reason,
+    wasClean: event?.wasClean,
+  });
+});
+
+client.on(Events.ShardReconnecting, (shardId) => {
+  logWarn("discord.shard-reconnecting", { shardId });
+});
+
+client.on(Events.ShardReady, (shardId) => {
+  logInfo("discord.shard-ready", { shardId });
 });
 
 client.once(Events.ClientReady, async () => {
@@ -5646,6 +5743,17 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === "duck") {
+        const prompt = interaction.options.getString("prompt", false) || "commands";
+        const response = await makeSlashDuckResponse(interaction, prompt);
+        const chunks = splitDiscordLines(String(response).split(/\r?\n/));
+        await interaction.reply({ content: chunks[0], ephemeral: true });
+        for (const chunk of chunks.slice(1)) {
+          await interaction.followUp({ content: chunk, ephemeral: true });
+        }
+        return;
+      }
+
       if (interaction.commandName === "setup") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
           await interaction.reply({ content: "Only an Administrator can set up Duck.", ephemeral: true });
@@ -5730,6 +5838,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
+
+      logWarn("discord.unknown-slash-command", {
+        commandName: interaction.commandName,
+        guildId: interaction.guildId,
+        userId: interaction.user.id,
+      });
+      await interaction.reply({
+        content: "That Duck slash command is not available in this build. Try `/duck prompt:commands`, `/duck-tools`, or `duck commands` in chat.",
+        ephemeral: true,
+      });
+      return;
     }
 
     if (interaction.isButton()) {
@@ -5738,6 +5857,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await approveAction(interaction, actionId, client);
       } else if (kind === "duck_cancel") {
         await cancelAction(interaction, actionId);
+      } else {
+        logWarn("discord.unknown-button", {
+          customId: interaction.customId,
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+        });
+        await interaction.reply({ content: "That Duck button is no longer available.", ephemeral: true });
       }
     }
   } catch (err) {
@@ -6025,4 +6151,7 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN).catch((err) => {
+  logError("discord.login-failed", err);
+  process.exitCode = 1;
+});
