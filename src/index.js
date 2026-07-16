@@ -371,9 +371,11 @@ const UTILITY_COMMANDS = [
   "`duck ship @user [@user]`",
   "`duck curse [@user]`",
   "`duck spinwheel pizza, tacos, sushi`",
+  "`duck roll 2d20` / `duck coinflip` / `duck eightball <question>`",
   "`duck remind 10m check the logs`",
   "`duck test`",
   "`duck join` / `duck leave`",
+  "`duck tts hello from Duck` (while joined)",
   "`duck bulk warn @user spam; timeout @user 10m flooding`",
   "`duck rules`",
   "`duck ping`",
@@ -399,6 +401,17 @@ const BLESSINGS = [
   "may your snacks always be perfectly portioned.",
   "may your wifi never lag mid-clutch.",
   "may your favorite song always play at the right moment.",
+];
+
+const EIGHT_BALL_ANSWERS = [
+  "It is certain.",
+  "Signs point to yes.",
+  "Most likely.",
+  "Ask again later.",
+  "Cannot predict now.",
+  "Do not count on it.",
+  "My sources say no.",
+  "Very doubtful.",
 ];
 
 let keepAliveServer = null;
@@ -444,6 +457,45 @@ const TOOL_REQUIREMENTS = {
   create_role: PermissionsBitField.Flags.ManageRoles,
   delete_role: PermissionsBitField.Flags.ManageRoles,
 };
+
+const DUCK_COLORS = Object.freeze({
+  brand: 0x4f9ddf,
+  success: 0x57f287,
+  warning: 0xfee75c,
+  danger: 0xed4245,
+  neutral: 0x5865f2,
+  fun: 0xeb459e,
+  voice: 0x9b59b6,
+});
+
+const COMMAND_PRESENTATION = Object.freeze({
+  commands: ["Duck Command Center", DUCK_COLORS.brand],
+  help: ["Duck Command Center", DUCK_COLORS.brand],
+  ping: ["Gateway Latency", DUCK_COLORS.success],
+  latency: ["Gateway Latency", DUCK_COLORS.success],
+  test: ["Duck Diagnostics", DUCK_COLORS.neutral],
+  userinfo: ["Member Profile", DUCK_COLORS.brand],
+  whois: ["Member Profile", DUCK_COLORS.brand],
+  avatar: ["Member Avatar", DUCK_COLORS.brand],
+  serverinfo: ["Server Overview", DUCK_COLORS.brand],
+  channelinfo: ["Channel Details", DUCK_COLORS.brand],
+  roleinfo: ["Role Details", DUCK_COLORS.brand],
+  warnings: ["Warning History", DUCK_COLORS.warning],
+  warns: ["Warning History", DUCK_COLORS.warning],
+  quote: ["Duck Quotes", DUCK_COLORS.fun],
+  ship: ["Compatibility Check", DUCK_COLORS.fun],
+  curse: ["Duck's Fortune", DUCK_COLORS.fun],
+  spinwheel: ["Wheel Result", DUCK_COLORS.fun],
+  roll: ["Dice Roll", DUCK_COLORS.fun],
+  coinflip: ["Coin Flip", DUCK_COLORS.fun],
+  eightball: ["Magic 8-Ball", DUCK_COLORS.fun],
+  tts: ["Voice Reader", DUCK_COLORS.voice],
+  remind: ["Reminder", DUCK_COLORS.success],
+  join: ["Voice Reader", DUCK_COLORS.voice],
+  leave: ["Voice Reader", DUCK_COLORS.voice],
+  prefix: ["Command Prefix", DUCK_COLORS.success],
+  sendrules: ["Server Rules", DUCK_COLORS.brand],
+});
 
 const RISK_COPY = {
   medium: "This action needs Administrator confirmation before I do anything.",
@@ -4280,7 +4332,7 @@ function makeConfirmationRows(actionId) {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`duck_confirm:${actionId}`)
-        .setLabel("Confirm")
+        .setLabel("Approve Action")
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
         .setCustomId(`duck_cancel:${actionId}`)
@@ -4309,16 +4361,25 @@ function formatWarningsForMember(member, warnings) {
 }
 
 function makeActionEmbed(action) {
+  const riskLabel = String(action.risk || "medium").toUpperCase();
   const embed = new EmbedBuilder()
-    .setTitle(`${commandLabel(action)} Pending Approval`)
+    .setTitle(`Approval Required: ${commandLabel(action)}`)
     .setDescription(RISK_COPY[action.risk])
-    .setColor(action.risk === "critical" ? 0xff3b30 : action.risk === "high" ? 0xff9500 : 0x3b82f6)
+    .setColor(action.risk === "critical" ? DUCK_COLORS.danger : action.risk === "high" ? 0xf47b20 : DUCK_COLORS.warning)
     .addFields(
+      { name: "Action", value: `**${commandLabel(action)}**`, inline: true },
+      { name: "Risk", value: `**${riskLabel}**`, inline: true },
+      { name: "Requested By", value: action.requestedBy ? `<@${action.requestedBy}>` : "Unknown", inline: true },
       { name: "Tool", value: `\`${action.tool}\``, inline: true },
       { name: "Target", value: action.summary?.slice(0, 1024) || "Unknown", inline: false },
       { name: "Reason", value: (action.reason || "No reason provided.").slice(0, 1024), inline: false },
     )
-    .setFooter({ text: "An Administrator must confirm before Duck runs this." });
+    .setTimestamp(action.createdAt || Date.now())
+    .setFooter({ text: "Administrator approval required | Nothing runs before approval." });
+
+  if (client.user) {
+    embed.setAuthor({ name: "Duck Safety Gate", iconURL: client.user.displayAvatarURL({ size: 64 }) });
+  }
 
   const details = [];
   if (action.durationMs) details.push(`Duration: ${Math.round(action.durationMs / 60000)} minute(s)`);
@@ -4340,6 +4401,7 @@ function makeActionEmbed(action) {
   if (action.actions?.length) details.push(...action.actions.map((item, index) => `${index + 1}. ${item.summary}`));
   if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
   if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
+  if (action.expiresAt) details.push(`Expires: <t:${Math.floor(action.expiresAt / 1000)}:R>`);
   if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
 
   return embed;
@@ -4982,13 +5044,25 @@ async function approveAction(source, actionId, client) {
 }
 
 async function sendApprovalResult(source, result, action) {
-  const chunks = splitDiscordLines(String(result ?? "").split(/\r?\n/));
+  const chunks = splitDiscordLines(String(result ?? "").split(/\r?\n/), 3900);
+  const needsAttention = /\b(cannot|could not|did not|error|failed|missing|not currently|do not know)\b/i.test(String(result));
+  const embeds = chunks.map((chunk, index) => new EmbedBuilder()
+    .setTitle(needsAttention ? "Action Needs Attention" : "Action Completed")
+    .setDescription(chunk)
+    .setColor(needsAttention ? DUCK_COLORS.danger : DUCK_COLORS.success)
+    .addFields(
+      { name: "Action", value: commandLabel(action), inline: true },
+      { name: "Tool", value: `\`${action.tool}\``, inline: true },
+      { name: "Requested By", value: action.requestedBy ? `<@${action.requestedBy}>` : "Unknown", inline: true },
+    )
+    .setFooter({ text: chunks.length > 1 ? `Duck moderation result | Page ${index + 1}/${chunks.length}` : "Duck moderation result" })
+    .setTimestamp());
   if ("update" in source && source.isButton?.()) {
     try {
-      await source.update({ content: chunks[0], embeds: [], components: [] });
-      for (const chunk of chunks.slice(1)) {
+      await source.update({ content: null, embeds: [embeds[0]], components: [] });
+      for (const embed of embeds.slice(1)) {
         if ("followUp" in source) {
-          await source.followUp({ content: chunk, ephemeral: true }).catch(() => {});
+          await source.followUp({ embeds: [embed], ephemeral: true }).catch(() => {});
         }
       }
       return;
@@ -5002,16 +5076,16 @@ async function sendApprovalResult(source, result, action) {
   }
 
   if ("reply" in source) {
-    await source.reply(chunks[0]).catch(async () => {
+    await source.reply({ embeds: [embeds[0]], allowedMentions: { parse: [] } }).catch(async () => {
       if ("followUp" in source) {
-        await source.followUp({ content: chunks[0], ephemeral: true }).catch(() => {});
+        await source.followUp({ embeds: [embeds[0]], ephemeral: true }).catch(() => {});
       }
     });
-    for (const chunk of chunks.slice(1)) {
+    for (const embed of embeds.slice(1)) {
       if ("followUp" in source) {
-        await source.followUp({ content: chunk, ephemeral: true }).catch(() => {});
+        await source.followUp({ embeds: [embed], ephemeral: true }).catch(() => {});
       } else {
-        await source.reply(chunk).catch(() => {});
+        await source.reply({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
       }
     }
   }
@@ -5049,7 +5123,16 @@ async function cancelAction(interaction, actionId) {
   savePendingActions();
   logInfo("moderation.cancelled", { actionId, tool: action.tool, memberId: member.id });
 
-  await interaction.update({ content: "Cancelled. I did not run the moderation tool.", components: [] });
+  await interaction.update({
+    content: null,
+    embeds: [new EmbedBuilder()
+      .setTitle("Action Cancelled")
+      .setDescription("Nothing was changed. The pending action has been removed.")
+      .setColor(DUCK_COLORS.neutral)
+      .addFields({ name: "Action", value: commandLabel(action), inline: true })
+      .setTimestamp()],
+    components: [],
+  });
 }
 
 function makeDuckHelp(content = "") {
@@ -5094,7 +5177,10 @@ async function cancelLatestActionFromMessage(message) {
 
   const member = await resolveApprover(message);
   if (!member || (member.id !== action.requestedBy && !canApprove(action, member))) {
-    await message.reply("Only the requester or an Administrator can cancel that pending action.").catch(() => {});
+    await sendMessageChunks(message, "Only the requester or an Administrator can cancel that pending action.", {
+      title: "Cancellation Denied",
+      color: DUCK_COLORS.danger,
+    }).catch(() => {});
     return true;
   }
 
@@ -5109,7 +5195,10 @@ async function cancelLatestActionFromMessage(message) {
   }
   savePendingActions();
 
-  await message.reply("Cancelled. I did not run the moderation tool.").catch(() => {});
+  await sendMessageChunks(message, "Nothing was changed. The pending action has been removed.", {
+    title: "Action Cancelled",
+    color: DUCK_COLORS.neutral,
+  }).catch(() => {});
   return true;
 }
 
@@ -5343,7 +5432,25 @@ function parseSpinOptions(text) {
 
 function makeUtilityHelp() {
   return [
-    "Utility commands:",
+    "**Moderation**",
+    "`/ban` `/unban` `/kick` `/timeout` `/warn` `/warnings`",
+    "`/clear` `/clearwarnings` `/addrole` `/removerole` `/tool`",
+    "",
+    "**Server Administration**",
+    "`/announce` `/sendrules` `/bulk` `/prefix` `/setup` `/entry-setup`",
+    "",
+    "**Information & Utilities**",
+    "`/userinfo` `/avatar` `/serverinfo` `/channelinfo` `/roleinfo`",
+    "`/quote` `/ship` `/curse` `/spinwheel` `/remind` `/ping` `/test`",
+    "",
+    "**Voice Reader**",
+    "`/join` reads messages from the joined voice channel's built-in text chat. `/leave` disconnects.",
+    "",
+    "**Prefix Commands**",
+    "Every command also supports `!` and `!!`. Example: `!warn @user spam`.",
+    "Bulk example: `!bulk warn @user spam; timeout @user 10m continued spam`.",
+    "",
+    `**Available extras (${UTILITY_COMMANDS.length})**`,
     ...UTILITY_COMMANDS.map((item) => `- ${item}`),
   ].join("\n");
 }
@@ -5398,11 +5505,31 @@ async function playNextVoiceItem(guildId) {
     });
     const url = `https://translate.google.com/translate_tts?${params}`;
     session.player.play(createAudioResource(url));
+    logDebug("voice.tts-playing", { guildId, remainingQueue: session.queue.length, textLength: text.length });
   } catch (err) {
     session.playing = false;
     logError("voice.tts-create-failed", err, { guildId });
+    await notifyVoiceSessionError(guildId, err);
     await playNextVoiceItem(guildId);
   }
+}
+
+async function notifyVoiceSessionError(guildId, err) {
+  const session = voiceSessions.get(guildId);
+  if (!session || Date.now() - (session.lastErrorNoticeAt || 0) < 30_000) return;
+  session.lastErrorNoticeAt = Date.now();
+  const channel = client.channels.cache.get(session.textChannelId)
+    ?? await client.channels.fetch(session.textChannelId).catch(() => null);
+  if (!channel?.isTextBased?.() || !("send" in channel)) return;
+  await channel.send({
+    embeds: [new EmbedBuilder()
+      .setTitle("Voice Reader Error")
+      .setDescription(`TTS playback failed: ${String(err?.message || err).slice(0, 1000)}`)
+      .setColor(DUCK_COLORS.danger)
+      .setFooter({ text: "Check Wispbyte logs for voice.player-error or voice.tts-create-failed." })
+      .setTimestamp()],
+    allowedMentions: { parse: [] },
+  }).catch(() => {});
 }
 
 async function joinVoiceForMessage(message) {
@@ -5428,7 +5555,8 @@ async function joinVoiceForMessage(message) {
     player,
     queue: [],
     playing: false,
-    textChannelId: message.channelId,
+    textChannelId: channel.id,
+    lastErrorNoticeAt: 0,
   };
   voiceSessions.set(message.guildId, session);
   player.on(AudioPlayerStatus.Idle, () => {
@@ -5438,13 +5566,44 @@ async function joinVoiceForMessage(message) {
   player.on("error", (err) => {
     session.playing = false;
     logError("voice.player-error", err, { guildId: message.guildId });
+    notifyVoiceSessionError(message.guildId, err).catch(() => {});
     playNextVoiceItem(message.guildId).catch(() => {});
   });
-  connection.on(VoiceConnectionStatus.Disconnected, () => {
-    voiceSessions.delete(message.guildId);
-    connection.destroy();
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      await Promise.race([
+        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+      ]);
+      logWarn("voice.reconnecting", { guildId: message.guildId, channelId: channel.id });
+    } catch {
+      voiceSessions.delete(message.guildId);
+      connection.destroy();
+      logWarn("voice.disconnected", { guildId: message.guildId, channelId: channel.id });
+    }
   });
-  return `Joined ${channel}. I will read normal messages from ${message.channel}.`;
+  logInfo("voice.joined", {
+    guildId: message.guildId,
+    voiceChannelId: channel.id,
+    textChannelId: channel.id,
+    userId: message.author.id,
+  });
+  return `Joined ${channel}. I will read messages from this voice channel's text chat.`;
+}
+
+function enqueueVoiceText(guildId, spoken) {
+  const session = voiceSessions.get(guildId);
+  if (!session) return false;
+  if (session.queue.length >= 20) session.queue.shift();
+  session.queue.push(String(spoken).slice(0, 200));
+  logDebug("voice.tts-queued", {
+    guildId,
+    channelId: session.textChannelId,
+    queueLength: session.queue.length,
+    textLength: String(spoken).length,
+  });
+  playNextVoiceItem(guildId).catch((err) => logError("voice.queue-failed", err, { guildId }));
+  return true;
 }
 
 function queueVoiceMessage(message) {
@@ -5453,9 +5612,7 @@ function queueVoiceMessage(message) {
   if (getLegacyCommandContent(message.content, message.guildId) || /^\s*(duck\b|<@!?\d+>)/i.test(message.content)) return;
   const spoken = message.cleanContent.replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim().slice(0, 200);
   if (!spoken) return;
-  if (session.queue.length >= 20) session.queue.shift();
-  session.queue.push(`${message.member?.displayName || message.author.username} says: ${spoken}`);
-  playNextVoiceItem(message.guildId).catch((err) => logError("voice.queue-failed", err, { guildId: message.guildId }));
+  enqueueVoiceText(message.guildId, `${message.member?.displayName || message.author.username} says: ${spoken}`);
 }
 
 function parseBulkCommands(text) {
@@ -5660,6 +5817,18 @@ async function makeUtilityResponse(message, text) {
     return destroyVoiceSession(message.guildId) ? "Disconnected from voice." : "I am not connected to voice.";
   }
 
+  if (/^tts\b/.test(normalized)) {
+    const session = voiceSessions.get(message.guildId);
+    if (!session) return "Use `/join` or `!join` before queueing TTS.";
+    if (message.member?.voice?.channelId !== session.connection.joinConfig.channelId) {
+      return "Join Duck's current voice channel before queueing TTS.";
+    }
+    const spoken = text.replace(/^tts\b/i, "").replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim().slice(0, 200);
+    if (!spoken) return "Usage: `!tts <message>`";
+    enqueueVoiceText(message.guildId, `${message.member.displayName} says: ${spoken}`);
+    return `Queued for voice: ${spoken}`;
+  }
+
   if (/^(rules|sendrules)\b/.test(normalized)) {
     return formatRulesText();
   }
@@ -5705,6 +5874,28 @@ async function makeUtilityResponse(message, text) {
     const options = parseSpinOptions(text.replace(/^spinwheel\b/i, "").trim());
     if (options.length < 2) return "Give me at least 2 comma-separated options, like `duck spinwheel pizza, tacos, sushi`.";
     return `Landed on: ${options[Math.floor(Math.random() * options.length)]}`;
+  }
+
+  if (/^coinflip\b/.test(normalized)) {
+    return `The coin landed on **${Math.random() < 0.5 ? "heads" : "tails"}**.`;
+  }
+
+  if (/^roll\b/.test(normalized)) {
+    const notation = text.replace(/^roll\b/i, "").trim().toLowerCase() || "1d6";
+    const match = notation.match(/^(\d{1,2})?d(\d{1,4})$/);
+    if (!match) return "Usage: `!roll 2d20` (up to 20 dice with 1,000 sides).";
+    const count = Math.max(1, Math.min(Number(match[1]) || 1, 20));
+    const sides = Math.max(2, Math.min(Number(match[2]), 1000));
+    const rolls = Array.from({ length: count }, () => 1 + Math.floor(Math.random() * sides));
+    const total = rolls.reduce((sum, value) => sum + value, 0);
+    return `Rolled **${count}d${sides}**: ${rolls.join(", ")}\nTotal: **${total}**`;
+  }
+
+  if (/^eightball\b/.test(normalized)) {
+    const question = text.replace(/^eightball\b/i, "").trim();
+    if (!question) return "Usage: `!eightball <question>`";
+    const answer = EIGHT_BALL_ANSWERS[Math.floor(Math.random() * EIGHT_BALL_ANSWERS.length)];
+    return `**Question:** ${limitDiscordContent(question, 500)}\n**Answer:** ${answer}`;
   }
 
   if (/^remind\b/.test(normalized)) {
@@ -5833,42 +6024,72 @@ function slashCommandContent(interaction) {
     const channel = interaction.options.getChannel(optionName, false);
     return channel ? `<#${channel.id}>` : "";
   };
-  const reason = interaction.options.getString("reason", false) || "No reason provided.";
-  const mappings = {
-    commands: "commands",
-    ping: "ping",
-    test: "test",
-    serverinfo: "serverinfo",
-    userinfo: `userinfo ${userMention("member")}`,
-    avatar: `avatar ${userMention("member")}`,
-    channelinfo: `channelinfo ${channelMention("channel")}`,
-    roleinfo: `roleinfo ${roleMention("role")}`,
-    ship: `ship ${userMention("user1")} ${userMention("user2")}`,
-    curse: `curse ${userMention("user")}`,
-    spinwheel: `spinwheel ${interaction.options.getString("choices", true)}`,
-    remind: `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`,
-    join: "join",
-    leave: "leave",
-    ban: `ban ${userMention("member")} ${reason}`,
-    unban: `unban ${interaction.options.getString("user-id", true)} ${reason}`,
-    kick: `kick ${userMention("member")} ${reason}`,
-    timeout: `timeout ${userMention("member")} ${interaction.options.getInteger("minutes", true)}m ${reason}`,
-    warn: `warn ${userMention("member")} ${reason}`,
-    warnings: `warnings ${userMention("member")}`,
-    clearwarnings: `clear ${interaction.options.getString("count", true)} warnings for ${userMention("member")}`,
-    clear: `purge ${interaction.options.getInteger("count", true)}`,
-    addrole: `add role ${roleMention("role")} to ${userMention("member")} ${reason}`,
-    removerole: `remove role ${roleMention("role")} from ${userMention("member")} ${reason}`,
-    tool: interaction.options.getString("request", true),
-    bulk: `bulk ${interaction.options.getString("commands", true)}`,
-    sendrules: "sendrules",
-  };
-  if (name === "quote") {
-    const action = interaction.options.getString("action", false) || "view";
-    const quoteText = interaction.options.getString("text", false) || "";
-    return action === "view" ? "quote" : `quote ${action} ${quoteText}`.trim();
+  const reason = () => interaction.options.getString("reason", false) || "No reason provided.";
+  switch (name) {
+    case "commands": return "commands";
+    case "ping": return "ping";
+    case "test": return "test";
+    case "serverinfo": return "serverinfo";
+    case "userinfo": return `userinfo ${userMention("member")}`;
+    case "avatar": return `avatar ${userMention("member")}`;
+    case "channelinfo": return `channelinfo ${channelMention("channel")}`;
+    case "roleinfo": return `roleinfo ${roleMention("role")}`;
+    case "ship": return `ship ${userMention("user1")} ${userMention("user2")}`;
+    case "curse": return `curse ${userMention("user")}`;
+    case "spinwheel": return `spinwheel ${interaction.options.getString("choices", true)}`;
+    case "roll": return `roll ${interaction.options.getString("dice", false) || "1d6"}`;
+    case "coinflip": return "coinflip";
+    case "eightball": return `eightball ${interaction.options.getString("question", true)}`;
+    case "remind": return `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`;
+    case "join": return "join";
+    case "leave": return "leave";
+    case "tts": return `tts ${interaction.options.getString("message", true)}`;
+    case "ban": return `ban ${userMention("member")} ${reason()}`;
+    case "unban": return `unban ${interaction.options.getString("user-id", true)} ${reason()}`;
+    case "kick": return `kick ${userMention("member")} ${reason()}`;
+    case "timeout": return `timeout ${userMention("member")} ${interaction.options.getInteger("minutes", true)}m ${reason()}`;
+    case "warn": return `warn ${userMention("member")} ${reason()}`;
+    case "warnings": return `warnings ${userMention("member")}`;
+    case "clearwarnings": return `clear ${interaction.options.getString("count", true)} warnings for ${userMention("member")}`;
+    case "clear": return `purge ${interaction.options.getInteger("count", true)}`;
+    case "addrole": return `add role ${roleMention("role")} to ${userMention("member")} ${reason()}`;
+    case "removerole": return `remove role ${roleMention("role")} from ${userMention("member")} ${reason()}`;
+    case "tool": return interaction.options.getString("request", true);
+    case "bulk": return `bulk ${interaction.options.getString("commands", true)}`;
+    case "sendrules": return "sendrules";
+    case "quote": {
+      const action = interaction.options.getString("action", false) || "view";
+      const quoteText = interaction.options.getString("text", false) || "";
+      return action === "view" ? "quote" : `quote ${action} ${quoteText}`.trim();
+    }
+    default: return null;
   }
-  return mappings[name] ?? null;
+}
+
+function validateSlashCommandDispatchers(commandBodies) {
+  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix"]);
+  let validated = 0;
+  for (const command of commandBodies) {
+    if (separatelyHandled.has(command.name)) continue;
+    const optionNames = new Set((command.options || []).map((option) => option.name));
+    const readOption = (name, value) => {
+      if (!optionNames.has(name)) throw new Error(`/${command.name} dispatcher read undeclared option '${name}'.`);
+      return value;
+    };
+    const interaction = {
+      commandName: command.name,
+      options: {
+        getString: (name) => readOption(name, name === "action" ? "view" : name === "dice" ? "1d6" : "test"),
+        getInteger: (name) => readOption(name, 1),
+        getUser: (name) => readOption(name, { id: "100000000000000001" }),
+        getRole: (name) => readOption(name, { id: "100000000000000002" }),
+        getChannel: (name) => readOption(name, { id: "100000000000000003" }),
+      },
+    };
+    if (!slashCommandContent(interaction)) throw new Error(`/${command.name} has no slash dispatcher.`);
+    validated += 1;
+  }
+  return validated;
 }
 
 async function makeSlashDuckResponse(interaction, prompt) {
@@ -5917,11 +6138,82 @@ async function makeSlashDuckResponse(interaction, prompt) {
   return "For AI requests, use normal chat so Duck can see message context. Example: `hey duck show me commands`.";
 }
 
-async function sendMessageChunks(message, content) {
-  const chunks = splitDiscordLines(String(content ?? "").split(/\r?\n/));
-  const first = await message.reply({ content: chunks[0], allowedMentions: { repliedUser: false } });
-  for (const chunk of chunks.slice(1)) {
-    await message.channel.send({ content: chunk, allowedMentions: { repliedUser: false } }).catch(() => {});
+function getResponsePresentation(message, content, options = {}) {
+  const command = normalizeText(options.command || message.content || "duck").split(/\s+/)[0];
+  const configured = COMMAND_PRESENTATION[command] ?? ["Duck", DUCK_COLORS.neutral];
+  const text = String(content || "");
+  const isError = /^(only |usage:|unknown |you need |you cannot |i cannot |i could not |could not |give me |mention |pick )/i.test(text)
+    || /\bfailed\b/i.test(text);
+  const isSuccess = /^(pong|pass|joined|disconnected|reminder set|rules posted|quote #|duck's additional prefix)/i.test(text);
+  return {
+    title: options.title || configured[0],
+    color: options.color || (isError ? DUCK_COLORS.danger : isSuccess ? DUCK_COLORS.success : configured[1]),
+  };
+}
+
+function makeCommandResponseEmbed(message, content, options = {}) {
+  const presentation = getResponsePresentation(message, content, options);
+  const embed = new EmbedBuilder()
+    .setTitle(presentation.title)
+    .setDescription(String(content || "Duck has nothing to send.").slice(0, 4096))
+    .setColor(presentation.color)
+    .setTimestamp();
+
+  const targetMember = message.mentions?.members?.first?.() ?? message.member;
+  const command = normalizeText(options.command || message.content || "").split(/\s+/)[0];
+  if (["userinfo", "whois", "avatar"].includes(command) && targetMember?.user) {
+    embed.setThumbnail(targetMember.user.displayAvatarURL({ size: 256 }));
+  } else if (command === "serverinfo" && message.guild?.iconURL) {
+    const icon = message.guild.iconURL({ size: 256 });
+    if (icon) embed.setThumbnail(icon);
+  } else if (["commands", "help"].includes(command) && client.user) {
+    embed.setThumbnail(client.user.displayAvatarURL({ size: 256 }));
+  }
+
+  const pageText = options.pageCount > 1 ? ` | Page ${options.page}/${options.pageCount}` : "";
+  embed.setFooter({
+    text: `Requested by ${message.member?.displayName || message.author?.username || "Unknown"}${pageText}`,
+    iconURL: message.author?.displayAvatarURL?.({ size: 64 }),
+  });
+  return embed;
+}
+
+function makeDuckChatEmbed(message, content, options = {}) {
+  const embed = new EmbedBuilder()
+    .setTitle(options.title || "Duck")
+    .setDescription(limitDiscordContent(content, 4000))
+    .setColor(options.color || DUCK_COLORS.brand)
+    .setTimestamp();
+  if (client.user) {
+    embed.setAuthor({ name: client.user.username, iconURL: client.user.displayAvatarURL({ size: 64 }) });
+  }
+  embed.setFooter({
+    text: options.footer || `For ${message.member?.displayName || message.author?.username || "this server"}`,
+  });
+  return embed;
+}
+
+function makeDuckChatPayload(message, content, options = {}) {
+  return {
+    content: null,
+    embeds: [makeDuckChatEmbed(message, content, options)],
+    allowedMentions: { parse: [], repliedUser: false },
+  };
+}
+
+async function sendMessageChunks(message, content, options = {}) {
+  const chunks = splitDiscordLines(String(content ?? "").split(/\r?\n/), 3900);
+  const embeds = chunks.map((chunk, index) => makeCommandResponseEmbed(message, chunk, {
+    ...options,
+    page: index + 1,
+    pageCount: chunks.length,
+  }));
+  const first = await message.reply({
+    embeds: [embeds[0]],
+    allowedMentions: { parse: [], repliedUser: false },
+  });
+  for (const embed of embeds.slice(1)) {
+    await message.channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
   }
   return first;
 }
@@ -6200,6 +6492,11 @@ async function registerCommands(client, options = {}) {
       .addUserOption((option) => option.setName("user").setDescription("Target user.").setRequired(false)),
     new SlashCommandBuilder().setName("spinwheel").setDescription("Pick from comma-separated choices.")
       .addStringOption((option) => option.setName("choices").setDescription("Example: pizza, tacos, sushi").setRequired(true)),
+    new SlashCommandBuilder().setName("roll").setDescription("Roll dice using notation such as 2d20.")
+      .addStringOption((option) => option.setName("dice").setDescription("Dice notation; defaults to 1d6.").setRequired(false)),
+    new SlashCommandBuilder().setName("coinflip").setDescription("Flip a coin."),
+    new SlashCommandBuilder().setName("eightball").setDescription("Ask Duck's Magic 8-Ball a question.")
+      .addStringOption((option) => option.setName("question").setDescription("Your question.").setRequired(true)),
     new SlashCommandBuilder().setName("remind").setDescription("Set a reminder in this channel.")
       .addStringOption((option) => option.setName("time").setDescription("Examples: 30s, 10m, 2h.").setRequired(true))
       .addStringOption((option) => option.setName("text").setDescription("Reminder text.").setRequired(true)),
@@ -6207,8 +6504,10 @@ async function registerCommands(client, options = {}) {
       .addStringOption((option) => option.setName("action").setDescription("view, add, or list").setRequired(false)
         .addChoices({ name: "View random", value: "view" }, { name: "Add", value: "add" }, { name: "List", value: "list" }))
       .addStringOption((option) => option.setName("text").setDescription("Quote text when adding.").setRequired(false)),
-    new SlashCommandBuilder().setName("join").setDescription("Join your voice channel and read this text channel."),
+    new SlashCommandBuilder().setName("join").setDescription("Join your voice channel and read its built-in text chat."),
     new SlashCommandBuilder().setName("leave").setDescription("Disconnect Duck from voice."),
+    new SlashCommandBuilder().setName("tts").setDescription("Queue a short TTS message while connected to Duck's voice channel.")
+      .addStringOption((option) => option.setName("message").setDescription("Text to read aloud.").setMaxLength(200).setRequired(true)),
   ];
 
   const moderationCommands = [
@@ -6287,7 +6586,8 @@ async function registerCommands(client, options = {}) {
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
-  console.log(`Validated ${body.length} slash commands: ${body.map((command) => command.name).join(", ")}`);
+  const dispatcherCount = validateSlashCommandDispatchers(body);
+  console.log(`Validated ${body.length} slash commands and ${dispatcherCount} dispatchers: ${body.map((command) => command.name).join(", ")}`);
   process.exit(0);
 }
 
@@ -6636,7 +6936,9 @@ client.on(Events.MessageCreate, async (message) => {
     if (!inConfiguredChannel && !invocation.invoked) return;
 
     if (invocation.invoked && !invocation.content) {
-      await message.reply({ content: makeDuckHelp(invocation.content), allowedMentions: { repliedUser: false } });
+      await message.reply(makeDuckChatPayload(message, makeDuckHelp(invocation.content), {
+        title: "Duck Command Center",
+      }));
       return;
     }
 
@@ -6656,7 +6958,11 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const queueMessage = hasConfiguredAi()
-      ? await message.reply({ content: getQueueMessage(), allowedMentions: { repliedUser: false } }).catch(() => null)
+      ? await message.reply(makeDuckChatPayload(message, getQueueMessage(), {
+          title: "Duck is thinking",
+          color: DUCK_COLORS.neutral,
+          footer: "Gathering relevant server context",
+        })).catch(() => null)
       : null;
     if (queueMessage) {
       logDebug("message.queue-posted", {
@@ -6674,9 +6980,9 @@ client.on(Events.MessageCreate, async (message) => {
         ms: elapsedMs(messageStartedAt),
       });
       if (queueMessage) {
-        await queueMessage.edit({ content }).catch(() => {});
+        await queueMessage.edit(makeDuckChatPayload(message, content, { title: "Recent Activity" })).catch(() => {});
       } else {
-        await message.reply({ content, allowedMentions: { repliedUser: false } });
+        await message.reply(makeDuckChatPayload(message, content, { title: "Recent Activity" }));
       }
       return;
     }
@@ -6766,12 +7072,19 @@ client.on(Events.MessageCreate, async (message) => {
             return;
           }
         }
-        await queueMessage.edit({ content: parsedToolCall.content || content, allowedMentions: { repliedUser: false } }).catch(() => {});
+        await queueMessage.edit(makeDuckChatPayload(message, parsedToolCall.content || content, {
+          color: chatResult.error ? DUCK_COLORS.danger : DUCK_COLORS.brand,
+        })).catch(() => {});
       } else if (content) {
         const parsedToolCall = parseInlineToolCall(planningMessage, content);
-        await message.reply({ content: parsedToolCall.content || content, allowedMentions: { repliedUser: false } });
+        await message.reply(makeDuckChatPayload(message, parsedToolCall.content || content, {
+          color: chatResult.error ? DUCK_COLORS.danger : DUCK_COLORS.brand,
+        }));
       } else if (queueMessage) {
-        await queueMessage.edit({ content: "I tried to answer, but AI returned no content and I do not have a local fallback for that." }).catch(() => {});
+        await queueMessage.edit(makeDuckChatPayload(message, "I tried to answer, but AI returned no content and I do not have a local fallback for that.", {
+          title: "AI Response Failed",
+          color: DUCK_COLORS.danger,
+        })).catch(() => {});
       }
       return;
     }
@@ -6784,9 +7097,15 @@ client.on(Events.MessageCreate, async (message) => {
         ms: elapsedMs(messageStartedAt),
       });
       if (queueMessage) {
-        await queueMessage.edit({ content: plan.error }).catch(() => {});
+        await queueMessage.edit(makeDuckChatPayload(message, plan.error, {
+          title: "Request Needs Attention",
+          color: DUCK_COLORS.danger,
+        })).catch(() => {});
       } else {
-        await message.reply(plan.error);
+        await message.reply(makeDuckChatPayload(message, plan.error, {
+          title: "Request Needs Attention",
+          color: DUCK_COLORS.danger,
+        }));
       }
       return;
     }
@@ -6801,9 +7120,15 @@ client.on(Events.MessageCreate, async (message) => {
         needed,
       });
       if (queueMessage) {
-        await queueMessage.edit({ content }).catch(() => {});
+        await queueMessage.edit(makeDuckChatPayload(message, content, {
+          title: "Permission Required",
+          color: DUCK_COLORS.danger,
+        })).catch(() => {});
       } else {
-        await message.reply(content);
+        await message.reply(makeDuckChatPayload(message, content, {
+          title: "Permission Required",
+          color: DUCK_COLORS.danger,
+        }));
       }
       return;
     }

@@ -29,7 +29,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
 - Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
 - `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
-- `!join` / `/join` streams short text-to-speech messages without storing audio files.
+- `!join` / `/join` streams short messages from the joined voice channel's built-in text chat without storing audio files.
 
 ## Commands
 
@@ -37,7 +37,7 @@ Common moderation commands are `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `
 
 Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/setup`, and `/entry-setup`. Every state-changing moderation or server action still creates a confirmation prompt that only an Administrator can approve.
 
-Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/remind`, `/join`, and `/leave`.
+Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/remind`, `/join`, `/tts`, and `/leave`.
 
 Bulk syntax separates commands with semicolons or new lines:
 
