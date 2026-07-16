@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { Readable } from "node:stream";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -21,6 +22,7 @@ import {
 } from "discord.js";
 import {
   AudioPlayerStatus,
+  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -30,6 +32,7 @@ import {
   joinVoiceChannel,
   version as voicePackageVersion,
 } from "@discordjs/voice";
+import { Communicate } from "edge-tts-ts";
 
 const dataDir = path.join(process.cwd(), "data");
 const settingsPath = path.join(dataDir, "settings.json");
@@ -5514,21 +5517,68 @@ function destroyVoiceSession(guildId) {
   return false;
 }
 
+async function synthesizeVoiceAudio(text) {
+  const communicate = new Communicate(text.slice(0, 200), {
+    voice: process.env.DUCK_TTS_VOICE || "en-US-EmmaMultilingualNeural",
+    rate: process.env.DUCK_TTS_RATE || "+0%",
+    volume: process.env.DUCK_TTS_VOLUME || "+0%",
+    pitch: process.env.DUCK_TTS_PITCH || "+0Hz",
+  });
+  const iterator = communicate.stream();
+  const chunks = [];
+  let totalBytes = 0;
+  const deadline = Date.now() + 15_000;
+
+  try {
+    while (true) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new Error("TTS synthesis timed out after 15 seconds.");
+      let timer;
+      const result = await Promise.race([
+        iterator.next(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("TTS synthesis timed out after 15 seconds.")), remainingMs);
+          timer.unref?.();
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (result.done) break;
+      if (result.value.type !== "audio") continue;
+
+      const chunk = Buffer.from(result.value.data);
+      totalBytes += chunk.length;
+      if (totalBytes > 2 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 2 MB memory limit.");
+      chunks.push(chunk);
+    }
+  } catch (err) {
+    await iterator.return?.().catch(() => {});
+    throw err;
+  }
+
+  if (!totalBytes) throw new Error("The TTS service returned no audio data.");
+  return Buffer.concat(chunks, totalBytes);
+}
+
 async function playNextVoiceItem(guildId) {
   const session = voiceSessions.get(guildId);
   if (!session || !session.ready || session.playing || !session.queue.length) return;
   session.playing = true;
   const text = session.queue.shift();
   try {
-    const params = new URLSearchParams({
-      ie: "UTF-8",
-      client: "tw-ob",
-      tl: process.env.DUCK_TTS_LANGUAGE || "en",
-      q: text.slice(0, 200),
+    const audio = await synthesizeVoiceAudio(text);
+    if (voiceSessions.get(guildId) !== session || !session.ready) {
+      session.playing = false;
+      session.queue.unshift(text);
+      return;
+    }
+    session.player.play(createAudioResource(Readable.from([audio]), {
+      inputType: StreamType.Arbitrary,
+    }));
+    logInfo("voice.tts-started", {
+      guildId,
+      remainingQueue: session.queue.length,
+      textLength: text.length,
+      audioBytes: audio.length,
     });
-    const url = `https://translate.google.com/translate_tts?${params}`;
-    session.player.play(createAudioResource(url));
-    logDebug("voice.tts-playing", { guildId, remainingQueue: session.queue.length, textLength: text.length });
   } catch (err) {
     session.playing = false;
     logError("voice.tts-create-failed", err, { guildId });
@@ -5606,6 +5656,12 @@ function createVoiceSession(message, channel, connection) {
   player.on(AudioPlayerStatus.Idle, () => {
     session.playing = false;
     playNextVoiceItem(guildId).catch((err) => logError("voice.queue-failed", err, { guildId }));
+  });
+  player.on(AudioPlayerStatus.Buffering, () => {
+    logDebug("voice.player-buffering", { guildId, voiceChannelId: channel.id });
+  });
+  player.on(AudioPlayerStatus.Playing, () => {
+    logInfo("voice.player-playing", { guildId, voiceChannelId: channel.id });
   });
   player.on("error", (err) => {
     session.playing = false;

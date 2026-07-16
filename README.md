@@ -29,7 +29,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
 - Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
 - `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
-- `!join` / `/join` streams short messages from the joined voice channel's built-in text chat without storing audio files.
+- `!join` / `/join` streams short messages from the joined voice channel's built-in text chat using the premade `edge-tts-ts` engine without storing audio files.
 
 ## Commands
 
