@@ -5478,8 +5478,12 @@ function makeDiagnosticResponse(message) {
 function destroyVoiceSession(guildId) {
   const session = voiceSessions.get(guildId);
   if (session) {
+    session.destroying = true;
+    if (session.handshakeTimer) clearTimeout(session.handshakeTimer);
     session.player.stop(true);
-    session.connection.destroy();
+    if (session.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+      session.connection.destroy();
+    }
     voiceSessions.delete(guildId);
     return true;
   }
@@ -5493,7 +5497,7 @@ function destroyVoiceSession(guildId) {
 
 async function playNextVoiceItem(guildId) {
   const session = voiceSessions.get(guildId);
-  if (!session || session.playing || !session.queue.length) return;
+  if (!session || !session.ready || session.playing || !session.queue.length) return;
   session.playing = true;
   const text = session.queue.shift();
   try {
@@ -5511,6 +5515,138 @@ async function playNextVoiceItem(guildId) {
     logError("voice.tts-create-failed", err, { guildId });
     await notifyVoiceSessionError(guildId, err);
     await playNextVoiceItem(guildId);
+  }
+}
+
+function markVoiceSessionReady(guildId, session) {
+  if (voiceSessions.get(guildId) !== session || session.destroying) return;
+  if (session.handshakeTimer) {
+    clearTimeout(session.handshakeTimer);
+    session.handshakeTimer = null;
+  }
+  session.ready = true;
+  session.connection.subscribe(session.player);
+  logInfo("voice.ready", {
+    guildId,
+    voiceChannelId: session.voiceChannelId,
+    queuedItems: session.queue.length,
+  });
+  playNextVoiceItem(guildId).catch((err) => logError("voice.queue-failed", err, { guildId }));
+}
+
+function scheduleVoiceHandshakeCheck(guildId, session) {
+  if (session.handshakeTimer) clearTimeout(session.handshakeTimer);
+  session.handshakeTimer = setTimeout(() => {
+    if (voiceSessions.get(guildId) !== session || session.destroying || session.ready) return;
+
+    session.handshakeAttempts += 1;
+    const status = session.connection.state.status;
+    if (session.handshakeAttempts < 3 && status !== VoiceConnectionStatus.Destroyed) {
+      logWarn("voice.handshake-retry", {
+        guildId,
+        voiceChannelId: session.voiceChannelId,
+        attempt: session.handshakeAttempts + 1,
+        status,
+      });
+      session.connection.rejoin();
+      scheduleVoiceHandshakeCheck(guildId, session);
+      return;
+    }
+
+    const err = new Error(`Discord voice handshake stayed in ${status} after ${session.handshakeAttempts} attempts.`);
+    logError("voice.handshake-stalled", err, {
+      guildId,
+      voiceChannelId: session.voiceChannelId,
+      status,
+    });
+    notifyVoiceSessionError(guildId, err).catch(() => {});
+  }, 15_000);
+  session.handshakeTimer.unref?.();
+}
+
+function createVoiceSession(message, channel, connection) {
+  const guildId = message.guildId;
+  const player = createAudioPlayer();
+  const session = {
+    connection,
+    player,
+    queue: [],
+    playing: false,
+    ready: connection.state.status === VoiceConnectionStatus.Ready,
+    destroying: false,
+    handshakeAttempts: 0,
+    handshakeTimer: null,
+    voiceChannelId: channel.id,
+    textChannelId: channel.id,
+    lastErrorNoticeAt: 0,
+  };
+
+  voiceSessions.set(guildId, session);
+  connection.subscribe(player);
+
+  player.on(AudioPlayerStatus.Idle, () => {
+    session.playing = false;
+    playNextVoiceItem(guildId).catch((err) => logError("voice.queue-failed", err, { guildId }));
+  });
+  player.on("error", (err) => {
+    session.playing = false;
+    logError("voice.player-error", err, { guildId });
+    notifyVoiceSessionError(guildId, err).catch(() => {});
+    playNextVoiceItem(guildId).catch(() => {});
+  });
+
+  connection.on("stateChange", (oldState, newState) => {
+    logDebug("voice.state-change", {
+      guildId,
+      voiceChannelId: channel.id,
+      from: oldState.status,
+      to: newState.status,
+    });
+    if (newState.status === VoiceConnectionStatus.Ready) {
+      markVoiceSessionReady(guildId, session);
+    } else if (newState.status === VoiceConnectionStatus.Destroyed) {
+      session.ready = false;
+      if (session.handshakeTimer) clearTimeout(session.handshakeTimer);
+      if (voiceSessions.get(guildId) === session) voiceSessions.delete(guildId);
+    } else {
+      session.ready = false;
+    }
+  });
+
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      await Promise.race([
+        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        entersState(connection, VoiceConnectionStatus.Ready, 5_000),
+      ]);
+      logWarn("voice.reconnecting", { guildId, channelId: channel.id });
+    } catch (err) {
+      if (voiceSessions.get(guildId) === session) voiceSessions.delete(guildId);
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+      logWarn("voice.disconnected", {
+        guildId,
+        channelId: channel.id,
+        error: err?.message || String(err),
+      });
+    }
+  });
+
+  if (session.ready) markVoiceSessionReady(guildId, session);
+  else scheduleVoiceHandshakeCheck(guildId, session);
+  return session;
+}
+
+async function waitForVoiceReady(connection, timeoutMs = 1_500) {
+  if (connection.state.status === VoiceConnectionStatus.Ready) return true;
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, timeoutMs);
+    return true;
+  } catch (err) {
+    if (connection.state.status === VoiceConnectionStatus.Destroyed) {
+      throw new Error("Discord destroyed the voice connection during the handshake.", { cause: err });
+    }
+    return false;
   }
 }
 
@@ -5540,6 +5676,14 @@ async function joinVoiceForMessage(message) {
     return "Duck needs Connect and Speak permissions in your voice channel.";
   }
 
+  const current = voiceSessions.get(message.guildId);
+  if (current?.voiceChannelId === channel.id && current.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+    const ready = await waitForVoiceReady(current.connection);
+    return ready
+      ? `Already connected to ${channel}. I am reading this voice channel's text chat.`
+      : `I am already in ${channel}, but Discord's voice handshake is still connecting. Messages will stay queued and play automatically when it becomes ready.`;
+  }
+
   destroyVoiceSession(message.guildId);
   const connection = joinVoiceChannel({
     channelId: channel.id,
@@ -5547,48 +5691,19 @@ async function joinVoiceForMessage(message) {
     adapterCreator: message.guild.voiceAdapterCreator,
     selfDeaf: false,
   });
-  await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-  const player = createAudioPlayer();
-  connection.subscribe(player);
-  const session = {
-    connection,
-    player,
-    queue: [],
-    playing: false,
-    textChannelId: channel.id,
-    lastErrorNoticeAt: 0,
-  };
-  voiceSessions.set(message.guildId, session);
-  player.on(AudioPlayerStatus.Idle, () => {
-    session.playing = false;
-    playNextVoiceItem(message.guildId).catch((err) => logError("voice.queue-failed", err, { guildId: message.guildId }));
-  });
-  player.on("error", (err) => {
-    session.playing = false;
-    logError("voice.player-error", err, { guildId: message.guildId });
-    notifyVoiceSessionError(message.guildId, err).catch(() => {});
-    playNextVoiceItem(message.guildId).catch(() => {});
-  });
-  connection.on(VoiceConnectionStatus.Disconnected, async () => {
-    try {
-      await Promise.race([
-        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-      ]);
-      logWarn("voice.reconnecting", { guildId: message.guildId, channelId: channel.id });
-    } catch {
-      voiceSessions.delete(message.guildId);
-      connection.destroy();
-      logWarn("voice.disconnected", { guildId: message.guildId, channelId: channel.id });
-    }
-  });
+  createVoiceSession(message, channel, connection);
+  const ready = await waitForVoiceReady(connection);
   logInfo("voice.joined", {
     guildId: message.guildId,
     voiceChannelId: channel.id,
     textChannelId: channel.id,
     userId: message.author.id,
+    ready,
+    status: connection.state.status,
   });
-  return `Joined ${channel}. I will read messages from this voice channel's text chat.`;
+  return ready
+    ? `Joined ${channel}. I will read messages from this voice channel's text chat.`
+    : `Joined ${channel}. Discord's voice handshake is still connecting; messages in this voice channel's text chat will queue and play automatically when it becomes ready.`;
 }
 
 function enqueueVoiceText(guildId, spoken) {
@@ -5824,9 +5939,13 @@ async function makeUtilityResponse(message, text) {
       return "Join Duck's current voice channel before queueing TTS.";
     }
     const spoken = text.replace(/^tts\b/i, "").replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim().slice(0, 200);
-    if (!spoken) return "Usage: `!tts <message>`";
+    if (!spoken) {
+      return session.ready
+        ? `TTS is active in <#${session.textChannelId}>. Send a normal message there and Duck will read it aloud.`
+        : `TTS is bound to <#${session.textChannelId}>, but the voice handshake is still connecting. Messages will queue until it is ready.`;
+    }
     enqueueVoiceText(message.guildId, `${message.member.displayName} says: ${spoken}`);
-    return `Queued for voice: ${spoken}`;
+    return session.ready ? `Queued for voice: ${spoken}` : `Queued while voice connects: ${spoken}`;
   }
 
   if (/^(rules|sendrules)\b/.test(normalized)) {
