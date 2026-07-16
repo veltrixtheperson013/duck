@@ -25,8 +25,10 @@ import {
   createAudioPlayer,
   createAudioResource,
   entersState,
+  generateDependencyReport,
   getVoiceConnection,
   joinVoiceChannel,
+  version as voicePackageVersion,
 } from "@discordjs/voice";
 
 const dataDir = path.join(process.cwd(), "data");
@@ -731,6 +733,11 @@ function getEnvBoolean(name, fallback = false) {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
+function supportsCurrentVoiceRuntime() {
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  return major > 22 || (major === 22 && minor >= 12);
+}
+
 function getEnvId(name) {
   const value = String(process.env[name] || "").trim();
   return /^\d{10,}$/.test(value) ? value : null;
@@ -914,6 +921,17 @@ function requireConfig() {
     visionDetail: getAiVisionDetail(),
     pendingActionTtlMs: getPendingActionTtlMs(),
   });
+  logInfo("voice.dependencies", {
+    voicePackageVersion,
+    runtimeSupported: supportsCurrentVoiceRuntime(),
+    report: generateDependencyReport().split(/\r?\n/).filter(Boolean),
+  });
+  if (!supportsCurrentVoiceRuntime()) {
+    logWarn("voice.runtime-unsupported", {
+      currentNode: process.version,
+      requiredNode: ">=22.12.0",
+    });
+  }
 
   if (!process.env.DISCORD_TOKEN) {
     throw new Error("Missing DISCORD_TOKEN. Copy config.example.json to config.json and fill it in.");
@@ -5466,6 +5484,7 @@ function makeDiagnosticResponse(message) {
     ["Moderation channel", Boolean(getGuildSettings(message.guildId).modChannelId), getGuildSettings(message.guildId).modChannelId ? "configured" : "not configured"],
     ["Cache", true, `${messageHistoryCache.size} message channels, ${resourceFetchCache.size} resources`],
     ["Storage writes", true, `${pendingJsonWrites.size} pending`],
+    ["Voice runtime", supportsCurrentVoiceRuntime(), `${process.version}; requires Node >=22.12.0`],
   ];
   return [
     "Duck diagnostics:",
@@ -5612,6 +5631,21 @@ function createVoiceSession(message, channel, connection) {
       session.ready = false;
     }
   });
+  connection.on("error", (err) => {
+    logError("voice.connection-error", err, {
+      guildId,
+      voiceChannelId: channel.id,
+      status: connection.state.status,
+    });
+    notifyVoiceSessionError(guildId, err).catch(() => {});
+  });
+  connection.on("debug", (details) => {
+    logDebug("voice.transport", {
+      guildId,
+      voiceChannelId: channel.id,
+      details: String(details).slice(0, 2_000),
+    });
+  });
 
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     try {
@@ -5669,6 +5703,9 @@ async function notifyVoiceSessionError(guildId, err) {
 }
 
 async function joinVoiceForMessage(message) {
+  if (!supportsCurrentVoiceRuntime()) {
+    return `Voice TTS requires Node 22.12 or newer for Discord's DAVE voice encryption. This server is running ${process.version}; update the Wispbyte Node/Docker image, restart Duck, then run join again.`;
+  }
   const channel = message.member?.voice?.channel;
   if (!channel) return "Join a voice channel first, then run this command.";
   const botPermissions = channel.permissionsFor(message.guild.members.me);
@@ -5690,6 +5727,8 @@ async function joinVoiceForMessage(message) {
     guildId: message.guildId,
     adapterCreator: message.guild.voiceAdapterCreator,
     selfDeaf: false,
+    daveEncryption: true,
+    debug: isDebugEnabled(),
   });
   createVoiceSession(message, channel, connection);
   const ready = await waitForVoiceReady(connection);

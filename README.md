@@ -166,13 +166,15 @@ Common tool choices:
 
 ## Setup
 
-1. Install dependencies:
+1. Install Node.js 22.12 or newer. Current Discord voice channels use DAVE encryption, which requires Duck's current voice stack.
+
+2. Install dependencies:
 
    ```powershell
    npm.cmd install
    ```
 
-2. Copy `config.example.json` to `config.json` and fill in:
+3. Copy `config.example.json` to `config.json` and fill in:
 
    ```json
    {
@@ -225,13 +227,13 @@ Common tool choices:
 
    Current OpenRouter free models can rotate. As of July 6, 2026, OpenRouter's public model API lists `tencent/hy3:free` with zero prompt and completion pricing.
 
-3. In the Discord Developer Portal, enable these bot privileged gateway intents:
+4. In the Discord Developer Portal, enable these bot privileged gateway intents:
 
    - Server Members Intent
    - Server Voice States Intent
    - Message Content Intent
 
-4. Invite the bot with these permissions as needed:
+5. Invite the bot with these permissions as needed:
 
    - Send Messages
    - Read Message History
@@ -248,13 +250,13 @@ Common tool choices:
    - Connect
    - Speak
 
-5. Start the bot:
+6. Start the bot:
 
    ```powershell
    npm.cmd start
    ```
 
-6. In Discord, run:
+7. In Discord, run:
 
    ```text
    /setup channel:#your-mod-channel
