@@ -7,10 +7,15 @@
   "main": "index.js",
   "scripts": {
     "start": "node .",
-    "check": "node --check src/index.js"
+    "check": "node --check src/index.js",
+    "check:commands": "node . --check-commands"
   },
   "dependencies": {
-    "discord.js": "^14.21.0"
+    "@discordjs/voice": "^0.18.0",
+    "@noble/ciphers": "^1.2.1",
+    "discord.js": "^14.21.0",
+    "ffmpeg-static": "^5.2.0",
+    "opusscript": "^0.1.1"
   },
   "overrides": {
     "undici": "^6.27.0"

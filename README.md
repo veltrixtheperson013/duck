@@ -26,6 +26,26 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - User-facing error messages say when AI/OpenRouter failed instead of hiding it behind generic fallback text.
 - Tools for ban, softban, kick, timeout, remove timeout, warn, nicknames, roles, voice moderation, channel creation/deletion, purge messages, slowmode, lock channel, and unlock channel.
 - Extra voice tools include server voice mute/unmute and deafen/undeafen.
+- Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
+- Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
+- `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
+- `!join` / `/join` streams short text-to-speech messages without storing audio files.
+
+## Commands
+
+Common moderation commands are `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/clear`, `/addrole`, and `/removerole`. Prefix forms use the same names, such as `!warn @member spam` or `!!clear 25`.
+
+Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/setup`, and `/entry-setup`. Every state-changing moderation or server action still creates a confirmation prompt that only an Administrator can approve.
+
+Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/remind`, `/join`, and `/leave`.
+
+Bulk syntax separates commands with semicolons or new lines:
+
+```text
+!bulk warn @member spam; timeout @member 10m continued spam; clear 20
+```
+
+Use `/tool request:<normal tool request>` for tools without a dedicated slash command.
 
 ## Examples
 
@@ -225,6 +245,8 @@ Common tool choices:
    - Move Members
    - Mute Members
    - Deafen Members
+   - Connect
+   - Speak
 
 5. Start the bot:
 

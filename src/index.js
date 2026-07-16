@@ -9,6 +9,7 @@ import {
   ButtonStyle,
   ChannelType,
   Client,
+  Collection,
   EmbedBuilder,
   Events,
   GatewayIntentBits,
@@ -18,6 +19,15 @@ import {
   Routes,
   SlashCommandBuilder,
 } from "discord.js";
+import {
+  AudioPlayerStatus,
+  VoiceConnectionStatus,
+  createAudioPlayer,
+  createAudioResource,
+  entersState,
+  getVoiceConnection,
+  joinVoiceChannel,
+} from "@discordjs/voice";
 
 const dataDir = path.join(process.cwd(), "data");
 const settingsPath = path.join(dataDir, "settings.json");
@@ -33,6 +43,8 @@ const messageHistoryCache = new Map();
 const resourceFetchCache = new Map();
 const jsonFileCache = new Map();
 const pendingJsonWrites = new Map();
+const voiceSessions = new Map();
+const commandCooldowns = new Map();
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
@@ -181,6 +193,11 @@ const TOOL_DEFINITIONS = [
     name: "purge_messages",
     risk: "medium",
     description: "Bulk delete recent messages in the current channel.",
+  },
+  {
+    name: "unban_user",
+    risk: "high",
+    description: "Unban a user by their exact Discord user ID.",
   },
   {
     name: "grep_messages",
@@ -355,6 +372,9 @@ const UTILITY_COMMANDS = [
   "`duck curse [@user]`",
   "`duck spinwheel pizza, tacos, sushi`",
   "`duck remind 10m check the logs`",
+  "`duck test`",
+  "`duck join` / `duck leave`",
+  "`duck bulk warn @user spam; timeout @user 10m flooding`",
   "`duck rules`",
   "`duck ping`",
   "`duck botinfo`",
@@ -386,6 +406,7 @@ let inviteCleanupTimer = null;
 
 const TOOL_REQUIREMENTS = {
   ban_member: PermissionsBitField.Flags.BanMembers,
+  unban_user: PermissionsBitField.Flags.BanMembers,
   kick_member: PermissionsBitField.Flags.KickMembers,
   timeout_member: PermissionsBitField.Flags.ModerateMembers,
   delete_channel: PermissionsBitField.Flags.ManageChannels,
@@ -419,6 +440,7 @@ const TOOL_REQUIREMENTS = {
   create_thread: [PermissionsBitField.Flags.CreatePublicThreads, PermissionsBitField.Flags.SendMessages],
   set_role_color: PermissionsBitField.Flags.ManageRoles,
   create_poll: [PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AddReactions],
+  announce: PermissionsBitField.Flags.SendMessages,
   create_role: PermissionsBitField.Flags.ManageRoles,
   delete_role: PermissionsBitField.Flags.ManageRoles,
 };
@@ -662,16 +684,17 @@ function getEnvId(name) {
   return /^\d{10,}$/.test(value) ? value : null;
 }
 
-function getLegacyCommandPrefixes() {
-  return (process.env.DUCK_LEGACY_PREFIXES || "!,!!")
-    .split(",")
-    .map((prefix) => prefix.trim())
+function getLegacyCommandPrefixes(guildId = null) {
+  const configured = guildId ? getGuildSettings(guildId).commandPrefix : null;
+  return [configured, ...(process.env.DUCK_LEGACY_PREFIXES || "!,!!").split(",")]
+    .map((prefix) => String(prefix || "").trim())
     .filter(Boolean)
+    .filter((prefix, index, items) => items.indexOf(prefix) === index)
     .sort((a, b) => b.length - a.length);
 }
 
-function getLegacyCommandContent(content) {
-  const prefixes = getLegacyCommandPrefixes();
+function getLegacyCommandContent(content, guildId = null) {
+  const prefixes = getLegacyCommandPrefixes(guildId);
   const prefix = prefixes.find((candidate) => content.startsWith(candidate));
   if (!prefix) return null;
   return content.slice(prefix.length).trim();
@@ -886,6 +909,10 @@ function parseMessageCount(text, fallback = 10) {
   return Math.max(1, Math.min(Number(match[1]), 99));
 }
 
+function extractExactUserId(text) {
+  return String(text || "").match(/(?:^|\s)(\d{17,20})(?=\s|$)/)?.[1] ?? null;
+}
+
 function parseGrepResultCount(text, fallback = 10) {
   const match = text.match(/\b(?:limit|top|first|show)\s+(\d{1,2})\b/i) ?? text.match(/\b(\d{1,2})\s+(?:matches|results)\b/i);
   if (!match) return fallback;
@@ -991,7 +1018,9 @@ function extractChannelReason(text, commandWords) {
 }
 
 function findChannelByNameOrMention(message, text) {
-  const mentioned = message.mentions.channels.first();
+  const mentionedId = String(text || "").match(/<#(\d+)>/)?.[1];
+  const mentioned = (mentionedId ? message.guild.channels.cache.get(mentionedId) : null)
+    ?? message.mentions.channels.first();
   if (mentioned) return mentioned;
 
   const quotedName = extractQuotedName(text);
@@ -1028,7 +1057,9 @@ function findChannelByNameOrMention(message, text) {
 }
 
 function findRoleByNameOrMention(message, text) {
-  const mentioned = message.mentions.roles.first();
+  const mentionedId = String(text || "").match(/<@&(\d+)>/)?.[1];
+  const mentioned = (mentionedId ? message.guild.roles.cache.get(mentionedId) : null)
+    ?? message.mentions.roles.first();
   if (mentioned) return mentioned;
 
   const quotedName = extractQuotedName(text);
@@ -1040,7 +1071,10 @@ function findRoleByNameOrMention(message, text) {
 }
 
 function findVoiceChannelByNameOrMention(message, text) {
-  const mentioned = message.mentions.channels.find((channel) => channel.type === ChannelType.GuildVoice);
+  const mentionedId = String(text || "").match(/<#(\d+)>/)?.[1];
+  const mentionedById = mentionedId ? message.guild.channels.cache.get(mentionedId) : null;
+  const mentioned = (mentionedById?.type === ChannelType.GuildVoice ? mentionedById : null)
+    ?? message.mentions.channels.find((channel) => channel.type === ChannelType.GuildVoice);
   if (mentioned) return mentioned;
 
   const quotedName = extractQuotedName(text);
@@ -1089,6 +1123,24 @@ function findRoleByToolTarget(message, target) {
 
 function canManageRole(botMember, role) {
   return role && !role.managed && role.id !== role.guild.id && role.position < botMember.roles.highest.position;
+}
+
+function requesterActionBlockReason(message, action) {
+  const requester = message.member;
+  if (!requester || requester.permissions.has(PermissionsBitField.Flags.Administrator)) return null;
+  if (action.roleId) {
+    const role = message.guild.roles.cache.get(action.roleId);
+    if (role && role.position >= requester.roles.highest.position) {
+      return `You cannot manage @${role.name} because it is at or above your highest role.`;
+    }
+  }
+  if (action.targetId && !["unban_user", "delete_user_messages", "view_warnings"].includes(action.tool)) {
+    const member = message.guild.members.cache.get(action.targetId);
+    if (member?.id === message.guild.ownerId || (member && member.roles.highest.position >= requester.roles.highest.position)) {
+      return `You cannot target ${summarizeMemberName(member)} because they are at or above your highest role.`;
+    }
+  }
+  return null;
 }
 
 function summarizeMemberName(member) {
@@ -1353,7 +1405,7 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|color|colour|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b/.test(normalized)
+  return /\b(ban|unban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|color|colour|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b/.test(normalized)
     && /\b(member|user|person|him|her|them|message|messages|channel|role|color|colour|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|grep|search|find|lock|unlock|create|make|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
@@ -1361,6 +1413,18 @@ function planModerationToolFromText(message, rawText) {
   const text = rawText.trim();
   const normalized = normalizeText(text);
   const member = findMentionedMemberForPlan(message, text);
+
+  if (/^unban\b/.test(normalized)) {
+    const targetId = extractExactUserId(text);
+    if (!targetId) return { error: "Give me the exact Discord user ID to unban." };
+    return {
+      tool: "unban_user",
+      risk: "high",
+      targetId,
+      reason: text.replace(/^unban\s+\d{17,20}\s*/i, "").trim() || "No reason provided.",
+      summary: `unban user ID ${targetId}`,
+    };
+  }
 
   if (/\b(ban|banish)\b/.test(normalized) && !/\bsoft\s*ban\b/.test(normalized)) {
     if (!member) return { error: "Tell me who to ban by mentioning them." };
@@ -1754,9 +1818,9 @@ function planModerationToolFromText(message, rawText) {
     };
   }
 
-  const purgeMatch = normalized.match(/\b(purge|delete)\s+(\d{1,2})(\s+messages?)?/);
+  const purgeMatch = normalized.match(/\b(purge|delete|clear)\s+(\d{1,3})(\s+messages?)?/);
   if (purgeMatch) {
-    const count = Math.max(1, Math.min(Number(purgeMatch[2]), 99));
+    const count = Math.max(1, Math.min(Number(purgeMatch[2]), 100));
     return {
       tool: "purge_messages",
       risk: "medium",
@@ -2350,6 +2414,7 @@ function startCacheMaintenance() {
 
 function flushRuntimeStateAndExit(signal) {
   try {
+    for (const guildId of voiceSessions.keys()) destroyVoiceSession(guildId);
     pruneRuntimeCaches();
   } catch (err) {
     logWarn("cache.shutdown-flush-failed", { signal, error: err?.message || String(err) });
@@ -2788,6 +2853,18 @@ function validateAiPlan(message, plan, serverContext = null) {
     risk: tool.risk,
     reason: typeof plan.reason === "string" && plan.reason.trim() ? plan.reason.trim() : inferredReason ?? "No reason provided.",
   };
+
+  if (tool.name === "unban_user") {
+    const targetId = String(plan.targetId || extractExactUserId(message.content) || "").trim();
+    if (!/^\d{17,20}$/.test(targetId)) {
+      return { error: "Give me the exact Discord user ID to unban." };
+    }
+    return {
+      ...base,
+      targetId,
+      summary: `unban user ID ${targetId}`,
+    };
+  }
 
   if ([
     "ban_member",
@@ -3250,6 +3327,7 @@ function makePlannerResponseFormat(kind) {
               enum: [
                 "none",
                 "ban_member",
+                "unban_user",
                 "kick_member",
                 "timeout_member",
                 "delete_channel",
@@ -3893,6 +3971,8 @@ function extractAiTextContent(aiMessage) {
 const INLINE_TOOL_MAP = {
   ban: "ban_member",
   ban_member: "ban_member",
+  unban: "unban_user",
+  unban_user: "unban_user",
   softban: "softban_member",
   soft_ban: "softban_member",
   softban_member: "softban_member",
@@ -4154,6 +4234,9 @@ function canApprove(action, member) {
 
 function commandLabel(action) {
   if (action.tool === "ban_member") return "Ban";
+  if (action.tool === "unban_user") return "Unban";
+  if (action.tool === "bulk_actions") return "Bulk Actions";
+  if (action.tool === "announce") return "Announcement";
   if (action.tool === "kick_member") return "Kick";
   if (action.tool === "timeout_member") return "Timeout";
   if (action.tool === "delete_channel") return "Delete Channel";
@@ -4249,9 +4332,12 @@ function makeActionEmbed(action) {
   if (action.topic) details.push(`Topic: ${action.topic}`);
   if (action.messageId) details.push(`Message ID: ${action.messageId}`);
   if (action.messageText) details.push(`Message: ${action.messageText}`);
+  if (action.embedAnnouncement != null) details.push(`Format: ${action.embedAnnouncement ? "embed" : "plain text"}`);
+  if (action.mentionRoleId) details.push(`Mention: <@&${action.mentionRoleId}>`);
   if (action.query) details.push(`Query: ${action.query}`);
   if (action.pollQuestion) details.push(`Poll: ${action.pollQuestion}`);
   if (action.pollOptions?.length) details.push(`Options: ${action.pollOptions.join(" | ")}`);
+  if (action.actions?.length) details.push(...action.actions.map((item, index) => `${index + 1}. ${item.summary}`));
   if (action.channelName && action.tool !== "delete_channel") details.push(`Channel: ${action.channelName}`);
   if (action.aiWarning) details.push(`AI note: ${action.aiWarning}`);
   if (details.length) embed.addFields({ name: "Details", value: details.join("\n").slice(0, 1024), inline: false });
@@ -4279,6 +4365,8 @@ function describeAction(action) {
   if (action.threadName) lines.push(`Thread: ${action.threadName}`);
   if (action.channelName && action.tool !== "delete_channel") lines.push(`Channel: ${action.channelName}`);
   if (action.messageText) lines.push(`Message: ${action.messageText}`);
+  if (action.embedAnnouncement != null) lines.push(`Format: ${action.embedAnnouncement ? "embed" : "plain text"}`);
+  if (action.mentionRoleId) lines.push(`Mention: <@&${action.mentionRoleId}>`);
   if (action.query) lines.push(`Query: ${action.query}`);
   if (action.pollQuestion) lines.push(`Poll: ${action.pollQuestion}`);
   if (action.pollOptions?.length) lines.push(`Options: ${action.pollOptions.join(" | ")}`);
@@ -4348,6 +4436,30 @@ async function executeAction(client, action, approver) {
     return result;
   }
 
+  if (action.tool === "bulk_actions") {
+    const results = [];
+    for (const [index, childAction] of action.actions.entries()) {
+      try {
+        const result = await executeAction(client, {
+          ...childAction,
+          id: `${action.id}:${index + 1}`,
+          guildId: action.guildId,
+          requestChannelId: action.requestChannelId,
+          promptId: action.promptId,
+        }, approver);
+        results.push(`${index + 1}. ${result}`);
+      } catch (err) {
+        logError("moderation.bulk-action-failed", err, {
+          actionId: action.id,
+          childTool: childAction.tool,
+          index,
+        });
+        results.push(`${index + 1}. \`${childAction.tool}\` failed: ${err?.message || String(err)}`);
+      }
+    }
+    return limitDiscordContent([`Bulk run complete (${results.length} action${results.length === 1 ? "" : "s"}):`, ...results].join("\n"));
+  }
+
   if (action.tool === "ban_member") {
     const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
@@ -4356,6 +4468,13 @@ async function executeAction(client, action, approver) {
     const result = `I have banned ${summarizeMemberName(member)}.`;
     logInfo("moderation.execute.done", { actionId: action.id, tool: action.tool, ms: elapsedMs(startedAt) });
     return result;
+  }
+
+  if (action.tool === "unban_user") {
+    const bannedUser = await guild.bans.fetch(action.targetId).catch(() => null);
+    if (!bannedUser) return `User ID ${action.targetId} is not currently banned.`;
+    await guild.members.unban(action.targetId, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    return `I have unbanned ${bannedUser.user.tag} (${action.targetId}).`;
   }
 
   if (action.tool === "kick_member") {
@@ -4670,6 +4789,27 @@ async function executeAction(client, action, approver) {
       allowedMentions: { parse: [] },
     });
     return `I sent the message in ${channel}.`;
+  }
+
+  if (action.tool === "announce") {
+    const channel = await cachedChannel(guild, action.channelId);
+    if (!channel?.isTextBased?.() || !("send" in channel)) return "I can only announce in a text channel.";
+    const role = action.mentionRoleId ? await cachedRole(guild, action.mentionRoleId) : null;
+    if (action.mentionRoleId && (!role || role.id === guild.id)) return "I could not resolve that announcement role.";
+    const mention = role ? `<@&${role.id}>` : "";
+    const payload = action.embedAnnouncement
+      ? {
+          content: mention || undefined,
+          embeds: [new EmbedBuilder()
+            .setTitle("Announcement")
+            .setDescription(limitDiscordContent(action.messageText, 4000))
+            .setColor(0x3b82f6)
+            .setTimestamp()],
+        }
+      : { content: limitDiscordContent([mention, action.messageText].filter(Boolean).join("\n"), 1900) };
+    payload.allowedMentions = role ? { roles: [role.id], parse: [] } : { parse: [] };
+    await channel.send(payload);
+    return `I sent the announcement in ${channel}.`;
   }
 
   if (action.tool === "pin_message" || action.tool === "unpin_message") {
@@ -5208,6 +5348,272 @@ function makeUtilityHelp() {
   ].join("\n");
 }
 
+function makeDiagnosticResponse(message) {
+  const botMember = message.guild.members.me;
+  const channelPermissions = botMember ? message.channel.permissionsFor(botMember) : null;
+  const checks = [
+    ["Gateway", client.isReady(), `${Math.round(client.ws.ping)}ms`],
+    ["AI", hasConfiguredAi(), getConfiguredAiProvider() || "not configured"],
+    ["Current channel", Boolean(channelPermissions?.has(PermissionsBitField.Flags.ViewChannel) && channelPermissions.has(PermissionsBitField.Flags.SendMessages)), "view + send"],
+    ["Message history", Boolean(channelPermissions?.has(PermissionsBitField.Flags.ReadMessageHistory)), "read history"],
+    ["Moderation channel", Boolean(getGuildSettings(message.guildId).modChannelId), getGuildSettings(message.guildId).modChannelId ? "configured" : "not configured"],
+    ["Cache", true, `${messageHistoryCache.size} message channels, ${resourceFetchCache.size} resources`],
+    ["Storage writes", true, `${pendingJsonWrites.size} pending`],
+  ];
+  return [
+    "Duck diagnostics:",
+    ...checks.map(([name, ok, detail]) => `${ok ? "PASS" : "FAIL"} - ${name}: ${detail}`),
+    `Build: ${buildInfo.commit} (${buildInfo.branch})`,
+    `Node: ${process.version}`,
+  ].join("\n");
+}
+
+function destroyVoiceSession(guildId) {
+  const session = voiceSessions.get(guildId);
+  if (session) {
+    session.player.stop(true);
+    session.connection.destroy();
+    voiceSessions.delete(guildId);
+    return true;
+  }
+  const connection = getVoiceConnection(guildId);
+  if (connection) {
+    connection.destroy();
+    return true;
+  }
+  return false;
+}
+
+async function playNextVoiceItem(guildId) {
+  const session = voiceSessions.get(guildId);
+  if (!session || session.playing || !session.queue.length) return;
+  session.playing = true;
+  const text = session.queue.shift();
+  try {
+    const params = new URLSearchParams({
+      ie: "UTF-8",
+      client: "tw-ob",
+      tl: process.env.DUCK_TTS_LANGUAGE || "en",
+      q: text.slice(0, 200),
+    });
+    const url = `https://translate.google.com/translate_tts?${params}`;
+    session.player.play(createAudioResource(url));
+  } catch (err) {
+    session.playing = false;
+    logError("voice.tts-create-failed", err, { guildId });
+    await playNextVoiceItem(guildId);
+  }
+}
+
+async function joinVoiceForMessage(message) {
+  const channel = message.member?.voice?.channel;
+  if (!channel) return "Join a voice channel first, then run this command.";
+  const botPermissions = channel.permissionsFor(message.guild.members.me);
+  if (!botPermissions?.has(PermissionsBitField.Flags.Connect) || !botPermissions.has(PermissionsBitField.Flags.Speak)) {
+    return "Duck needs Connect and Speak permissions in your voice channel.";
+  }
+
+  destroyVoiceSession(message.guildId);
+  const connection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: message.guildId,
+    adapterCreator: message.guild.voiceAdapterCreator,
+    selfDeaf: false,
+  });
+  await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  const player = createAudioPlayer();
+  connection.subscribe(player);
+  const session = {
+    connection,
+    player,
+    queue: [],
+    playing: false,
+    textChannelId: message.channelId,
+  };
+  voiceSessions.set(message.guildId, session);
+  player.on(AudioPlayerStatus.Idle, () => {
+    session.playing = false;
+    playNextVoiceItem(message.guildId).catch((err) => logError("voice.queue-failed", err, { guildId: message.guildId }));
+  });
+  player.on("error", (err) => {
+    session.playing = false;
+    logError("voice.player-error", err, { guildId: message.guildId });
+    playNextVoiceItem(message.guildId).catch(() => {});
+  });
+  connection.on(VoiceConnectionStatus.Disconnected, () => {
+    voiceSessions.delete(message.guildId);
+    connection.destroy();
+  });
+  return `Joined ${channel}. I will read normal messages from ${message.channel}.`;
+}
+
+function queueVoiceMessage(message) {
+  const session = voiceSessions.get(message.guildId);
+  if (!session || session.textChannelId !== message.channelId || message.author.bot) return;
+  if (getLegacyCommandContent(message.content, message.guildId) || /^\s*(duck\b|<@!?\d+>)/i.test(message.content)) return;
+  const spoken = message.cleanContent.replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim().slice(0, 200);
+  if (!spoken) return;
+  if (session.queue.length >= 20) session.queue.shift();
+  session.queue.push(`${message.member?.displayName || message.author.username} says: ${spoken}`);
+  playNextVoiceItem(message.guildId).catch((err) => logError("voice.queue-failed", err, { guildId: message.guildId }));
+}
+
+function parseBulkCommands(text) {
+  return String(text || "")
+    .replace(/^bulk\b/i, "")
+    .split(/(?:\r?\n|\s*;\s*)/)
+    .map((item) => item.trim().replace(/^!{1,2}/, ""))
+    .filter(Boolean)
+    .slice(0, 11);
+}
+
+function buildBulkPlan(message, text) {
+  const commands = parseBulkCommands(text);
+  if (commands.length < 2) return { error: "Bulk needs at least 2 commands separated by semicolons or new lines." };
+  if (commands.length > 10) return { error: "Bulk supports at most 10 actions at once." };
+  const actions = [];
+  for (const command of commands) {
+    if (/^bulk\b/i.test(command)) return { error: "Nested bulk commands are not allowed." };
+    const commandMessage = makeMessageWithContent(message, command);
+    const action = planLocalModerationTool(commandMessage);
+    if (!action || action.error) return { error: `Could not validate \`${command}\`: ${action?.error || "not a supported action"}` };
+    if (["view_warnings", "grep_messages"].includes(action.tool)) {
+      return { error: `\`${action.tool}\` is read-only and should be run separately.` };
+    }
+    const needed = TOOL_REQUIREMENTS[action.tool];
+    if (needed && !hasPermission(message.member, needed)) {
+      return { error: `You cannot add \`${action.tool}\` to this batch. Required: ${describePermissionRequirement(needed)}.` };
+    }
+    const hierarchyError = requesterActionBlockReason(message, action);
+    if (hierarchyError) return { error: `Could not validate \`${command}\`: ${hierarchyError}` };
+    actions.push(action);
+  }
+  return {
+    tool: "bulk_actions",
+    risk: "critical",
+    actions,
+    reason: `Bulk request containing ${actions.length} validated actions.`,
+    summary: actions.map((action, index) => `${index + 1}. ${action.summary}`).join("\n"),
+  };
+}
+
+async function handleExplicitCommand(message, text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+
+  if (/^bulk\b/.test(normalized)) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      await sendMessageChunks(message, "Only an Administrator can prepare bulk actions.");
+      return true;
+    }
+    const plan = buildBulkPlan(message, text);
+    if (plan.error) {
+      await sendMessageChunks(message, plan.error);
+      return true;
+    }
+    await promptForConfirmation(message, plan, {
+      content: `Prepared ${plan.actions.length} validated actions. One Administrator confirmation will run them in order.`,
+      useEmbed: true,
+    });
+    return true;
+  }
+
+  if (/^prefix\b/.test(normalized)) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      await sendMessageChunks(message, "Only an Administrator can change Duck's command prefix.");
+      return true;
+    }
+    const value = text.replace(/^prefix\b/i, "").trim();
+    if (!value || value.length > 5 || /[\s/@]/.test(value)) {
+      await sendMessageChunks(message, "Usage: `!prefix <1-5 visible characters>`");
+      return true;
+    }
+    updateGuildSettings(message.guildId, { commandPrefix: value });
+    await sendMessageChunks(message, `Duck's additional prefix is now \`${value}\`.`);
+    return true;
+  }
+
+  if (/^sendrules\b/.test(normalized)) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      await sendMessageChunks(message, "Only an Administrator can post the server rules embed.");
+      return true;
+    }
+    await message.channel.send({
+      embeds: [new EmbedBuilder()
+        .setTitle(`${message.guild.name} Rules`)
+        .setDescription(formatRulesText())
+        .setColor(0x3b82f6)
+        .setTimestamp()],
+      allowedMentions: { parse: [] },
+    });
+    await sendMessageChunks(message, "Rules posted.");
+    return true;
+  }
+
+  if (/^announce\b/.test(normalized)) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      await sendMessageChunks(message, "Only an Administrator can prepare announcements.");
+      return true;
+    }
+    const match = text.match(/^announce\s+(true|false)\s+(\S+)\s+([\s\S]+)$/i);
+    if (!match) {
+      await sendMessageChunks(message, "Usage: `!announce <true/false> <@role/None> <message>`");
+      return true;
+    }
+    const roleToken = match[2];
+    const roleId = /^none$/i.test(roleToken) ? null : roleToken.match(/^<@&(\d+)>$/)?.[1];
+    if (!/^none$/i.test(roleToken) && !roleId) {
+      await sendMessageChunks(message, "Mention one role or use `None`.");
+      return true;
+    }
+    const role = roleId ? message.guild.roles.cache.get(roleId) : null;
+    if (roleId && (!role || role.id === message.guild.id)) {
+      await sendMessageChunks(message, "I could not resolve that role.");
+      return true;
+    }
+    await promptForConfirmation(message, {
+      tool: "announce",
+      risk: "high",
+      channelId: message.channelId,
+      channelName: message.channel.name,
+      messageText: match[3].trim(),
+      embedAnnouncement: match[1].toLowerCase() === "true",
+      mentionRoleId: roleId,
+      reason: "Administrator announcement request.",
+      summary: `announce in ${summarizeChannel(message.channel)}${role ? ` mentioning @${role.name}` : " without a role ping"}`,
+    }, { content: "Announcement prepared for confirmation.", useEmbed: true });
+    return true;
+  }
+
+  const utilityResponse = await makeUtilityResponse(message, text);
+  if (utilityResponse) {
+    await sendMessageChunks(message, utilityResponse);
+    return true;
+  }
+
+  const plan = planLocalModerationTool(message);
+  if (!plan) return false;
+  if (plan.error) {
+    await sendMessageChunks(message, plan.error);
+    return true;
+  }
+  const needed = TOOL_REQUIREMENTS[plan.tool];
+  if (needed && !hasPermission(message.member, needed)) {
+    await sendMessageChunks(message, `You need ${describePermissionRequirement(needed)} to prepare \`${plan.tool}\`.`);
+    return true;
+  }
+  const hierarchyError = requesterActionBlockReason(message, plan);
+  if (hierarchyError) {
+    await sendMessageChunks(message, hierarchyError);
+    return true;
+  }
+  await promptForConfirmation(message, plan, {
+    content: "Command validated. Waiting for Administrator confirmation.",
+    useEmbed: true,
+  });
+  return true;
+}
+
 async function makeUtilityResponse(message, text) {
   const normalized = normalizeText(text);
 
@@ -5224,7 +5630,34 @@ async function makeUtilityResponse(message, text) {
   }
 
   if (/^(ping|latency)\b/.test(normalized)) {
+    const cooldownKey = `${message.guildId}:${message.author.id}:ping`;
+    const now = Date.now();
+    const lastUsed = commandCooldowns.get(cooldownKey) || 0;
+    if (now - lastUsed < 3_000) return `Ping is on cooldown for ${Math.ceil((3_000 - (now - lastUsed)) / 1000)}s.`;
+    commandCooldowns.set(cooldownKey, now);
+    if (commandCooldowns.size > 1_000) {
+      for (const [key, usedAt] of commandCooldowns) {
+        if (now - usedAt > 60_000) commandCooldowns.delete(key);
+      }
+    }
     return `Pong. Discord gateway ping: ${Math.round(client.ws.ping)}ms.`;
+  }
+
+  if (/^test\b/.test(normalized)) {
+    return makeDiagnosticResponse(message);
+  }
+
+  if (/^join\b/.test(normalized)) {
+    try {
+      return await joinVoiceForMessage(message);
+    } catch (err) {
+      logError("voice.join-failed", err, { guildId: message.guildId, userId: message.author.id });
+      return `I could not join voice: ${err?.message || String(err)}`;
+    }
+  }
+
+  if (/^leave\b/.test(normalized)) {
+    return destroyVoiceSession(message.guildId) ? "Disconnected from voice." : "I am not connected to voice.";
   }
 
   if (/^(rules|sendrules)\b/.test(normalized)) {
@@ -5344,6 +5777,100 @@ async function makeUtilityResponse(message, text) {
   return null;
 }
 
+function makeSlashCommandMessage(interaction, content, channelOverride = null) {
+  const channel = channelOverride ?? interaction.channel;
+  const members = new Collection();
+  const channels = new Collection();
+  const roles = new Collection();
+  for (const match of String(content).matchAll(/<@!?(\d+)>/g)) {
+    const member = interaction.guild.members.cache.get(match[1]);
+    if (member) members.set(member.id, member);
+  }
+  for (const match of String(content).matchAll(/<#(\d+)>/g)) {
+    const target = interaction.guild.channels.cache.get(match[1]);
+    if (target) channels.set(target.id, target);
+  }
+  for (const match of String(content).matchAll(/<@&(\d+)>/g)) {
+    const role = interaction.guild.roles.cache.get(match[1]);
+    if (role) roles.set(role.id, role);
+  }
+  const member = interaction.guild.members.cache.get(interaction.user.id) ?? interaction.member;
+  return {
+    id: interaction.id,
+    guild: interaction.guild,
+    guildId: interaction.guildId,
+    channel,
+    channelId: channel.id,
+    member,
+    author: interaction.user,
+    content,
+    cleanContent: content,
+    createdAt: interaction.createdAt,
+    reference: null,
+    mentions: { members, channels, roles, repliedUser: null },
+    async reply(payload) {
+      const data = typeof payload === "string" ? { content: payload } : payload;
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply(data);
+        return interaction.fetchReply();
+      }
+      return interaction.followUp({ ...data, fetchReply: true });
+    },
+  };
+}
+
+function slashCommandContent(interaction) {
+  const name = interaction.commandName;
+  const userMention = (optionName) => {
+    const user = interaction.options.getUser(optionName, false);
+    return user ? `<@${user.id}>` : "";
+  };
+  const roleMention = (optionName) => {
+    const role = interaction.options.getRole(optionName, false);
+    return role ? `<@&${role.id}>` : "";
+  };
+  const channelMention = (optionName) => {
+    const channel = interaction.options.getChannel(optionName, false);
+    return channel ? `<#${channel.id}>` : "";
+  };
+  const reason = interaction.options.getString("reason", false) || "No reason provided.";
+  const mappings = {
+    commands: "commands",
+    ping: "ping",
+    test: "test",
+    serverinfo: "serverinfo",
+    userinfo: `userinfo ${userMention("member")}`,
+    avatar: `avatar ${userMention("member")}`,
+    channelinfo: `channelinfo ${channelMention("channel")}`,
+    roleinfo: `roleinfo ${roleMention("role")}`,
+    ship: `ship ${userMention("user1")} ${userMention("user2")}`,
+    curse: `curse ${userMention("user")}`,
+    spinwheel: `spinwheel ${interaction.options.getString("choices", true)}`,
+    remind: `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`,
+    join: "join",
+    leave: "leave",
+    ban: `ban ${userMention("member")} ${reason}`,
+    unban: `unban ${interaction.options.getString("user-id", true)} ${reason}`,
+    kick: `kick ${userMention("member")} ${reason}`,
+    timeout: `timeout ${userMention("member")} ${interaction.options.getInteger("minutes", true)}m ${reason}`,
+    warn: `warn ${userMention("member")} ${reason}`,
+    warnings: `warnings ${userMention("member")}`,
+    clearwarnings: `clear ${interaction.options.getString("count", true)} warnings for ${userMention("member")}`,
+    clear: `purge ${interaction.options.getInteger("count", true)}`,
+    addrole: `add role ${roleMention("role")} to ${userMention("member")} ${reason}`,
+    removerole: `remove role ${roleMention("role")} from ${userMention("member")} ${reason}`,
+    tool: interaction.options.getString("request", true),
+    bulk: `bulk ${interaction.options.getString("commands", true)}`,
+    sendrules: "sendrules",
+  };
+  if (name === "quote") {
+    const action = interaction.options.getString("action", false) || "view";
+    const quoteText = interaction.options.getString("text", false) || "";
+    return action === "view" ? "quote" : `quote ${action} ${quoteText}`.trim();
+  }
+  return mappings[name] ?? null;
+}
+
 async function makeSlashDuckResponse(interaction, prompt) {
   const normalized = normalizeText(prompt || "commands");
 
@@ -5352,10 +5879,11 @@ async function makeSlashDuckResponse(interaction, prompt) {
       makeUtilityHelp(),
       "",
       "Slash commands:",
-      "- `/duck prompt:commands`",
-      "- `/duck-tools`",
-      "- `/setup`",
-      "- `/entry-setup`",
+      "- `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`",
+      "- `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`",
+      "- `/clear`, `/clearwarnings`, `/addrole`, `/removerole`, `/tool`",
+      "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
+      "- `/setup`, `/entry-setup`, `/duck-tools`",
       "",
       "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
     ].join("\n");
@@ -5582,7 +6110,7 @@ function startInviteCleanupLoop() {
   cleanupOldInvites().catch((err) => logWarn("invite.cleanup-start-failed", { error: err?.message || String(err) }));
 }
 
-async function registerCommands(client) {
+async function registerCommands(client, options = {}) {
   const startedAt = Date.now();
   const setupCommand = new SlashCommandBuilder()
     .setName("setup")
@@ -5645,11 +6173,122 @@ async function registerCommands(client) {
         .setRequired(false),
     );
 
+  const memberReasonCommand = (name, description, permission) => new SlashCommandBuilder()
+    .setName(name)
+    .setDescription(description)
+    .setDefaultMemberPermissions(permission)
+    .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
+    .addStringOption((option) => option.setName("reason").setDescription("Reason for the action.").setRequired(true));
+
+  const utilityCommands = [
+    new SlashCommandBuilder().setName("commands").setDescription("Show Duck's command list."),
+    new SlashCommandBuilder().setName("ping").setDescription("Show Duck's Discord gateway latency."),
+    new SlashCommandBuilder().setName("test").setDescription("Run Duck's diagnostic checks."),
+    new SlashCommandBuilder().setName("serverinfo").setDescription("Show server information."),
+    new SlashCommandBuilder().setName("userinfo").setDescription("Show member information.")
+      .addUserOption((option) => option.setName("member").setDescription("Member to inspect.").setRequired(false)),
+    new SlashCommandBuilder().setName("avatar").setDescription("Show a member's avatar.")
+      .addUserOption((option) => option.setName("member").setDescription("Member whose avatar to show.").setRequired(false)),
+    new SlashCommandBuilder().setName("channelinfo").setDescription("Show channel information.")
+      .addChannelOption((option) => option.setName("channel").setDescription("Channel to inspect.").setRequired(false)),
+    new SlashCommandBuilder().setName("roleinfo").setDescription("Show role information.")
+      .addRoleOption((option) => option.setName("role").setDescription("Role to inspect.").setRequired(true)),
+    new SlashCommandBuilder().setName("ship").setDescription("Calculate a deterministic compatibility score.")
+      .addUserOption((option) => option.setName("user1").setDescription("First user.").setRequired(true))
+      .addUserOption((option) => option.setName("user2").setDescription("Second user; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("curse").setDescription("Cast a funny curse or blessing.")
+      .addUserOption((option) => option.setName("user").setDescription("Target user.").setRequired(false)),
+    new SlashCommandBuilder().setName("spinwheel").setDescription("Pick from comma-separated choices.")
+      .addStringOption((option) => option.setName("choices").setDescription("Example: pizza, tacos, sushi").setRequired(true)),
+    new SlashCommandBuilder().setName("remind").setDescription("Set a reminder in this channel.")
+      .addStringOption((option) => option.setName("time").setDescription("Examples: 30s, 10m, 2h.").setRequired(true))
+      .addStringOption((option) => option.setName("text").setDescription("Reminder text.").setRequired(true)),
+    new SlashCommandBuilder().setName("quote").setDescription("View, add, or list quotes.")
+      .addStringOption((option) => option.setName("action").setDescription("view, add, or list").setRequired(false)
+        .addChoices({ name: "View random", value: "view" }, { name: "Add", value: "add" }, { name: "List", value: "list" }))
+      .addStringOption((option) => option.setName("text").setDescription("Quote text when adding.").setRequired(false)),
+    new SlashCommandBuilder().setName("join").setDescription("Join your voice channel and read this text channel."),
+    new SlashCommandBuilder().setName("leave").setDescription("Disconnect Duck from voice."),
+  ];
+
+  const moderationCommands = [
+    memberReasonCommand("ban", "Ban a member after Administrator confirmation.", PermissionsBitField.Flags.BanMembers),
+    new SlashCommandBuilder().setName("unban").setDescription("Unban an exact Discord user ID.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.BanMembers)
+      .addStringOption((option) => option.setName("user-id").setDescription("Exact Discord user ID.").setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for unbanning.").setRequired(true)),
+    memberReasonCommand("kick", "Kick a member after Administrator confirmation.", PermissionsBitField.Flags.KickMembers),
+    new SlashCommandBuilder().setName("timeout").setDescription("Timeout a member for up to 28 days.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ModerateMembers)
+      .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
+      .addIntegerOption((option) => option.setName("minutes").setDescription("Timeout duration in minutes.").setMinValue(1).setMaxValue(40320).setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for timeout.").setRequired(true)),
+    memberReasonCommand("warn", "Store and DM a warning after confirmation.", PermissionsBitField.Flags.ModerateMembers),
+    new SlashCommandBuilder().setName("warnings").setDescription("List stored warnings for a member.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ModerateMembers)
+      .addUserOption((option) => option.setName("member").setDescription("Member to inspect.").setRequired(true)),
+    new SlashCommandBuilder().setName("clearwarnings").setDescription("Clear stored warnings after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ModerateMembers)
+      .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
+      .addStringOption((option) => option.setName("count").setDescription("Number to clear, or all.").setRequired(true)),
+    new SlashCommandBuilder().setName("clear").setDescription("Purge recent messages after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
+      .addIntegerOption((option) => option.setName("count").setDescription("Messages to remove.").setMinValue(1).setMaxValue(100).setRequired(true)),
+    new SlashCommandBuilder().setName("addrole").setDescription("Assign an editable role after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageRoles)
+      .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
+      .addRoleOption((option) => option.setName("role").setDescription("Role to add.").setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for role assignment.").setRequired(false)),
+    new SlashCommandBuilder().setName("removerole").setDescription("Remove an editable role after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageRoles)
+      .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
+      .addRoleOption((option) => option.setName("role").setDescription("Role to remove.").setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for role removal.").setRequired(false)),
+    new SlashCommandBuilder().setName("tool").setDescription("Run any Duck tool using a normal-language request.")
+      .addStringOption((option) => option.setName("request").setDescription("Example: lock #general for a raid").setRequired(true)),
+  ];
+
+  const adminCommands = [
+    new SlashCommandBuilder().setName("sendrules").setDescription("Post the formatted server rules embed.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
+    new SlashCommandBuilder().setName("announce").setDescription("Send an approved server announcement.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+      .addBooleanOption((option) => option.setName("embed").setDescription("Use an embed instead of raw text.").setRequired(true))
+      .addStringOption((option) => option.setName("message").setDescription("Announcement text.").setRequired(true))
+      .addRoleOption((option) => option.setName("role").setDescription("Optional role to mention.").setRequired(false))
+      .addChannelOption((option) => option.setName("channel").setDescription("Destination; defaults to this channel.").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(false)),
+    new SlashCommandBuilder().setName("bulk").setDescription("Prepare 2-10 moderation actions as one confirmed batch.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+      .addStringOption((option) => option.setName("commands").setDescription("Separate actions with semicolons.").setRequired(true)),
+    new SlashCommandBuilder().setName("prefix").setDescription("Set this server's additional Duck command prefix.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+      .addStringOption((option) => option.setName("value").setDescription("1-5 visible characters, such as !! or ?").setMinLength(1).setMaxLength(5).setRequired(true)),
+  ];
+
+  const body = [
+      duckCommand,
+      setupCommand,
+      toolsCommand,
+      entrySetupCommand,
+      ...utilityCommands,
+      ...moderationCommands,
+      ...adminCommands,
+    ].map((command) => command.toJSON());
+  if (options.dryRun) return body;
+
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-  await rest.put(Routes.applicationCommands(client.user.id), {
-    body: [duckCommand.toJSON(), setupCommand.toJSON(), toolsCommand.toJSON(), entrySetupCommand.toJSON()],
+  await rest.put(Routes.applicationCommands(client.user.id), { body });
+  logInfo("discord.commands-registered", {
+    appId: client.user.id,
+    count: 4 + utilityCommands.length + moderationCommands.length + adminCommands.length,
+    ms: elapsedMs(startedAt),
   });
-  logInfo("discord.commands-registered", { appId: client.user.id, ms: elapsedMs(startedAt) });
+}
+
+if (process.argv.includes("--check-commands")) {
+  const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
+  console.log(`Validated ${body.length} slash commands: ${body.map((command) => command.name).join(", ")}`);
+  process.exit(0);
 }
 
 requireConfig();
@@ -5751,6 +6390,52 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const chunk of chunks.slice(1)) {
           await interaction.followUp({ content: chunk, ephemeral: true });
         }
+        return;
+      }
+
+      if (interaction.commandName === "prefix") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+          await interaction.reply({ content: "Only an Administrator can change Duck's command prefix.", ephemeral: true });
+          return;
+        }
+        const value = interaction.options.getString("value", true).trim();
+        if (!value || value.length > 5 || /[\s/@]/.test(value)) {
+          await interaction.reply({ content: "Use 1-5 visible characters without spaces, `/`, or `@`.", ephemeral: true });
+          return;
+        }
+        updateGuildSettings(interaction.guildId, { commandPrefix: value });
+        await interaction.reply({ content: `Duck's additional prefix is now \`${value}\`. \`!\`, \`!!\`, and slash commands still work.`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "announce") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+          await interaction.reply({ content: "Only an Administrator can prepare announcements.", ephemeral: true });
+          return;
+        }
+        const targetChannel = interaction.options.getChannel("channel", false) ?? interaction.channel;
+        const role = interaction.options.getRole("role", false);
+        const messageText = interaction.options.getString("message", true).trim();
+        const slashMessage = makeSlashCommandMessage(interaction, "announce");
+        await promptForConfirmation(slashMessage, {
+          tool: "announce",
+          risk: "high",
+          channelId: targetChannel.id,
+          channelName: targetChannel.name,
+          messageText,
+          embedAnnouncement: interaction.options.getBoolean("embed", true),
+          mentionRoleId: role?.id ?? null,
+          reason: "Administrator announcement request.",
+          summary: `announce in ${summarizeChannel(targetChannel)}${role ? ` mentioning @${role.name}` : " without a role ping"}`,
+        }, { content: "Announcement prepared for confirmation.", useEmbed: true });
+        return;
+      }
+
+      const explicitContent = slashCommandContent(interaction);
+      if (explicitContent) {
+        const slashMessage = makeSlashCommandMessage(interaction, explicitContent);
+        if (await handleExplicitCommand(slashMessage, explicitContent)) return;
+        await interaction.reply({ content: "I could not validate that command. Check the target and arguments, then try again.", ephemeral: true });
         return;
       }
 
@@ -5903,11 +6588,12 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     rememberMessage(message);
     if (!message.guild || message.author.bot) return;
+    queueVoiceMessage(message);
 
     const guildSettings = getGuildSettings(message.guildId);
     const configuredChannelId = guildSettings.modChannelId;
     const invocation = await getDuckInvocation(message, client);
-    const legacyCommandContent = getLegacyCommandContent(message.content);
+    const legacyCommandContent = getLegacyCommandContent(message.content, message.guildId);
     const inConfiguredChannel = configuredChannelId && message.channelId === configuredChannelId;
     logDebug("message.received", {
       messageId: message.id,
@@ -5922,15 +6608,16 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (legacyCommandContent) {
       const legacyMessage = makeMessageWithContent(message, legacyCommandContent);
-      const utilityResponse = await makeUtilityResponse(legacyMessage, legacyCommandContent);
-      if (utilityResponse) {
-        await sendMessageChunks(message, utilityResponse);
-        logInfo("message.legacy-utility-response", {
+      if (await handleExplicitCommand(legacyMessage, legacyCommandContent)) {
+        logInfo("message.legacy-command", {
           messageId: message.id,
+          command: normalizeText(legacyCommandContent).split(" ")[0],
           ms: elapsedMs(messageStartedAt),
         });
         return;
       }
+      await sendMessageChunks(message, "Unknown command. Use `!commands` or `/commands`.");
+      return;
     }
 
     const isConfirmText = normalizeText(message.content) === "i confirm";
