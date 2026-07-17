@@ -206,7 +206,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "grep_messages",
-    risk: "medium",
+    risk: "low",
     description: "Search recent readable messages in the current or mentioned text channel for keywords.",
   },
   {
@@ -216,7 +216,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "view_warnings",
-    risk: "medium",
+    risk: "low",
     description: "Show stored warnings for a mentioned server member.",
   },
   {
@@ -503,10 +503,23 @@ const COMMAND_PRESENTATION = Object.freeze({
 });
 
 const RISK_COPY = {
+  low: "This read-only action is low risk.",
   medium: "This action needs Administrator confirmation before I do anything.",
   high: "This moderation action needs Administrator confirmation before I do anything.",
   critical: "I'm sorry, I need approval from a person that has Administrator.",
 };
+
+const CAPABILITY_MODES = Object.freeze({
+  ask: "ask",
+  approve: "approve",
+  agent: "agent",
+});
+
+const CAPABILITY_MODE_LABELS = Object.freeze({
+  ask: "Ask for approval",
+  approve: "Approve for me",
+  agent: "Agent mode",
+});
 
 function loadDotEnv() {
   const envPath = path.join(process.cwd(), ".env");
@@ -890,6 +903,15 @@ function getGuildSettings(guildId) {
   const settings = loadSettings();
   settings.guilds[guildId] ??= {};
   return settings.guilds[guildId];
+}
+
+function getGuildCapabilityMode(guildId) {
+  const mode = getGuildSettings(guildId).capabilityMode;
+  return Object.values(CAPABILITY_MODES).includes(mode) ? mode : CAPABILITY_MODES.ask;
+}
+
+function getCapabilityModeLabel(mode) {
+  return CAPABILITY_MODE_LABELS[mode] ?? CAPABILITY_MODE_LABELS.ask;
 }
 
 function updateGuildSettings(guildId, patch) {
@@ -1689,7 +1711,7 @@ function planModerationToolFromText(message, rawText) {
     if (!member) return { error: "Tell me whose warnings to view by mentioning them." };
     return {
       tool: "view_warnings",
-      risk: "medium",
+      risk: "low",
       targetId: member.id,
       reason: "Warning history lookup.",
       summary: `view warnings for ${member.displayName}, ${member.user.username}`,
@@ -1785,7 +1807,7 @@ function planModerationToolFromText(message, rawText) {
     const count = parseGrepResultCount(text);
     return {
       tool: "grep_messages",
-      risk: "medium",
+      risk: "low",
       channelId: channel.id,
       channelName: channel.name,
       query,
@@ -4462,6 +4484,84 @@ function makeConfirmationRows(actionId) {
   ];
 }
 
+function makeAgentModeConfirmationRows(requesterId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`duck_capability_agent:${requesterId}`)
+        .setLabel("Enable Agent Mode")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`duck_capability_cancel:${requesterId}`)
+        .setLabel("Cancel")
+        .setStyle(ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+async function handleCapabilityCommand(interaction) {
+  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+    await interaction.reply({ content: "Only an Administrator can change Duck's capability mode.", ephemeral: true });
+    return;
+  }
+
+  const mode = interaction.options.getString("mode", true);
+  if (!Object.values(CAPABILITY_MODES).includes(mode)) {
+    await interaction.reply({ content: "That capability mode is not valid.", ephemeral: true });
+    return;
+  }
+
+  if (mode === CAPABILITY_MODES.agent) {
+    await interaction.reply({
+      content: [
+        "**Enable Agent mode?**",
+        "Duck will immediately execute every validated action, including high-risk and critical server changes, without another approval prompt.",
+        "Requester permissions, role hierarchy, exact-target checks, and Duck's Discord permissions still apply.",
+      ].join("\n"),
+      components: makeAgentModeConfirmationRows(interaction.user.id),
+      ephemeral: true,
+    });
+    return;
+  }
+
+  updateGuildSettings(interaction.guildId, { capabilityMode: mode });
+  logInfo("settings.capability-mode-updated", {
+    guildId: interaction.guildId,
+    userId: interaction.user.id,
+    mode,
+  });
+  await interaction.reply({
+    content: `Duck capability mode is now **${getCapabilityModeLabel(mode)}**.`,
+    ephemeral: true,
+  });
+}
+
+async function handleCapabilityButton(interaction, kind, requesterId) {
+  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+    await interaction.reply({ content: "Only an Administrator can change Duck's capability mode.", ephemeral: true });
+    return;
+  }
+  if (interaction.user.id !== requesterId) {
+    await interaction.reply({ content: "Only the Administrator who opened this prompt can finish this change.", ephemeral: true });
+    return;
+  }
+
+  if (kind === "duck_capability_cancel") {
+    await interaction.update({ content: "Capability mode change cancelled.", components: [] });
+    return;
+  }
+
+  updateGuildSettings(interaction.guildId, { capabilityMode: CAPABILITY_MODES.agent });
+  logWarn("settings.agent-mode-enabled", {
+    guildId: interaction.guildId,
+    userId: interaction.user.id,
+  });
+  await interaction.update({
+    content: "Duck capability mode is now **Agent mode**. Validated actions will execute immediately without approval prompts.",
+    components: [],
+  });
+}
+
 function formatWarningsForMember(member, warnings) {
   if (!warnings.length) {
     return `${member.displayName}, ${member.user.username} has no stored warnings.`;
@@ -4485,7 +4585,7 @@ function makeActionEmbed(action) {
   const embed = new EmbedBuilder()
     .setTitle(`Approval Required: ${commandLabel(action)}`)
     .setDescription(RISK_COPY[action.risk])
-    .setColor(action.risk === "critical" ? DUCK_COLORS.danger : action.risk === "high" ? 0xf47b20 : DUCK_COLORS.warning)
+    .setColor(action.risk === "critical" ? DUCK_COLORS.danger : action.risk === "high" ? 0xf47b20 : action.risk === "low" ? DUCK_COLORS.success : DUCK_COLORS.warning)
     .addFields(
       { name: "Action", value: `**${commandLabel(action)}**`, inline: true },
       { name: "Risk", value: `**${riskLabel}**`, inline: true },
@@ -4554,6 +4654,16 @@ function describeAction(action) {
   if (action.pollOptions?.length) lines.push(`Options: ${action.pollOptions.join(" | ")}`);
 
   return lines.join("\n");
+}
+
+function makeActionAuditReason(action, approver, detail = action.reason) {
+  const actor = approver?.user?.tag || approver?.id || "unknown requester";
+  const prefix = action.approvalMode === CAPABILITY_MODES.agent
+    ? `Duck Agent mode request by ${actor}`
+    : action.approvalMode === CAPABILITY_MODES.approve
+      ? `Duck auto-approved low-risk request by ${actor}`
+      : `Duck approved by ${actor}`;
+  return `${prefix}: ${detail || "No reason provided."}`.slice(0, 512);
 }
 
 async function promptForConfirmation(message, action, options = {}) {
@@ -4628,6 +4738,7 @@ async function executeAction(client, action, approver) {
           guildId: action.guildId,
           requestChannelId: action.requestChannelId,
           promptId: action.promptId,
+          approvalMode: action.approvalMode,
         }, approver);
         results.push(`${index + 1}. ${result}`);
       } catch (err) {
@@ -4646,7 +4757,7 @@ async function executeAction(client, action, approver) {
     const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    await member.ban({ reason: `Duck approved by ${approver.user.tag}: ${action.reason}` });
+    await member.ban({ reason: makeActionAuditReason(action, approver) });
     const result = `I have banned ${summarizeMemberName(member)}.`;
     logInfo("moderation.execute.done", { actionId: action.id, tool: action.tool, ms: elapsedMs(startedAt) });
     return result;
@@ -4655,7 +4766,7 @@ async function executeAction(client, action, approver) {
   if (action.tool === "unban_user") {
     const bannedUser = await guild.bans.fetch(action.targetId).catch(() => null);
     if (!bannedUser) return `User ID ${action.targetId} is not currently banned.`;
-    await guild.members.unban(action.targetId, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await guild.members.unban(action.targetId, makeActionAuditReason(action, approver));
     return `I have unbanned ${bannedUser.user.tag} (${action.targetId}).`;
   }
 
@@ -4665,7 +4776,7 @@ async function executeAction(client, action, approver) {
     if (blockReason) return blockReason;
     const displayName = member.displayName;
     const username = member.user.username;
-    await member.kick(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.kick(makeActionAuditReason(action, approver));
     return `I have kicked ${displayName}, ${username}.`;
   }
 
@@ -4677,9 +4788,9 @@ async function executeAction(client, action, approver) {
     const username = member.user.username;
     await guild.members.ban(member.id, {
       deleteMessageSeconds: action.deleteMessageSeconds ?? 7 * 24 * 60 * 60,
-      reason: `Duck softban approved by ${approver.user.tag}: ${action.reason}`,
+      reason: makeActionAuditReason(action, approver, `Softban: ${action.reason}`),
     });
-    await guild.members.unban(member.id, `Duck softban unban approved by ${approver.user.tag}`);
+    await guild.members.unban(member.id, makeActionAuditReason(action, approver, "Softban automatic unban"));
     return `I have softbanned ${displayName}, ${username}.`;
   }
 
@@ -4687,7 +4798,7 @@ async function executeAction(client, action, approver) {
     const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    await member.timeout(action.durationMs, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.timeout(action.durationMs, makeActionAuditReason(action, approver));
     return `I have timed out ${summarizeMemberName(member)}.`;
   }
 
@@ -4695,7 +4806,7 @@ async function executeAction(client, action, approver) {
     const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    await member.timeout(null, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.timeout(null, makeActionAuditReason(action, approver));
     return `I have removed timeout from ${summarizeMemberName(member)}.`;
   }
 
@@ -4733,7 +4844,7 @@ async function executeAction(client, action, approver) {
     const member = await cachedMember(guild, action.targetId);
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    await member.setNickname(action.nickname, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.setNickname(action.nickname, makeActionAuditReason(action, approver));
     return `I have set ${member.user.username}'s nickname to "${action.nickname}".`;
   }
 
@@ -4749,11 +4860,11 @@ async function executeAction(client, action, approver) {
     }
 
     if (action.tool === "add_role") {
-      await member.roles.add(role, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+      await member.roles.add(role, makeActionAuditReason(action, approver));
       return `I have added @${role.name} to ${member.displayName}, ${member.user.username}.`;
     }
 
-    await member.roles.remove(role, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.roles.remove(role, makeActionAuditReason(action, approver));
     return `I have removed @${role.name} from ${member.displayName}, ${member.user.username}.`;
   }
 
@@ -4762,7 +4873,7 @@ async function executeAction(client, action, approver) {
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    await member.voice.disconnect(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.voice.disconnect(makeActionAuditReason(action, approver));
     return `I have disconnected ${member.displayName}, ${member.user.username} from voice.`;
   }
 
@@ -4773,7 +4884,7 @@ async function executeAction(client, action, approver) {
     if (!member.voice.channel) return `${member.displayName}, ${member.user.username} is not in voice.`;
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
-    await member.voice.setChannel(channel, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.voice.setChannel(channel, makeActionAuditReason(action, approver));
     return `I have moved ${member.displayName}, ${member.user.username} to ${channel.name}.`;
   }
 
@@ -4783,7 +4894,7 @@ async function executeAction(client, action, approver) {
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     const mute = action.tool === "voice_mute_member";
-    await member.voice.setMute(mute, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.voice.setMute(mute, makeActionAuditReason(action, approver));
     return mute
       ? `I have voice muted ${member.displayName}, ${member.user.username}.`
       : `I have removed voice mute from ${member.displayName}, ${member.user.username}.`;
@@ -4795,7 +4906,7 @@ async function executeAction(client, action, approver) {
     const blockReason = memberActionBlockReason(action, botMember, member);
     if (blockReason) return blockReason;
     const deaf = action.tool === "deafen_member";
-    await member.voice.setDeaf(deaf, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await member.voice.setDeaf(deaf, makeActionAuditReason(action, approver));
     return deaf
       ? `I have deafened ${member.displayName}, ${member.user.username}.`
       : `I have removed deafen from ${member.displayName}, ${member.user.username}.`;
@@ -4807,7 +4918,7 @@ async function executeAction(client, action, approver) {
     if (action.channelName && channel.name !== action.channelName) {
       return `I did not delete anything because the target channel changed from "${action.channelName}" to "${channel.name}".`;
     }
-    await channel.delete(`Duck approved by ${approver.user.tag}`);
+    await channel.delete(makeActionAuditReason(action, approver));
     resourceFetchCache.delete(`channel:${guild.id}:${action.channelId}`);
     invalidateChannelMessageCache(action.channelId, guild.id);
     return `I have deleted the channel "${action.channelName}".`;
@@ -4900,7 +5011,7 @@ async function executeAction(client, action, approver) {
       return "I can only set slowmode in a text channel.";
     }
 
-    await channel.setRateLimitPerUser(action.seconds, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await channel.setRateLimitPerUser(action.seconds, makeActionAuditReason(action, approver));
     return `I have set slowmode in ${channel} to ${action.seconds} second${action.seconds === 1 ? "" : "s"}.`;
   }
 
@@ -4917,7 +5028,7 @@ async function executeAction(client, action, approver) {
       CreatePublicThreads: denySend ? false : null,
       CreatePrivateThreads: denySend ? false : null,
     }, {
-      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+      reason: makeActionAuditReason(action, approver),
     });
 
     return denySend ? `I have locked ${channel}.` : `I have unlocked ${channel}.`;
@@ -4927,7 +5038,7 @@ async function executeAction(client, action, approver) {
     const channel = await guild.channels.create({
       name: action.channelName,
       type: ChannelType.GuildText,
-      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+      reason: makeActionAuditReason(action, approver),
     });
     return `I have created ${channel}.`;
   }
@@ -4936,7 +5047,7 @@ async function executeAction(client, action, approver) {
     const channel = await guild.channels.create({
       name: action.channelName,
       type: ChannelType.GuildVoice,
-      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+      reason: makeActionAuditReason(action, approver),
     });
     return `I have created voice channel ${channel.name}.`;
   }
@@ -4945,7 +5056,7 @@ async function executeAction(client, action, approver) {
     const channel = await cachedChannel(guild, action.channelId);
     if (!channel || !("setName" in channel)) return "I can only rename a guild channel.";
     const oldName = channel.name;
-    await channel.setName(action.newName, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await channel.setName(action.newName, makeActionAuditReason(action, approver));
     resourceFetchCache.delete(`channel:${guild.id}:${action.channelId}`);
     return `I have renamed ${oldName} to ${action.newName}.`;
   }
@@ -4953,7 +5064,7 @@ async function executeAction(client, action, approver) {
   if (action.tool === "set_channel_topic") {
     const channel = await cachedChannel(guild, action.channelId);
     if (!channel || !("setTopic" in channel)) return "I can only set topics in a text channel.";
-    await channel.setTopic(action.topic, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await channel.setTopic(action.topic, makeActionAuditReason(action, approver));
     return `I have updated the topic in ${channel}.`;
   }
 
@@ -5002,11 +5113,11 @@ async function executeAction(client, action, approver) {
     if (!targetMessage) return "I could not find that message.";
 
     if (action.tool === "pin_message") {
-      await targetMessage.pin(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+      await targetMessage.pin(makeActionAuditReason(action, approver));
       return `I have pinned that message in ${channel}.`;
     }
 
-    await targetMessage.unpin(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await targetMessage.unpin(makeActionAuditReason(action, approver));
     return `I have unpinned that message in ${channel}.`;
   }
 
@@ -5019,7 +5130,7 @@ async function executeAction(client, action, approver) {
     const thread = await channel.threads.create({
       name: action.threadName,
       autoArchiveDuration: 1440,
-      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+      reason: makeActionAuditReason(action, approver),
     });
     resourceFetchCache.delete(`channel:${guild.id}:${action.channelId}`);
     return `I have created thread ${thread}.`;
@@ -5029,7 +5140,7 @@ async function executeAction(client, action, approver) {
     const role = await cachedRole(guild, action.roleId);
     if (!canManageRole(botMember, role)) return "I cannot recolor that role because it is managed, missing, or at/above Duck's highest role.";
 
-    await role.setColor(action.color, `Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await role.setColor(action.color, makeActionAuditReason(action, approver));
     resourceFetchCache.delete(`role:${guild.id}:${action.roleId}`);
     return `I have set @${role.name}'s color to ${formatRoleColor(action.color)}.`;
   }
@@ -5070,7 +5181,7 @@ async function executeAction(client, action, approver) {
   if (action.tool === "create_role") {
     const role = await guild.roles.create({
       name: action.roleName,
-      reason: `Duck approved by ${approver.user.tag}: ${action.reason}`,
+      reason: makeActionAuditReason(action, approver),
     });
     return `I have created @${role.name}.`;
   }
@@ -5079,12 +5190,73 @@ async function executeAction(client, action, approver) {
     const role = await cachedRole(guild, action.roleId);
     if (!canManageRole(botMember, role)) return "I cannot delete that role because it is managed, missing, or at/above Duck's highest role.";
     const roleName = role.name;
-    await role.delete(`Duck approved by ${approver.user.tag}: ${action.reason}`);
+    await role.delete(makeActionAuditReason(action, approver));
     resourceFetchCache.delete(`role:${guild.id}:${action.roleId}`);
     return `I have deleted @${roleName}.`;
   }
 
   return "I do not know how to run that tool.";
+}
+
+function shouldAutoExecuteAction(guildId, action) {
+  const mode = getGuildCapabilityMode(guildId);
+  if (mode === CAPABILITY_MODES.agent) return { autoExecute: true, mode };
+  if (mode === CAPABILITY_MODES.approve) {
+    const actions = action.tool === "bulk_actions" ? action.actions ?? [] : [action];
+    return {
+      autoExecute: actions.length > 0 && actions.every((item) => item.risk === "low"),
+      mode,
+    };
+  }
+  return { autoExecute: false, mode: CAPABILITY_MODES.ask };
+}
+
+async function dispatchPlannedAction(message, action, options = {}) {
+  const policy = shouldAutoExecuteAction(message.guildId, action);
+  if (!policy.autoExecute) {
+    await promptForConfirmation(message, action, options);
+    return { autoExecuted: false, mode: policy.mode };
+  }
+
+  const approver = await resolveApprover(message);
+  const executionAction = {
+    ...action,
+    id: `duck_auto:${Date.now()}:${message.id}`,
+    guildId: message.guildId,
+    requestedBy: message.author.id,
+    requestChannelId: message.channelId,
+    approvalMode: policy.mode,
+  };
+  const startedAt = Date.now();
+  let result;
+  try {
+    result = await executeAction(client, executionAction, approver);
+  } catch (err) {
+    logError("capability.auto-execute-failed", err, {
+      guildId: message.guildId,
+      requesterId: message.author.id,
+      tool: action.tool,
+      mode: policy.mode,
+    });
+    result = `Duck hit an error while automatically running \`${action.tool}\`: ${err?.message || String(err)}`;
+  }
+
+  logInfo("capability.auto-executed", {
+    guildId: message.guildId,
+    requesterId: message.author.id,
+    tool: action.tool,
+    mode: policy.mode,
+    ms: elapsedMs(startedAt),
+  });
+
+  const payload = makeDuckChatPayload(message, result, {
+    title: policy.mode === CAPABILITY_MODES.agent ? "Agent Mode Result" : "Low-Risk Action Result",
+    color: /^Duck hit an error/.test(result) ? DUCK_COLORS.danger : DUCK_COLORS.success,
+    footer: `${getCapabilityModeLabel(policy.mode)} | Requested by ${message.author.username}`,
+  });
+  if (options.messageToEdit) await options.messageToEdit.edit(payload);
+  else await message.reply(payload);
+  return { autoExecuted: true, mode: policy.mode, result };
 }
 
 async function resolveApprover(interactionOrMessage) {
@@ -5557,7 +5729,7 @@ function makeUtilityHelp() {
     "`/clear` `/clearwarnings` `/addrole` `/removerole` `/tool`",
     "",
     "**Server Administration**",
-    "`/announce` `/sendrules` `/bulk` `/prefix` `/setup` `/entry-setup`",
+    "`/announce` `/sendrules` `/bulk` `/prefix` `/capibility` `/setup` `/entry-setup`",
     "",
     "**Information & Utilities**",
     "`/userinfo` `/avatar` `/serverinfo` `/channelinfo` `/roleinfo`",
@@ -5584,6 +5756,7 @@ function makeDiagnosticResponse(message) {
     ["Current channel", Boolean(channelPermissions?.has(PermissionsBitField.Flags.ViewChannel) && channelPermissions.has(PermissionsBitField.Flags.SendMessages)), "view + send"],
     ["Message history", Boolean(channelPermissions?.has(PermissionsBitField.Flags.ReadMessageHistory)), "read history"],
     ["Moderation channel", Boolean(getGuildSettings(message.guildId).modChannelId), getGuildSettings(message.guildId).modChannelId ? "configured" : "not configured"],
+    ["Capability mode", true, getCapabilityModeLabel(getGuildCapabilityMode(message.guildId))],
     ["Cache", true, `${messageHistoryCache.size} message channels, ${resourceFetchCache.size} resources`],
     ["Storage writes", true, `${pendingJsonWrites.size} pending`],
     ["Voice runtime", supportsCurrentVoiceRuntime(), `${process.version}; requires Node >=22.12.0`],
@@ -5993,7 +6166,7 @@ async function handleExplicitCommand(message, text) {
       await sendMessageChunks(message, plan.error);
       return true;
     }
-    await promptForConfirmation(message, plan, {
+    await dispatchPlannedAction(message, plan, {
       content: `Prepared ${plan.actions.length} validated actions. One Administrator confirmation will run them in order.`,
       useEmbed: true,
     });
@@ -6053,7 +6226,7 @@ async function handleExplicitCommand(message, text) {
       await sendMessageChunks(message, "I could not resolve that role.");
       return true;
     }
-    await promptForConfirmation(message, {
+    await dispatchPlannedAction(message, {
       tool: "announce",
       risk: "high",
       channelId: message.channelId,
@@ -6089,7 +6262,7 @@ async function handleExplicitCommand(message, text) {
     await sendMessageChunks(message, hierarchyError);
     return true;
   }
-  await promptForConfirmation(message, plan, {
+  await dispatchPlannedAction(message, plan, {
     content: "Command validated. Waiting for Administrator confirmation.",
     useEmbed: true,
   });
@@ -6396,7 +6569,7 @@ function slashCommandContent(interaction) {
 }
 
 function validateSlashCommandDispatchers(commandBodies) {
-  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix"]);
+  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capibility"]);
   let validated = 0;
   for (const command of commandBodies) {
     if (separatelyHandled.has(command.name)) continue;
@@ -6891,6 +7064,17 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("prefix").setDescription("Set this server's additional Duck command prefix.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
       .addStringOption((option) => option.setName("value").setDescription("1-5 visible characters, such as !! or ?").setMinLength(1).setMaxLength(5).setRequired(true)),
+    new SlashCommandBuilder().setName("capibility").setDescription("Set how Duck approves and executes server actions.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+      .addStringOption((option) => option
+        .setName("mode")
+        .setDescription("Choose Duck's server action policy.")
+        .setRequired(true)
+        .addChoices(
+          { name: "Ask for approval", value: CAPABILITY_MODES.ask },
+          { name: "Approve for me (Recommended)", value: CAPABILITY_MODES.approve },
+          { name: "Agent mode", value: CAPABILITY_MODES.agent },
+        )),
   ];
 
   const body = [
@@ -7037,6 +7221,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      if (interaction.commandName === "capibility") {
+        await handleCapabilityCommand(interaction);
+        return;
+      }
+
       if (interaction.commandName === "announce") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
           await interaction.reply({ content: "Only an Administrator can prepare announcements.", ephemeral: true });
@@ -7046,7 +7235,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const role = interaction.options.getRole("role", false);
         const messageText = interaction.options.getString("message", true).trim();
         const slashMessage = makeSlashCommandMessage(interaction, "announce");
-        await promptForConfirmation(slashMessage, {
+        await dispatchPlannedAction(slashMessage, {
           tool: "announce",
           risk: "high",
           channelId: targetChannel.id,
@@ -7171,6 +7360,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await approveAction(interaction, actionId, client);
       } else if (kind === "duck_cancel") {
         await cancelAction(interaction, actionId);
+      } else if (kind === "duck_capability_agent" || kind === "duck_capability_cancel") {
+        await handleCapabilityButton(interaction, kind, actionId);
       } else {
         logWarn("discord.unknown-button", {
           customId: interaction.customId,
@@ -7387,7 +7578,7 @@ client.on(Events.MessageCreate, async (message) => {
         if (parsedToolCall.plan && !parsedToolCall.plan.error) {
           const needed = TOOL_REQUIREMENTS[parsedToolCall.plan.tool];
           if (!needed || hasPermission(message.member, needed)) {
-            await promptForConfirmation(message, parsedToolCall.plan, {
+            await dispatchPlannedAction(message, parsedToolCall.plan, {
               messageToEdit: queueMessage,
               content: parsedToolCall.content || "Prepared a moderation plan. Waiting for Administrator confirmation.",
               useEmbed: true,
@@ -7464,13 +7655,13 @@ client.on(Events.MessageCreate, async (message) => {
 
     const confirmationContent = toolResponseContent || "Prepared a moderation plan. Waiting for Administrator confirmation.";
     if (queueMessage) {
-      await promptForConfirmation(message, plan, {
+      await dispatchPlannedAction(message, plan, {
         messageToEdit: queueMessage,
         content: confirmationContent,
         useEmbed: true,
       });
     } else {
-      await promptForConfirmation(message, plan, {
+      await dispatchPlannedAction(message, plan, {
         content: confirmationContent,
         useEmbed: true,
       });

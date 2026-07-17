@@ -19,7 +19,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Text confirmation with `I confirm` for the latest pending action in the channel.
 - Pending confirmations are saved to disk so quick process/server restarts do not lose them.
 - Discord status shows Duck is watching for `duck` / `@Duck`.
-- Administrator approval required for every action.
+- Guild-configurable action approval through Administrator-only `/capibility` modes.
 - Permission checks for the person requesting, the Administrator confirming, and Duck itself.
 - OpenRouter-first chat for normal messages, with AI tool planning for moderation requests.
 - The AI receives bounded server context: channel list, role list, mentioned users, and recent messages from readable text channels.
@@ -39,7 +39,13 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 
 Common moderation commands are `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/clear`, `/addrole`, and `/removerole`. Prefix forms use the same names, such as `!warn @member spam` or `!!clear 25`.
 
-Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/setup`, and `/entry-setup`. Every state-changing moderation or server action still creates a confirmation prompt that only an Administrator can approve.
+Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/capibility`, `/setup`, and `/entry-setup`.
+
+`/capibility` controls how validated actions execute:
+
+- **Ask for approval:** every action waits for Administrator confirmation.
+- **Approve for me (Recommended):** read-only low-risk actions run immediately; medium, high, and critical actions still wait for confirmation.
+- **Agent mode:** every validated action runs immediately. Enabling this mode requires a second Administrator confirmation. Requester permissions, role hierarchy, exact-target validation, and Duck's Discord permissions still apply.
 
 Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/remind`, `/join`, `/tts`, and `/leave`.
 
@@ -107,7 +113,7 @@ I have deleted the channel "General".
 
 ## AI Tool Calling
 
-Duck's AI never executes tools directly. It only returns a JSON plan for moderation requests, then Duck validates that plan and shows an Administrator-only confirmation prompt.
+Duck's AI never calls Discord APIs directly. It returns a JSON plan, Duck validates that plan, and the guild's `/capibility` policy decides whether to execute it or show an Administrator-only confirmation prompt.
 
 For chat responses, Duck also supports hidden inline tool markers. The AI can respond normally and end with:
 
