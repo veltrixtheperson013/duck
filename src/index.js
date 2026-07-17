@@ -32,7 +32,6 @@ import {
   joinVoiceChannel,
   version as voicePackageVersion,
 } from "@discordjs/voice";
-import { Communicate } from "edge-tts-ts";
 
 const dataDir = path.join(process.cwd(), "data");
 const settingsPath = path.join(dataDir, "settings.json");
@@ -52,6 +51,7 @@ const voiceSessions = new Map();
 const commandCooldowns = new Map();
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
+let cacheRefreshRunning = false;
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
 let buildInfo = {
   commit: process.env.DUCK_COMMIT || process.env.COMMIT_SHA || process.env.GIT_COMMIT || "unknown",
@@ -681,6 +681,14 @@ function getAiContextMessageChars() {
   return Math.max(60, Math.min(Number(process.env.AI_CONTEXT_MESSAGE_CHARS) || 160, 500));
 }
 
+function getAiContextFocusedMessages() {
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_FOCUSED_MESSAGES) || 50, 100));
+}
+
+function getAiContextBackgroundMessages() {
+  return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_BACKGROUND_MESSAGES) || 5, 50));
+}
+
 function getAiContextFetchConcurrency() {
   return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_FETCH_CONCURRENCY) || 6, 20));
 }
@@ -715,7 +723,7 @@ function getMessageCacheTtlMs() {
 }
 
 function getMessageCacheLimit() {
-  return Math.max(25, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_LIMIT) || 150, 500));
+  return Math.max(25, Math.min(Number(process.env.DUCK_MESSAGE_CACHE_LIMIT) || 100, 500));
 }
 
 function getCacheRefreshMs() {
@@ -723,7 +731,11 @@ function getCacheRefreshMs() {
 }
 
 function getCacheRefreshChannelLimit() {
-  return Math.max(1, Math.min(Number(process.env.DUCK_CACHE_REFRESH_MAX_CHANNELS) || 25, 200));
+  return Math.max(1, Math.min(Number(process.env.DUCK_CACHE_REFRESH_MAX_CHANNELS) || 10, 200));
+}
+
+function getCacheRefreshConcurrency() {
+  return Math.max(1, Math.min(Number(process.env.DUCK_CACHE_REFRESH_CONCURRENCY) || 2, 8));
 }
 
 function getQueueMessage() {
@@ -906,6 +918,8 @@ function requireConfig() {
     openRouterKey: redact(process.env.OPENROUTER_API_KEY),
     contextChannels: process.env.AI_CONTEXT_CHANNELS || "all",
     contextMessagesPerChannel: process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL || "10",
+    contextFocusedMessages: getAiContextFocusedMessages(),
+    contextBackgroundMessages: getAiContextBackgroundMessages(),
     contextMaxMessages: process.env.AI_CONTEXT_MAX_MESSAGES || "500",
     contextCacheTtlMs: getServerContextCacheTtlMs(),
     contextMemberLimit: getAiContextMemberLimit(),
@@ -2373,7 +2387,7 @@ function pruneRuntimeCaches() {
       removedMessages += 1;
     }
   }
-  removedMessages += pruneMapToLimit(messageHistoryCache, Math.max(10, Number(process.env.DUCK_MESSAGE_CACHE_MAX_CHANNELS) || 100));
+  removedMessages += pruneMapToLimit(messageHistoryCache, Math.max(10, Number(process.env.DUCK_MESSAGE_CACHE_MAX_CHANNELS) || 50));
 
   for (const [key, entry] of resourceFetchCache.entries()) {
     if (!entry.promise && now - (entry.touchedAt || 0) > resourceMaxAge) {
@@ -2381,7 +2395,7 @@ function pruneRuntimeCaches() {
       removedResources += 1;
     }
   }
-  removedResources += pruneMapToLimit(resourceFetchCache, Math.max(50, Number(process.env.DUCK_RESOURCE_CACHE_MAX_ITEMS) || 500));
+  removedResources += pruneMapToLimit(resourceFetchCache, Math.max(25, Number(process.env.DUCK_RESOURCE_CACHE_MAX_ITEMS) || 200));
 
   for (const [key, entry] of serverContextCache.entries()) {
     if (entry.expiresAt <= now) {
@@ -2406,7 +2420,7 @@ async function refreshRuntimeCaches() {
   const now = Date.now();
   const activeWindow = Math.max(getCacheRefreshMs() * 2, getMessageCacheTtlMs() * 3, 60_000);
   const messageLimit = getCacheRefreshChannelLimit();
-  const refreshConcurrency = Math.min(getAiContextFetchConcurrency(), 8);
+  const refreshConcurrency = getCacheRefreshConcurrency();
   let refreshedMessages = 0;
   let failedMessages = 0;
   let refreshedResources = 0;
@@ -2441,7 +2455,7 @@ async function refreshRuntimeCaches() {
   const resourceEntries = [...resourceFetchCache.entries()]
     .filter(([, entry]) => entry.value && !entry.promise && typeof entry.fetcher === "function" && now - (entry.touchedAt || 0) <= activeWindow)
     .sort((a, b) => (b[1].touchedAt ?? 0) - (a[1].touchedAt ?? 0))
-    .slice(0, Math.max(25, Number(process.env.DUCK_RESOURCE_CACHE_REFRESH_MAX_ITEMS) || 100));
+    .slice(0, Math.max(1, Math.min(Number(process.env.DUCK_RESOURCE_CACHE_REFRESH_MAX_ITEMS) || 25, 500)));
 
   await runBoundedTasks(resourceEntries, refreshConcurrency, async ([key, entry]) => {
     try {
@@ -2478,10 +2492,22 @@ async function refreshRuntimeCaches() {
 function startCacheMaintenance() {
   if (cacheMaintenanceTimer) return;
   cacheMaintenanceTimer = setInterval(pruneRuntimeCaches, getCacheSweepMs());
+  cacheMaintenanceTimer.unref();
   if (!cacheRefreshTimer) {
     cacheRefreshTimer = setInterval(() => {
-      refreshRuntimeCaches().catch((err) => logWarn("cache.refresh-failed", { error: err?.message || String(err) }));
+      if (cacheRefreshRunning) {
+        logDebug("cache.refresh-skipped", { reason: "previous refresh is still running" });
+        return;
+      }
+
+      cacheRefreshRunning = true;
+      refreshRuntimeCaches()
+        .catch((err) => logWarn("cache.refresh-failed", { error: err?.message || String(err) }))
+        .finally(() => {
+          cacheRefreshRunning = false;
+        });
     }, getCacheRefreshMs());
+    cacheRefreshTimer.unref();
   }
 }
 
@@ -2541,6 +2567,16 @@ function getContextPriorityChannels(message) {
   });
 }
 
+function getExplicitContextChannelIds(message) {
+  const channels = [
+    findHistoryChannelTarget(message, message.content),
+    message.reference?.channelId ? message.guild.channels.cache.get(message.reference.channelId) : null,
+    ...message.mentions.channels.filter((channel) => channel.isTextBased?.() && "messages" in channel).values(),
+  ];
+
+  return new Set(channels.filter(Boolean).map((channel) => channel.id));
+}
+
 async function collectRecentMessages(message) {
   const startedAt = Date.now();
   const maxChannels = getAiContextMessageChannelLimit();
@@ -2551,6 +2587,12 @@ async function collectRecentMessages(message) {
   const seen = new Set();
   const botMember = await cachedBotMember(message.guild);
   const priorityChannels = getContextPriorityChannels(message);
+  const explicitChannelIds = getExplicitContextChannelIds(message);
+  const focusedLimit = getAiContextFocusedMessages();
+  const backgroundLimit = Math.min(perChannel, getAiContextBackgroundMessages());
+  const currentChannelLimit = explicitChannelIds.size
+    ? Math.max(perChannel, Math.ceil(focusedLimit / 2))
+    : focusedLimit;
   const candidates = [
     ...priorityChannels,
     ...message.guild.channels.cache
@@ -2582,6 +2624,12 @@ async function collectRecentMessages(message) {
     return null;
   }
 
+  function getChannelMessageLimit(channel) {
+    if (explicitChannelIds.has(channel.id)) return focusedLimit;
+    if (channel.id === message.channelId) return currentChannelLimit;
+    return backgroundLimit;
+  }
+
   async function readChannelMessages(channel, index) {
     const isPrivate = channelIsPrivate(channel);
     if (!canIncludeChannelMessages(message, channel, botMember)) {
@@ -2605,7 +2653,8 @@ async function collectRecentMessages(message) {
     }
 
     try {
-      const fetched = await getRecentChannelMessages(channel, perChannel);
+      const requestedMessages = getChannelMessageLimit(channel);
+      const fetched = await getRecentChannelMessages(channel, requestedMessages);
       const messagesForChannel = fetched.map((item) => ({
         id: item.id,
         channelId: channel.id,
@@ -2628,6 +2677,7 @@ async function collectRecentMessages(message) {
           parentName: channel.parent?.name ?? null,
           private: isPrivate,
           readable: true,
+          requestedMessages,
           messages: messagesForChannel.map((summary) => ({
             id: summary.id,
             authorId: summary.authorId,
@@ -2698,6 +2748,10 @@ async function collectRecentMessages(message) {
     failedChannels: errors.length,
     skippedPrivateChannels: skippedPrivate.length,
     skippedUnreadableChannels: skippedUnreadable.length,
+    focusedChannels: [...explicitChannelIds],
+    focusedMessageLimit: focusedLimit,
+    currentChannelMessageLimit: currentChannelLimit,
+    backgroundMessageLimit: backgroundLimit,
     concurrency,
     ms: elapsedMs(startedAt),
   });
@@ -2912,9 +2966,62 @@ function resolveMemberForPlan(message, plan, allowedMembers) {
   return referenced ? summarizeMember(referenced) : null;
 }
 
+function makeValidatedBulkPlan(message, actions, reason = null) {
+  if (!Array.isArray(actions) || actions.length < 2) {
+    return { error: "A bulk request needs at least 2 valid actions." };
+  }
+  if (actions.length > 10) {
+    return { error: "Bulk supports at most 10 actions at once." };
+  }
+
+  for (const [index, action] of actions.entries()) {
+    if (!action || action.error) {
+      return { error: `Action ${index + 1} is invalid: ${action?.error || "unsupported action"}` };
+    }
+    if (action.tool === "bulk_actions") {
+      return { error: "Nested bulk actions are not allowed." };
+    }
+    if (["view_warnings", "grep_messages"].includes(action.tool)) {
+      return { error: `Action ${index + 1} uses read-only tool \`${action.tool}\`; run that lookup separately.` };
+    }
+
+    const needed = TOOL_REQUIREMENTS[action.tool];
+    if (needed && !hasPermission(message.member, needed)) {
+      return { error: `You cannot add action ${index + 1} (\`${action.tool}\`) to this batch. Required: ${describePermissionRequirement(needed)}.` };
+    }
+    const hierarchyError = requesterActionBlockReason(message, action);
+    if (hierarchyError) return { error: `Action ${index + 1} is blocked: ${hierarchyError}` };
+  }
+
+  return {
+    tool: "bulk_actions",
+    risk: "critical",
+    actions,
+    reason: reason || `Bulk request containing ${actions.length} validated actions.`,
+    summary: actions.map((action, index) => `${index + 1}. ${action.summary}`).join("\n"),
+  };
+}
+
 function validateAiPlan(message, plan, serverContext = null) {
   if (!plan || typeof plan !== "object") return null;
+  if (Array.isArray(plan)) plan = { tool: "bulk_actions", actions: plan };
   if (plan.tool === "none") return null;
+
+  if (plan.tool === "bulk_actions" || Array.isArray(plan.actions)) {
+    if (!Array.isArray(plan.actions)) return { error: "The AI returned a bulk plan without an actions list." };
+    const actions = [];
+    for (const [index, childPlan] of plan.actions.entries()) {
+      if (childPlan?.tool === "bulk_actions" || Array.isArray(childPlan?.actions)) {
+        return { error: `Action ${index + 1} cannot contain another bulk action.` };
+      }
+      const action = validateAiPlan(message, childPlan, serverContext);
+      if (!action || action.error) {
+        return { error: `Could not validate action ${index + 1}: ${action?.error || "unsupported action"}` };
+      }
+      actions.push(action);
+    }
+    return makeValidatedBulkPlan(message, actions, typeof plan.reason === "string" ? plan.reason.trim() : null);
+  }
 
   const tool = TOOL_DEFINITIONS.find((definition) => definition.name === plan.tool);
   if (!tool) return null;
@@ -3368,8 +3475,8 @@ async function makePlannerMessages(message, providedContext = null, options = {}
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: {\"tool\":\"none|ban_member|kick_member|timeout_member|delete_channel|purge_messages|grep_messages|warn_member|view_warnings|clear_warnings|untimeout_member|set_slowmode|lock_channel|unlock_channel|softban_member|delete_user_messages|set_nickname|add_role|remove_role|disconnect_member|move_member|voice_mute_member|voice_unmute_member|deafen_member|undeafen_member|create_text_channel|create_voice_channel|rename_channel|set_channel_topic|speak|pin_message|unpin_message|create_thread|set_role_color|create_poll|create_role|delete_role\",\"targetId\":\"member id when needed\",\"targetName\":\"member name only if id is unavailable\",\"channelId\":\"channel id when needed\",\"messageId\":\"message id when pinning/unpinning\",\"roleId\":\"role id when needed\",\"roleName\":\"role name when needed\",\"targetRoleName\":\"role name for add/remove role\",\"channelName\":\"new or target channel name when needed\",\"newName\":\"new channel name when renaming\",\"threadName\":\"thread name when creating a thread\",\"topic\":\"new channel topic\",\"messageText\":\"message Duck should send when using speak\",\"query\":\"keyword or phrase when using grep_messages\",\"pollQuestion\":\"poll question\",\"pollOptions\":[\"poll option\"],\"color\":\"role color hex or name\",\"nickname\":\"new nickname when needed\",\"count\":number,\"durationMs\":number,\"deleteMessageSeconds\":number,\"seconds\":number,\"reason\":\"short reason\"}.",
-        "Tool calling tutorial: identify the user's moderation intent, choose exactly one tool, fill only the fields that tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
+        "Schema: return one normal tool plan, or {\"tool\":\"bulk_actions\",\"actions\":[toolPlan, toolPlan],\"reason\":\"short batch reason\"} for 2-10 explicitly requested actions. Each toolPlan uses the normal fields: targetId, targetName, channelId, messageId, roleId, roleName, targetRoleName, channelName, newName, threadName, topic, messageText, query, pollQuestion, pollOptions, color, nickname, count, durationMs, deleteMessageSeconds, seconds, and reason.",
+        "Tool calling tutorial: identify every explicitly requested action. Return one tool for one action, or bulk_actions with 2-10 child plans when the user asks for multiple actions. Fill only the fields each tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
         "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, pin_message/unpin_message only for a replied-to message or explicit message link/ID, create_thread for a new public thread, set_role_color for role color changes, create_poll for reaction polls with 2-10 options, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
@@ -3377,9 +3484,9 @@ async function makePlannerMessages(message, providedContext = null, options = {}
         "If image or GIF attachments are supplied with the current or replied-to message, use them only to understand the current request and still return JSON only.",
         "Only choose member IDs, channel IDs, and role IDs from the supplied context.",
         "Member-targeting tools require a real Discord mention or an exact visible member name from the user's request.",
-        "Never invent IDs, never target an unmentioned member, never chain multiple tools, and return {\"tool\":\"none\"} when the request is vague, non-moderation, or only asks a question.",
-        "Every returned tool is only a plan. Duck will show an Administrator-only confirmation prompt before execution.",
-        "If the request is not a moderation action, return {\"tool\":\"none\"}.",
+        "Never invent IDs, never target an unmentioned member, never nest bulk_actions, and return {\"tool\":\"none\"} when the request is vague, non-actionable, or only asks a question.",
+        "Every returned tool or bulk is only a plan. Duck will validate every child and show one Administrator-only confirmation prompt before ordered execution.",
+        "If the request is not an actionable tool request, return {\"tool\":\"none\"}.",
       ].join(" "),
     },
     ...makeUserMessagesWithVision(payload, context, options.includeVision),
@@ -3388,6 +3495,38 @@ async function makePlannerMessages(message, providedContext = null, options = {}
 
 function makePlannerResponseFormat(kind) {
   if (kind === "json_schema") {
+    const actionProperties = {
+      tool: {
+        type: "string",
+        enum: TOOL_DEFINITIONS.map((tool) => tool.name),
+      },
+      targetId: { type: "string" },
+      targetName: { type: "string" },
+      channelId: { type: "string" },
+      messageId: { type: "string" },
+      roleId: { type: "string" },
+      roleName: { type: "string" },
+      targetRoleName: { type: "string" },
+      channelName: { type: "string" },
+      newName: { type: "string" },
+      threadName: { type: "string" },
+      topic: { type: "string" },
+      messageText: { type: "string" },
+      query: { type: "string" },
+      pollQuestion: { type: "string" },
+      pollOptions: {
+        type: "array",
+        items: { type: "string" },
+      },
+      color: { type: "string" },
+      nickname: { type: "string" },
+      count: { type: "number" },
+      durationMs: { type: "number" },
+      deleteMessageSeconds: { type: "number" },
+      seconds: { type: "number" },
+      reason: { type: "string" },
+    };
+
     return {
       type: "json_schema",
       json_schema: {
@@ -3397,72 +3536,20 @@ function makePlannerResponseFormat(kind) {
           properties: {
             tool: {
               type: "string",
-              enum: [
-                "none",
-                "ban_member",
-                "unban_user",
-                "kick_member",
-                "timeout_member",
-                "delete_channel",
-                "purge_messages",
-                "grep_messages",
-                "warn_member",
-                "view_warnings",
-                "clear_warnings",
-                "untimeout_member",
-                "set_slowmode",
-                "lock_channel",
-                "unlock_channel",
-                "softban_member",
-                "delete_user_messages",
-                "set_nickname",
-                "add_role",
-                "remove_role",
-                "disconnect_member",
-                "move_member",
-                "voice_mute_member",
-                "voice_unmute_member",
-                "deafen_member",
-                "undeafen_member",
-                "create_text_channel",
-                "create_voice_channel",
-                "rename_channel",
-                "set_channel_topic",
-                "speak",
-                "pin_message",
-                "unpin_message",
-                "create_thread",
-                "set_role_color",
-                "create_poll",
-                "create_role",
-                "delete_role",
-              ],
+              enum: ["none", "bulk_actions", ...TOOL_DEFINITIONS.map((tool) => tool.name)],
             },
-            targetId: { type: "string" },
-            targetName: { type: "string" },
-            channelId: { type: "string" },
-            messageId: { type: "string" },
-            roleId: { type: "string" },
-            roleName: { type: "string" },
-            targetRoleName: { type: "string" },
-            channelName: { type: "string" },
-            newName: { type: "string" },
-            threadName: { type: "string" },
-            topic: { type: "string" },
-            messageText: { type: "string" },
-            query: { type: "string" },
-            pollQuestion: { type: "string" },
-            pollOptions: {
+            ...Object.fromEntries(Object.entries(actionProperties).filter(([name]) => name !== "tool")),
+            actions: {
               type: "array",
-              items: { type: "string" },
+              minItems: 2,
+              maxItems: 10,
+              items: {
+                type: "object",
+                properties: actionProperties,
+                required: ["tool"],
+                additionalProperties: false,
+              },
             },
-            color: { type: "string" },
-            nickname: { type: "string" },
-            count: { type: "number" },
-            durationMs: { type: "number" },
-            deleteMessageSeconds: { type: "number" },
-            seconds: { type: "number" },
-            reason: { type: "string" },
           },
           required: ["tool"],
           additionalProperties: false,
@@ -3820,14 +3907,14 @@ async function makeChatMessages(message, options = {}) {
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
-        "When the user asks for moderation, include exactly one hidden tool marker at the end of your reply using {{tool::target::reason}}.",
+        "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
         "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, grep_messages, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, pin_message, unpin_message, create_thread, set_role_color, create_poll, create_role, delete_role, or delete_channel.",
         "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
         "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}, {{grep_messages::general|keyword::search request}}, {{create_thread::general|bug reports::organize reports}}, {{set_role_color::Member|#3B82F6::visual update}}, {{create_poll::general|Best snack?|chips|cookies::poll request}}.",
         "Only use speak when the user gives the exact message Duck should send. If the user asks you to draft, write, make, or prepare an announcement, draft the text and ask for confirmation without a marker.",
         "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
-        "Never say the action is done. Duck will hide the marker, validate it, and show an Administrator confirmation embed.",
+        "Never say an action is done. Duck will hide all markers, validate every action, and show one Administrator confirmation embed.",
         "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
         "Be honest when you are missing context, permissions, or tool access.",
         "Do not claim an action was done unless Duck has already confirmed execution.",
@@ -4135,13 +4222,25 @@ const INLINE_TOOL_MAP = {
 function parseInlineToolCall(message, content) {
   if (typeof content !== "string") return { content, plan: null };
 
-  const marker = content.match(/\{\{\s*([a-zA-Z0-9_ -]+)\s*::\s*([\s\S]*?)\s*::\s*([\s\S]*?)\s*\}\}/);
+  const markerPattern = /\{\{\s*([a-zA-Z0-9_ -]+)\s*::\s*([\s\S]*?)\s*::\s*([\s\S]*?)\s*\}\}/g;
+  const markers = [...content.matchAll(markerPattern)];
+  const marker = markers[0];
   const cleanContent = content
-    .replace(/\{\{\s*[a-zA-Z0-9_ -]+\s*::[\s\S]*?::[\s\S]*?\s*\}\}/g, "")
+    .replace(markerPattern, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   if (!marker) return { content: cleanContent || content, plan: null };
+  if (markers.length > 10) {
+    return { content: cleanContent, plan: { error: "Bulk supports at most 10 actions at once." } };
+  }
+  if (markers.length > 1) {
+    const actions = markers.map((item) => parseInlineToolCall(message, item[0]).plan);
+    return {
+      content: cleanContent || `Prepared ${actions.length} actions for Administrator approval.`,
+      plan: makeValidatedBulkPlan(message, actions, `AI batch containing ${actions.length} requested actions.`),
+    };
+  }
 
   const toolKey = marker[1].trim().toLowerCase().replace(/[\s-]+/g, "_");
   const tool = INLINE_TOOL_MAP[toolKey];
@@ -5518,43 +5617,72 @@ function destroyVoiceSession(guildId) {
 }
 
 async function synthesizeVoiceAudio(text) {
-  const communicate = new Communicate(text.slice(0, 200), {
-    voice: process.env.DUCK_TTS_VOICE || "en-US-EmmaMultilingualNeural",
-    rate: process.env.DUCK_TTS_RATE || "+0%",
-    volume: process.env.DUCK_TTS_VOLUME || "+0%",
-    pitch: process.env.DUCK_TTS_PITCH || "+0Hz",
-  });
-  const iterator = communicate.stream();
+  const apiKey = String(process.env.ELEVENLABS_API_KEY || "").trim();
+  if (!apiKey) throw new Error("ElevenLabs TTS is not configured. Set ELEVENLABS_API_KEY.");
+
+  const voiceId = String(process.env.ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB").trim();
+  const modelId = String(process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5").trim();
+  const outputFormat = String(process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_22050_32").trim();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  timeout.unref?.();
+
+  let response;
+  try {
+    response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=${encodeURIComponent(outputFormat)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          text: text.slice(0, 200),
+          model_id: modelId,
+          apply_text_normalization: "auto",
+        }),
+        signal: controller.signal,
+      },
+    );
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err?.name === "AbortError") throw new Error("ElevenLabs TTS timed out after 15 seconds.");
+    throw new Error(`ElevenLabs TTS request failed: ${err?.message || String(err)}`);
+  }
+
+  if (!response.ok) {
+    clearTimeout(timeout);
+    const details = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(`ElevenLabs TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
+  }
+  if (!response.body) {
+    clearTimeout(timeout);
+    throw new Error("ElevenLabs TTS returned an empty audio stream.");
+  }
+
+  const reader = response.body.getReader();
   const chunks = [];
   let totalBytes = 0;
-  const deadline = Date.now() + 15_000;
-
   try {
     while (true) {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) throw new Error("TTS synthesis timed out after 15 seconds.");
-      let timer;
-      const result = await Promise.race([
-        iterator.next(),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("TTS synthesis timed out after 15 seconds.")), remainingMs);
-          timer.unref?.();
-        }),
-      ]).finally(() => clearTimeout(timer));
-      if (result.done) break;
-      if (result.value.type !== "audio") continue;
-
-      const chunk = Buffer.from(result.value.data);
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
       totalBytes += chunk.length;
       if (totalBytes > 2 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 2 MB memory limit.");
       chunks.push(chunk);
     }
   } catch (err) {
-    await iterator.return?.().catch(() => {});
+    await reader.cancel().catch(() => {});
+    if (err?.name === "AbortError") throw new Error("ElevenLabs TTS timed out after 15 seconds.");
     throw err;
+  } finally {
+    clearTimeout(timeout);
+    reader.releaseLock();
   }
 
-  if (!totalBytes) throw new Error("The TTS service returned no audio data.");
+  if (!totalBytes) throw new Error("ElevenLabs TTS returned no audio data.");
   return Buffer.concat(chunks, totalBytes);
 }
 
@@ -5783,7 +5911,8 @@ async function joinVoiceForMessage(message) {
     guildId: message.guildId,
     adapterCreator: message.guild.voiceAdapterCreator,
     selfDeaf: false,
-    daveEncryption: true,
+    // DAVE currently causes silent outgoing audio for some Discord bot connections.
+    daveEncryption: getEnvBoolean("DUCK_VOICE_DAVE", false),
     debug: isDebugEnabled(),
   });
   createVoiceSession(message, channel, connection);
@@ -5793,6 +5922,7 @@ async function joinVoiceForMessage(message) {
     voiceChannelId: channel.id,
     textChannelId: channel.id,
     userId: message.author.id,
+    daveEncryption: getEnvBoolean("DUCK_VOICE_DAVE", false),
     ready,
     status: connection.state.status,
   });
@@ -5844,24 +5974,9 @@ function buildBulkPlan(message, text) {
     const commandMessage = makeMessageWithContent(message, command);
     const action = planLocalModerationTool(commandMessage);
     if (!action || action.error) return { error: `Could not validate \`${command}\`: ${action?.error || "not a supported action"}` };
-    if (["view_warnings", "grep_messages"].includes(action.tool)) {
-      return { error: `\`${action.tool}\` is read-only and should be run separately.` };
-    }
-    const needed = TOOL_REQUIREMENTS[action.tool];
-    if (needed && !hasPermission(message.member, needed)) {
-      return { error: `You cannot add \`${action.tool}\` to this batch. Required: ${describePermissionRequirement(needed)}.` };
-    }
-    const hierarchyError = requesterActionBlockReason(message, action);
-    if (hierarchyError) return { error: `Could not validate \`${command}\`: ${hierarchyError}` };
     actions.push(action);
   }
-  return {
-    tool: "bulk_actions",
-    risk: "critical",
-    actions,
-    reason: `Bulk request containing ${actions.length} validated actions.`,
-    summary: actions.map((action, index) => `${index + 1}. ${action.summary}`).join("\n"),
-  };
+  return makeValidatedBulkPlan(message, actions);
 }
 
 async function handleExplicitCommand(message, text) {

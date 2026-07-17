@@ -29,7 +29,11 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
 - Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
 - `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
-- `!join` / `/join` streams short messages from the joined voice channel's built-in text chat using the premade `edge-tts-ts` engine without storing audio files.
+- Natural-language AI requests can also combine 2-10 validated tools into one ordered, Administrator-approved batch.
+- Message context is allocated dynamically: explicitly targeted channels receive deeper history while unrelated channels use a smaller background sample.
+- `!join` / `/join` streams short messages from the joined voice channel's built-in text chat through ElevenLabs without storing audio files. Duck uses the low-latency Flash model and a low-bitrate MP3 stream by default for small VMs.
+- Background cache refreshes are bounded and non-overlapping, with conservative retention defaults for low-memory hosts.
+- Voice DAVE encryption defaults off for outgoing TTS compatibility. Set `DUCK_VOICE_DAVE=true` only after confirming the deployed `@discordjs/voice` DAVE path produces audible output.
 
 ## Commands
 
@@ -185,6 +189,8 @@ Common tool choices:
      "OPENROUTER_MODEL": "tencent/hy3:free",
      "AI_CONTEXT_CHANNELS": "all",
      "AI_CONTEXT_MESSAGES_PER_CHANNEL": "10",
+     "AI_CONTEXT_FOCUSED_MESSAGES": "50",
+     "AI_CONTEXT_BACKGROUND_MESSAGES": "5",
      "AI_CONTEXT_MAX_MESSAGES": "500",
      "AI_CONTEXT_MAX_CHARS": "32000",
      "AI_CONTEXT_MESSAGE_CHARS": "160",
@@ -213,7 +219,7 @@ Common tool choices:
    - Hosted, requires an account/API key: set `AI_PROVIDER` to `openai-compatible`, then set `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL`.
    - Groq is still supported with `AI_PROVIDER=groq`, `GROQ_API_KEY`, and `GROQ_MODEL`, but do not use it if Groq login is broken for you.
 
-   AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, `AI_CONTEXT_MAX_MESSAGES`, `AI_CONTEXT_MAX_CHARS`, `AI_CONTEXT_MESSAGE_CHARS`, `AI_CONTEXT_MEMBER_LIMIT`, `AI_CONTEXT_CHANNEL_LIMIT`, and `AI_CONTEXT_ROLE_LIMIT`.
+  AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, `AI_CONTEXT_FOCUSED_MESSAGES`, `AI_CONTEXT_BACKGROUND_MESSAGES`, `AI_CONTEXT_MAX_MESSAGES`, `AI_CONTEXT_MAX_CHARS`, `AI_CONTEXT_MESSAGE_CHARS`, `AI_CONTEXT_MEMBER_LIMIT`, `AI_CONTEXT_CHANNEL_LIMIT`, and `AI_CONTEXT_ROLE_LIMIT`. Explicitly targeted channels use the focused allocation; unrelated channels use the background allocation.
    Set `AI_CONTEXT_CHANNELS` to `all` to scan every cached readable text channel up to Duck's safety cap.
    Duck compacts context before model calls so large servers do not overload smaller/free models with too much prompt text.
    Private channel message history is only included when the requester has Administrator and Duck has permission to view/read that channel.
@@ -291,6 +297,8 @@ If your Wispbyte panel does not have environment variables, copy `config.example
   "OPENROUTER_APP_NAME": "Duck Discord Bot",
   "AI_CONTEXT_CHANNELS": "all",
   "AI_CONTEXT_MESSAGES_PER_CHANNEL": "10",
+  "AI_CONTEXT_FOCUSED_MESSAGES": "50",
+  "AI_CONTEXT_BACKGROUND_MESSAGES": "5",
   "AI_CONTEXT_MAX_MESSAGES": "500",
   "AI_CONTEXT_MAX_CHARS": "32000",
   "AI_CONTEXT_MESSAGE_CHARS": "160",
