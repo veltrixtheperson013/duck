@@ -5,7 +5,7 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, 
 import { AudioPlayerStatus, StreamType, VoiceConnectionStatus, createAudioPlayer, createAudioResource, entersState, getVoiceConnection, joinVoiceChannel } from "@discordjs/voice";
 import { client } from "./client.js";
 import { isDebugEnabled, shouldLogAiBodies, logInfo, logDebug, logWarn, logError, elapsedMs, limitDiscordContent, splitDiscordLines, AiServiceError, makeAiUserError } from "./logging.js";
-import { pendingActions, pendingByChannel, pendingExpiryTimers, serverContextCache, messageHistoryCache, resourceFetchCache, pendingJsonWrites, voiceSessions, commandCooldowns } from "./state.js";
+import { pendingActions, pendingByChannel, pendingExpiryTimers, serverContextCache, messageHistoryCache, resourceFetchCache, pendingJsonWrites, voiceSessions, voiceQuarantineExpiryTimers, voiceQuarantineMoves, commandCooldowns } from "./state.js";
 import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES, BLESSINGS, EIGHT_BALL_ANSWERS, TOOL_REQUIREMENTS, DUCK_COLORS, COMMAND_PRESENTATION, RISK_COPY, CAPABILITY_MODES } from "./constants.js";
 import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
 
@@ -129,6 +129,8 @@ function inferReasonFromRequest(message, toolName) {
     remove_role: ["remove", "take", "role", "from"],
     disconnect_member: ["disconnect", "voice", "kick"],
     move_member: ["move", "voice", "channel", "to"],
+    voice_quarantine_member: ["voice", "vc", "quarantine", "jail", "trap"],
+    release_voice_quarantine: ["voice", "vc", "release", "unjail", "unquarantine"],
     voice_mute_member: ["voice", "server", "mute"],
     voice_unmute_member: ["voice", "server", "unmute"],
     deafen_member: ["deafen"],
@@ -267,6 +269,112 @@ function canManageRole(botMember, role) {
   return role && !role.managed && role.id !== role.guild.id && role.position < botMember.roles.highest.position;
 }
 
+function getVoiceQuarantine(guildId, memberId) {
+  const quarantines = getGuildSettings(guildId).voiceQuarantines;
+  if (!quarantines || typeof quarantines !== "object") return null;
+  return quarantines[memberId] ?? null;
+}
+
+function clearVoiceQuarantine(guildId, memberId) {
+  const settings = getGuildSettings(guildId);
+  const quarantines = settings.voiceQuarantines && typeof settings.voiceQuarantines === "object"
+    ? { ...settings.voiceQuarantines }
+    : {};
+  const existed = Boolean(quarantines[memberId]);
+  delete quarantines[memberId];
+  updateGuildSettings(guildId, { voiceQuarantines: quarantines });
+
+  const timerKey = `${guildId}:${memberId}`;
+  const timer = voiceQuarantineExpiryTimers.get(timerKey);
+  if (timer) clearTimeout(timer);
+  voiceQuarantineExpiryTimers.delete(timerKey);
+  return existed;
+}
+
+function scheduleVoiceQuarantineExpiry(guildId, memberId, expiresAt) {
+  const timerKey = `${guildId}:${memberId}`;
+  const existing = voiceQuarantineExpiryTimers.get(timerKey);
+  if (existing) clearTimeout(existing);
+
+  const delay = Math.max(0, Math.min(expiresAt - Date.now(), 24 * 60 * 60 * 1000));
+  const timer = setTimeout(() => {
+    voiceQuarantineExpiryTimers.delete(timerKey);
+    const current = getVoiceQuarantine(guildId, memberId);
+    const currentExpiresAt = Number(current?.expiresAt);
+    if (current && (!Number.isFinite(currentExpiresAt) || currentExpiresAt <= Date.now())) {
+      clearVoiceQuarantine(guildId, memberId);
+      logInfo("voice-quarantine.expired", { guildId, memberId });
+    } else if (current) {
+      scheduleVoiceQuarantineExpiry(guildId, memberId, currentExpiresAt);
+    }
+  }, delay);
+  timer.unref?.();
+  voiceQuarantineExpiryTimers.set(timerKey, timer);
+}
+
+function restoreVoiceQuarantineTimers() {
+  for (const guild of client.guilds.cache.values()) {
+    const quarantines = getGuildSettings(guild.id).voiceQuarantines;
+    if (!quarantines || typeof quarantines !== "object") continue;
+    for (const [memberId, quarantine] of Object.entries(quarantines)) {
+      const expiresAt = Number(quarantine?.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        clearVoiceQuarantine(guild.id, memberId);
+      } else {
+        scheduleVoiceQuarantineExpiry(guild.id, memberId, expiresAt);
+      }
+    }
+  }
+}
+
+async function handleVoiceQuarantineState(oldState, newState) {
+  const member = newState.member ?? oldState.member;
+  if (!member || member.user?.bot) return;
+
+  const quarantine = getVoiceQuarantine(newState.guild.id, member.id);
+  if (!quarantine) return;
+  const expiresAt = Number(quarantine.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    clearVoiceQuarantine(newState.guild.id, member.id);
+    return;
+  }
+
+  // Discord cannot move a disconnected user. Move them back when they join another VC.
+  if (!newState.channelId || newState.channelId === quarantine.channelId) return;
+
+  const moveKey = `${newState.guild.id}:${member.id}`;
+  if (voiceQuarantineMoves.has(moveKey)) return;
+  voiceQuarantineMoves.add(moveKey);
+  try {
+    const target = newState.guild.channels.cache.get(quarantine.channelId)
+      ?? await newState.guild.channels.fetch(quarantine.channelId).catch(() => null);
+    if (!target || target.type !== ChannelType.GuildVoice) {
+      clearVoiceQuarantine(newState.guild.id, member.id);
+      logWarn("voice-quarantine.target-missing", { guildId: newState.guild.id, memberId: member.id, channelId: quarantine.channelId });
+      return;
+    }
+
+    const botMember = await cachedBotMember(newState.guild);
+    const targetPermissions = target.permissionsFor(botMember);
+    const requiredPermissions = [
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.Connect,
+      PermissionsBitField.Flags.MoveMembers,
+    ];
+    if (!member.manageable || !targetPermissions?.has(requiredPermissions)) {
+      logWarn("voice-quarantine.move-blocked", { guildId: newState.guild.id, memberId: member.id, channelId: target.id });
+      return;
+    }
+
+    await member.voice.setChannel(target, `Duck voice quarantine active until ${new Date(quarantine.expiresAt).toISOString()}`);
+    logInfo("voice-quarantine.enforced", { guildId: newState.guild.id, memberId: member.id, channelId: target.id });
+  } catch (err) {
+    logError("voice-quarantine.enforce-failed", err, { guildId: newState.guild.id, memberId: member.id });
+  } finally {
+    voiceQuarantineMoves.delete(moveKey);
+  }
+}
+
 function requesterActionBlockReason(message, action) {
   const requester = message.member;
   if (!requester || requester.permissions.has(PermissionsBitField.Flags.Administrator)) return null;
@@ -311,7 +419,7 @@ function memberActionBlockReason(action, botMember, member) {
     return member.manageable ? null : `I cannot change ${name}'s nickname because they are at/above Duck's highest role or otherwise protected.`;
   }
 
-  if (["add_role", "remove_role", "disconnect_member", "move_member", "voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"].includes(action.tool)) {
+  if (["add_role", "remove_role", "disconnect_member", "move_member", "voice_quarantine_member", "release_voice_quarantine", "voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"].includes(action.tool)) {
     return member.manageable ? null : `I cannot manage ${name} because they are at/above Duck's highest role or otherwise protected.`;
   }
 
@@ -547,8 +655,8 @@ function planModerationTool(message) {
 
 function isLikelyModerationRequest(rawText) {
   const normalized = normalizeText(rawText);
-  return /\b(ban|unban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|color|colour|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|create|make|new|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b/.test(normalized)
-    && /\b(member|user|person|him|her|them|message|messages|channel|role|color|colour|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|purge|delete|remove|clear|view|show|list|grep|search|find|lock|unlock|create|make|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
+  return /\b(ban|unban|banish|soft\s*ban|kick|timeout|mute|untimeout|unmute|warn|warning|warnings|warns|slowmode|lock|lockdown|unlock|purge|delete|remove|clear|view|show|list|grep|search|find|nickname|nick|rename|topic|role|color|colour|disconnect|voice kick|voice mute|voice unmute|server mute|server unmute|deafen|undeafen|move|quarantine|jail|trap|release|unjail|unquarantine|create|make|new|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b/.test(normalized)
+    && /\b(member|user|person|him|her|them|message|messages|channel|role|color|colour|topic|slowmode|timeout|mute|unmute|deafen|undeafen|ban|kick|warn|warning|warnings|warns|nickname|nick|voice|vc|quarantine|jail|trap|release|purge|delete|remove|clear|view|show|list|grep|search|find|lock|unlock|create|make|say|speak|send|post|announce|pin|unpin|thread|poll|vote)\b|<@!?(\d+)>|<#(\d+)>|<@&(\d+)>/.test(normalized);
 }
 
 function planModerationToolFromText(message, rawText) {
@@ -656,6 +764,37 @@ function planModerationToolFromText(message, rawText) {
       durationMs,
       reason: extractReason(text, ["timeout", "mute"]),
       summary: `timeout ${member.displayName}, ${member.user.username}`,
+    };
+  }
+
+  if (/\b(?:voice|vc)\s+(?:release|unjail|unquarantine)\b|\b(?:release|unjail|unquarantine)\b.*\b(?:voice|vc|quarantine|jail)\b/.test(normalized)) {
+    if (!member) return { error: "Tell me who to release from voice quarantine by mentioning them." };
+    return {
+      tool: "release_voice_quarantine",
+      risk: "high",
+      targetId: member.id,
+      reason: extractReason(text, ["voice", "vc", "release", "unjail", "unquarantine", "quarantine", "jail"]),
+      summary: `release ${member.displayName}, ${member.user.username} from voice quarantine`,
+    };
+  }
+
+  if (/\b(?:voice|vc)\s+(?:quarantine|jail|trap)\b|\b(?:quarantine|jail|trap)\b.*\b(?:voice|vc)\b/.test(normalized)) {
+    if (!member) return { error: "Tell me who to voice quarantine by mentioning them." };
+    const channelId = getGuildSettings(message.guildId).voiceQuarantineChannelId;
+    const channel = channelId ? message.guild.channels.cache.get(channelId) : null;
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+      return { error: "An Administrator must configure a voice quarantine channel with `/setup quarantine-channel:<voice channel>` first." };
+    }
+    const durationMs = Math.max(60_000, Math.min(parseDurationMs(text), 24 * 60 * 60 * 1000));
+    return {
+      tool: "voice_quarantine_member",
+      risk: "high",
+      targetId: member.id,
+      channelId: channel.id,
+      channelName: channel.name,
+      durationMs,
+      reason: extractReason(text, ["voice", "vc", "quarantine", "jail", "trap"]),
+      summary: `voice quarantine ${member.displayName}, ${member.user.username} in ${channel.name}`,
     };
   }
 
@@ -2115,6 +2254,8 @@ function validateAiPlan(message, plan, serverContext = null) {
     "remove_role",
     "disconnect_member",
     "move_member",
+    "voice_quarantine_member",
+    "release_voice_quarantine",
     "voice_mute_member",
     "voice_unmute_member",
     "deafen_member",
@@ -2137,6 +2278,22 @@ function validateAiPlan(message, plan, serverContext = null) {
     if (tool.name === "timeout_member") {
       const durationMs = Math.min(Math.max(Number(plan.durationMs) || parseDurationMs(message.content), 1000), 28 * 24 * 60 * 60 * 1000);
       result.durationMs = durationMs;
+    }
+
+    if (tool.name === "voice_quarantine_member") {
+      const configuredChannelId = getGuildSettings(message.guildId).voiceQuarantineChannelId;
+      const channel = configuredChannelId ? message.guild.channels.cache.get(configuredChannelId) : null;
+      if (!channel || channel.type !== ChannelType.GuildVoice) {
+        return { error: "An Administrator must configure a voice quarantine channel with `/setup quarantine-channel:<voice channel>` first." };
+      }
+      result.channelId = channel.id;
+      result.channelName = channel.name;
+      result.durationMs = Math.max(60_000, Math.min(Number(plan.durationMs) || parseDurationMs(message.content), 24 * 60 * 60 * 1000));
+      result.summary = `voice quarantine ${member.displayName}, ${member.username} in ${channel.name}`;
+    }
+
+    if (tool.name === "release_voice_quarantine") {
+      result.summary = `release ${member.displayName}, ${member.username} from voice quarantine`;
     }
 
     if (tool.name === "softban_member") {
@@ -2532,7 +2689,8 @@ async function makePlannerMessages(message, providedContext = null, options = {}
         `Available tools: ${tools}.`,
         "Schema: return one normal tool plan, or {\"tool\":\"bulk_actions\",\"actions\":[toolPlan, toolPlan],\"reason\":\"short batch reason\"} for 2-10 explicitly requested actions. Each toolPlan uses the normal fields: targetId, targetName, channelId, messageId, roleId, roleName, targetRoleName, channelName, newName, threadName, topic, messageText, query, pollQuestion, pollOptions, color, nickname, count, durationMs, deleteMessageSeconds, seconds, and reason.",
         "Tool calling tutorial: identify every explicitly requested action. Return one tool for one action, or bulk_actions with 2-10 child plans when the user asks for multiple actions. Fill only the fields each tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
-        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, pin_message/unpin_message only for a replied-to message or explicit message link/ID, create_thread for a new public thread, set_role_color for role color changes, create_poll for reaction polls with 2-10 options, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_quarantine_member, release_voice_quarantine, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, pin_message/unpin_message only for a replied-to message or explicit message link/ID, create_thread for a new public thread, set_role_color for role color changes, create_poll for reaction polls with 2-10 options, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
+        "voice_quarantine_member and release_voice_quarantine are Administrator-only. Voice quarantine uses the server's configured quarantine channel and accepts durationMs from 1 minute to 24 hours.",
         "Only use speak when the user explicitly gives the exact message Duck should send. If the user asks Duck to make, draft, write, or prepare an announcement, return {\"tool\":\"none\"} and let chat draft it first.",
         "Use serverContext.channelMessages for per-channel recent message context. It groups messages by channel so you can understand what happened in each readable channel.",
         "Use serverContext.currentMessage.replyTo when the user is replying to another message. It contains the referenced message text, channel, author, timestamp, and authorMember when available.",
@@ -2964,7 +3122,7 @@ async function makeChatMessages(message, options = {}) {
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
         "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, grep_messages, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, pin_message, unpin_message, create_thread, set_role_color, create_poll, create_role, delete_role, or delete_channel.",
-        "Voice tools are also available: voice_mute, voice_unmute, deafen, and undeafen.",
+        "Voice tools are also available: voice_mute, voice_unmute, voice_quarantine, voice_release, deafen, and undeafen.",
         "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
         "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}, {{grep_messages::general|keyword::search request}}, {{create_thread::general|bug reports::organize reports}}, {{set_role_color::Member|#3B82F6::visual update}}, {{create_poll::general|Best snack?|chips|cookies::poll request}}.",
         "Only use speak when the user gives the exact message Duck should send. If the user asks you to draft, write, make, or prepare an announcement, draft the text and ask for confirmation without a marker.",
@@ -3235,6 +3393,11 @@ const INLINE_TOOL_MAP = {
   disconnect_member: "disconnect_member",
   move: "move_member",
   move_member: "move_member",
+  voice_quarantine: "voice_quarantine_member",
+  voice_jail: "voice_quarantine_member",
+  voice_quarantine_member: "voice_quarantine_member",
+  voice_release: "release_voice_quarantine",
+  release_voice_quarantine: "release_voice_quarantine",
   voice_mute: "voice_mute_member",
   server_mute: "voice_mute_member",
   voice_mute_member: "voice_mute_member",
@@ -3341,6 +3504,7 @@ function parseInlineToolCall(message, content) {
   }
   if (tool === "clear_warnings") rawPlan.count = parseWarningClearCount(`${target} ${reason} ${message.content}`);
   if (tool === "timeout_member") rawPlan.durationMs = parseDurationMs(`${message.content} ${reason}`);
+  if (tool === "voice_quarantine_member") rawPlan.durationMs = parseDurationMs(`${message.content} ${reason}`);
   if (tool === "set_slowmode") rawPlan.seconds = parseSlowmodeSeconds(`${target} ${reason} ${message.content}`);
   if (tool === "set_nickname") rawPlan.nickname = reason;
   if (tool === "create_text_channel") rawPlan.channelName = target;
@@ -3483,6 +3647,8 @@ function commandLabel(action) {
   if (action.tool === "remove_role") return "Remove Role";
   if (action.tool === "disconnect_member") return "Disconnect Voice";
   if (action.tool === "move_member") return "Move Voice";
+  if (action.tool === "voice_quarantine_member") return "Voice Quarantine";
+  if (action.tool === "release_voice_quarantine") return "Release Voice Quarantine";
   if (action.tool === "voice_mute_member") return "Voice Mute";
   if (action.tool === "voice_unmute_member") return "Voice Unmute";
   if (action.tool === "deafen_member") return "Deafen";
@@ -3919,6 +4085,50 @@ async function executeAction(client, action, approver) {
     if (blockReason) return blockReason;
     await member.voice.setChannel(channel, makeActionAuditReason(action, approver));
     return `I have moved ${member.displayName}, ${member.user.username} to ${channel.name}.`;
+  }
+
+  if (action.tool === "voice_quarantine_member") {
+    const member = await cachedMember(guild, action.targetId);
+    const blockReason = memberActionBlockReason(action, botMember, member);
+    if (blockReason) return blockReason;
+
+    const configuredChannelId = getGuildSettings(guild.id).voiceQuarantineChannelId;
+    if (!configuredChannelId || configuredChannelId !== action.channelId) {
+      return "I did not quarantine anyone because the configured voice quarantine channel changed. Prepare the action again.";
+    }
+    const channel = await cachedChannel(guild, configuredChannelId);
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+      return "The configured voice quarantine channel no longer exists.";
+    }
+
+    const durationMs = Math.max(60_000, Math.min(Number(action.durationMs) || 10 * 60 * 1000, 24 * 60 * 60 * 1000));
+    const expiresAt = Date.now() + durationMs;
+    const settings = getGuildSettings(guild.id);
+    const quarantines = settings.voiceQuarantines && typeof settings.voiceQuarantines === "object"
+      ? { ...settings.voiceQuarantines }
+      : {};
+    quarantines[member.id] = {
+      channelId: channel.id,
+      createdAt: Date.now(),
+      expiresAt,
+      moderatorId: approver.id,
+      reason: action.reason || "No reason provided.",
+    };
+    updateGuildSettings(guild.id, { voiceQuarantines: quarantines });
+    scheduleVoiceQuarantineExpiry(guild.id, member.id, expiresAt);
+
+    if (member.voice.channelId && member.voice.channelId !== channel.id) {
+      await member.voice.setChannel(channel, makeActionAuditReason(action, approver));
+    }
+    return `I have voice quarantined ${summarizeMemberName(member)} in ${channel.name} for ${Math.round(durationMs / 60000)} minute(s). They can disconnect, but will be moved back if they join another voice channel before it expires.`;
+  }
+
+  if (action.tool === "release_voice_quarantine") {
+    const member = await cachedMember(guild, action.targetId);
+    const released = clearVoiceQuarantine(guild.id, member.id);
+    return released
+      ? `I have released ${summarizeMemberName(member)} from voice quarantine.`
+      : `${summarizeMemberName(member)} is not voice quarantined.`;
   }
 
   if (action.tool === "voice_mute_member" || action.tool === "voice_unmute_member") {
@@ -5587,6 +5797,8 @@ function slashCommandContent(interaction) {
     case "warnings": return `warnings ${userMention("member")}`;
     case "clearwarnings": return `clear ${interaction.options.getString("count", true)} warnings for ${userMention("member")}`;
     case "clear": return `purge ${interaction.options.getInteger("count", true)}`;
+    case "voicequarantine": return `voice quarantine ${userMention("member")} ${interaction.options.getInteger("minutes", true)}m ${reason()}`;
+    case "voicerelease": return `voice release ${userMention("member")} ${reason()}`;
     case "addrole": return `add role ${roleMention("role")} to ${userMention("member")} ${reason()}`;
     case "removerole": return `remove role ${roleMention("role")} from ${userMention("member")} ${reason()}`;
     case "tool": return interaction.options.getString("request", true);
@@ -5637,7 +5849,8 @@ async function makeSlashDuckResponse(interaction, prompt) {
       "Slash commands:",
       "- `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`",
       "- `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`",
-      "- `/clear`, `/clearwarnings`, `/addrole`, `/removerole`, `/tool`",
+      "- `/clear`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
+      "- `/addrole`, `/removerole`, `/tool`",
       "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
       "- `/setup`, `/entry-setup`, `/duck-tools`",
       "",
@@ -5941,13 +6154,21 @@ async function registerCommands(client, options = {}) {
   const startedAt = Date.now();
   const setupCommand = new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Choose the channel where Duck listens for AI moderation requests.")
+    .setDescription("Configure Duck's moderation and voice quarantine channels.")
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .addChannelOption((option) =>
       option
         .setName("channel")
         .setDescription("The channel Duck should listen in.")
         .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true),
+        .setRequired(false),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName("quarantine-channel")
+        .setDescription("Voice channel used by Administrator-only voice quarantine actions.")
+        .addChannelTypes(ChannelType.GuildVoice)
+        .setRequired(false),
     );
 
   const toolsCommand = new SlashCommandBuilder()
@@ -6068,6 +6289,15 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("clear").setDescription("Purge recent messages after confirmation.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
       .addIntegerOption((option) => option.setName("count").setDescription("Messages to remove.").setMinValue(1).setMaxValue(100).setRequired(true)),
+    new SlashCommandBuilder().setName("voicequarantine").setDescription("Keep a member in the configured quarantine VC for up to 24 hours.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+      .addUserOption((option) => option.setName("member").setDescription("Member to quarantine.").setRequired(true))
+      .addIntegerOption((option) => option.setName("minutes").setDescription("Duration from 1 to 1440 minutes.").setMinValue(1).setMaxValue(1440).setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for voice quarantine.").setRequired(true)),
+    new SlashCommandBuilder().setName("voicerelease").setDescription("Release a member from voice quarantine.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+      .addUserOption((option) => option.setName("member").setDescription("Member to release.").setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for release.").setRequired(false)),
     new SlashCommandBuilder().setName("addrole").setDescription("Assign an editable role after confirmation.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageRoles)
       .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
@@ -6157,6 +6387,11 @@ export {
   findExactChannelByToolTarget,
   findRoleByToolTarget,
   canManageRole,
+  getVoiceQuarantine,
+  clearVoiceQuarantine,
+  scheduleVoiceQuarantineExpiry,
+  restoreVoiceQuarantineTimers,
+  handleVoiceQuarantineState,
   requesterActionBlockReason,
   summarizeMemberName,
   memberActionBlockReason,

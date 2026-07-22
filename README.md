@@ -2,13 +2,13 @@
 
 Duck is a Node.js Discord AI chatbot with confirmation-gated moderation tools.
 
-The important safety rule: Duck never runs a moderation tool immediately. It always creates a confirmation prompt first.
+The important safety rule: Duck validates permissions, hierarchy, and targets before every moderation action. The guild's `/capibility` policy decides whether a validated action runs or waits for Administrator confirmation.
 
 Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal chat and AI tool planning. For obvious moderation requests, Duck asks AI for a tool plan, validates it, and falls back to the built-in local parser only when AI is unavailable or fails.
 
 ## Features
 
-- `/setup channel:#channel` chooses the channel where Duck listens.
+- `/setup channel:#channel` chooses the channel where Duck listens. `/setup quarantine-channel:<voice channel>` configures the Administrator-only voice quarantine destination.
 - Duck responds to all user messages in the setup channel when AI is configured.
 - Natural language moderation requests in the setup channel become confirmation-gated tool plans.
 - AI chat can request moderation with hidden inline markers like `{{warn::member::reason}}`; Duck hides the marker, validates it locally, then shows an approval embed.
@@ -26,6 +26,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - User-facing error messages say when AI/OpenRouter failed instead of hiding it behind generic fallback text.
 - Tools for ban, softban, kick, timeout, remove timeout, warn, nicknames, roles, voice moderation, channel creation/deletion, purge messages, slowmode, lock channel, and unlock channel.
 - Extra voice tools include server voice mute/unmute and deafen/undeafen.
+- Administrator-only voice quarantine can keep a member in one configured VC for 1-1440 minutes. Members can disconnect, but are moved back if they join another VC before release or expiry.
 - Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
 - Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
 - `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
@@ -39,7 +40,17 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 
 Common moderation commands are `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/clear`, `/addrole`, and `/removerole`. Prefix forms use the same names, such as `!warn @member spam` or `!!clear 25`.
 
-Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/capibility`, `/setup`, and `/entry-setup`.
+Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/capibility`, `/setup`, `/entry-setup`, `/voicequarantine`, and `/voicerelease`.
+
+Voice quarantine setup and usage:
+
+```text
+/setup quarantine-channel:Voice Jail
+/voicequarantine member:@user minutes:30 reason:Repeated voice disruption
+/voicerelease member:@user reason:Issue resolved
+```
+
+Prefix and AI forms are `duck voice quarantine @user 30m reason` and `duck voice release @user`. Duck intentionally does not rapidly shuffle members through public voice channels.
 
 `/capibility` controls how validated actions execute:
 
@@ -128,7 +139,7 @@ Duck removes the marker from the visible response and turns it into a confirmati
 {{move::Ryzen 9 9950X3D2|General Voice::testing purposes}}
 ```
 
-Supported marker tool names include `ban`, `softban`, `kick`, `timeout`, `warn`, `untimeout`, `purge`, `delete_user_messages`, `slowmode`, `lock`, `unlock`, `nickname`, `add_role`, `remove_role`, `disconnect`, `move`, `voice_mute`, `voice_unmute`, `deafen`, `undeafen`, `create_channel`, `create_voice_channel`, `rename_channel`, `set_topic`, `create_role`, `delete_role`, and `delete_channel`.
+Supported marker tool names include `ban`, `softban`, `kick`, `timeout`, `warn`, `untimeout`, `purge`, `delete_user_messages`, `slowmode`, `lock`, `unlock`, `nickname`, `add_role`, `remove_role`, `disconnect`, `move`, `voice_quarantine`, `voice_release`, `voice_mute`, `voice_unmute`, `deafen`, `undeafen`, `create_channel`, `create_voice_channel`, `rename_channel`, `set_topic`, `create_role`, `delete_role`, and `delete_channel`.
 
 The planner is instructed to:
 
@@ -165,6 +176,7 @@ Common tool choices:
 - `set_nickname`: change a mentioned member's nickname.
 - `add_role` / `remove_role`: edit a mentioned member's role.
 - `disconnect_member` / `move_member`: voice moderation.
+- `voice_quarantine_member` / `release_voice_quarantine`: Administrator-only bounded voice quarantine in the configured channel.
 - `voice_mute_member` / `voice_unmute_member`: server mute or unmute a member in voice.
 - `deafen_member` / `undeafen_member`: server deafen or undeafen a member in voice.
 - `create_text_channel`: create a text channel.

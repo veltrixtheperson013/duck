@@ -4,7 +4,7 @@ import { logInfo, logDebug, logWarn, logError, elapsedMs, splitDiscordLines } fr
 import { pendingActions, pendingByChannel } from "./state.js";
 import { TOOL_DEFINITIONS, TOOL_REQUIREMENTS, DUCK_COLORS } from "./constants.js";
 import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyCommandContent, getEntryChannelConfig, updateEntryChannelConfig, loadPendingActions, getGuildSettings, updateGuildSettings, requireConfig } from "./config.js";
-import { normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, registerCommands } from "./core.js";
+import { normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
@@ -85,6 +85,7 @@ client.once(Events.ClientReady, async () => {
 
   logInfo("pending-actions.ready", { count: pendingActions.size });
   startInviteCleanupLoop();
+  restoreVoiceQuarantineTimers();
   try {
     await registerCommands(client);
   } catch (err) {
@@ -163,14 +164,49 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
 
-        const channel = interaction.options.getChannel("channel", true);
-        updateGuildSettings(interaction.guildId, { modChannelId: channel.id });
-        logInfo("settings.mod-channel-updated", {
+        const channel = interaction.options.getChannel("channel", false);
+        const quarantineChannel = interaction.options.getChannel("quarantine-channel", false);
+        if (!channel && !quarantineChannel) {
+          await interaction.reply({ content: "Choose a moderation channel, a voice quarantine channel, or both.", ephemeral: true });
+          return;
+        }
+
+        if (quarantineChannel) {
+          const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+          const permissions = quarantineChannel.permissionsFor(botMember);
+          const required = [
+            PermissionsBitField.Flags.ViewChannel,
+            PermissionsBitField.Flags.Connect,
+            PermissionsBitField.Flags.MoveMembers,
+          ];
+          if (!permissions?.has(required)) {
+            await interaction.reply({
+              content: "Duck needs View Channel, Connect, and Move Members in the selected voice quarantine channel.",
+              ephemeral: true,
+            });
+            return;
+          }
+        }
+
+        const patch = {};
+        if (channel) patch.modChannelId = channel.id;
+        if (quarantineChannel) {
+          patch.voiceQuarantineChannelId = quarantineChannel.id;
+        }
+        updateGuildSettings(interaction.guildId, patch);
+        logInfo("settings.setup-updated", {
           guildId: interaction.guildId,
-          channelId: channel.id,
+          channelId: channel?.id,
+          voiceQuarantineChannelId: quarantineChannel?.id,
           userId: interaction.user.id,
         });
-        await interaction.reply(`Duck will now listen in ${channel}.`);
+        await interaction.reply({
+          content: [
+            channel ? `Duck will now listen in ${channel}.` : null,
+            quarantineChannel ? `Voice quarantine will use ${quarantineChannel}.` : null,
+          ].filter(Boolean).join("\n"),
+          ephemeral: true,
+        });
         return;
       }
 
@@ -293,6 +329,10 @@ client.on(Events.GuildMemberRemove, async (member) => {
   } catch (err) {
     logError("member-remove.failed", err, { guildId: member.guild.id, memberId: member.id });
   }
+});
+
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  await handleVoiceQuarantineState(oldState, newState);
 });
 
 client.on(Events.MessageDelete, (message) => {

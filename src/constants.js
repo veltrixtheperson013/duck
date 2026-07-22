@@ -114,6 +114,16 @@ const TOOL_DEFINITIONS = [
     description: "Move a mentioned member to a mentioned voice channel.",
   },
   {
+    name: "voice_quarantine_member",
+    risk: "high",
+    description: "Keep a member in the configured voice quarantine channel for a bounded duration.",
+  },
+  {
+    name: "release_voice_quarantine",
+    risk: "high",
+    description: "Release a member from an active voice quarantine.",
+  },
+  {
     name: "voice_mute_member",
     risk: "medium",
     description: "Server-mute a mentioned member in voice.",
@@ -215,6 +225,7 @@ const UTILITY_COMMANDS = [
   "`duck test`",
   "`duck join` / `duck leave`",
   "`duck tts hello from Duck` (while joined)",
+  "Admin: `duck voice quarantine @user 30m reason` / `duck voice release @user`",
   "`duck bulk warn @user spam; timeout @user 10m flooding`",
   "`duck rules`",
   "`duck ping`",
@@ -274,6 +285,8 @@ const TOOL_REQUIREMENTS = {
   remove_role: PermissionsBitField.Flags.ManageRoles,
   disconnect_member: PermissionsBitField.Flags.MoveMembers,
   move_member: PermissionsBitField.Flags.MoveMembers,
+  voice_quarantine_member: PermissionsBitField.Flags.Administrator,
+  release_voice_quarantine: PermissionsBitField.Flags.Administrator,
   voice_mute_member: PermissionsBitField.Flags.MuteMembers,
   voice_unmute_member: PermissionsBitField.Flags.MuteMembers,
   deafen_member: PermissionsBitField.Flags.DeafenMembers,

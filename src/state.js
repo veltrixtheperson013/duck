@@ -9,6 +9,8 @@ const resourceFetchCache = new Map();
 const jsonFileCache = new Map();
 const pendingJsonWrites = new Map();
 const voiceSessions = new Map();
+const voiceQuarantineExpiryTimers = new Map();
+const voiceQuarantineMoves = new Set();
 const commandCooldowns = new Map();
 
 export {
@@ -21,5 +23,7 @@ export {
   jsonFileCache,
   pendingJsonWrites,
   voiceSessions,
+  voiceQuarantineExpiryTimers,
+  voiceQuarantineMoves,
   commandCooldowns,
 };
