@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node .",
     "check": "node --check src/index.js",
-    "check:commands": "node . --check-commands"
+    "check:commands": "node . --check-commands",
+    "lint": "eslint src"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
@@ -22,5 +23,9 @@
   },
   "engines": {
     "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0"
   }
 }
