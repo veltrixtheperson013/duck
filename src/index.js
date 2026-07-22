@@ -93,6 +93,14 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
+client.on(Events.GuildCreate, async (guild) => {
+  try {
+    await registerCommands(client, { guildIds: [guild.id], syncGlobal: false });
+  } catch (err) {
+    logError("discord.guild-commands-register-failed", err, { guildId: guild.id });
+  }
+});
+
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
@@ -124,6 +132,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === "capibility") {
         await handleCapabilityCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "synccommands") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+          await interaction.reply({ content: "Only an Administrator can synchronize Duck's slash commands.", ephemeral: true });
+          return;
+        }
+        await interaction.deferReply({ ephemeral: true });
+        const result = await registerCommands(client, { guildIds: [interaction.guildId], syncGlobal: false });
+        await interaction.editReply(`Synchronized ${result.commandCount} slash commands in this server. Discord should show the current options immediately.`);
         return;
       }
 

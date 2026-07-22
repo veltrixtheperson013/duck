@@ -29,6 +29,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Administrator-only voice quarantine can keep a member in one configured VC for 1-1440 minutes. Members can disconnect, but are moved back if they join another VC before release or expiry.
 - Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
 - Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
+- Slash commands synchronize per guild on every startup and whenever Duck joins a server, avoiding stale global-command options. Administrators can force a refresh with `/synccommands` or `!synccommands`.
 - `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
 - Natural-language AI requests can also combine 2-10 validated tools into one ordered, Administrator-approved batch.
 - Message context is allocated dynamically: explicitly targeted channels receive deeper history while unrelated channels use a smaller background sample.
@@ -40,7 +41,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 
 Common moderation commands are `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/clear`, `/addrole`, and `/removerole`. Prefix forms use the same names, such as `!warn @member spam` or `!!clear 25`.
 
-Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/capibility`, `/setup`, `/entry-setup`, `/voicequarantine`, and `/voicerelease`.
+Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/capibility`, `/setup`, `/entry-setup`, `/voicequarantine`, `/voicerelease`, and `/synccommands`.
 
 Voice quarantine setup and usage:
 

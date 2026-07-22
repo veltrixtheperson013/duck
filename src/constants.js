@@ -226,6 +226,7 @@ const UTILITY_COMMANDS = [
   "`duck join` / `duck leave`",
   "`duck tts hello from Duck` (while joined)",
   "Admin: `duck voice quarantine @user 30m reason` / `duck voice release @user`",
+  "Admin: `!synccommands` refreshes this server's slash-command schema immediately",
   "`duck bulk warn @user spam; timeout @user 10m flooding`",
   "`duck rules`",
   "`duck ping`",

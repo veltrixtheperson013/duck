@@ -4972,7 +4972,8 @@ function makeUtilityHelp() {
     "`/clear` `/clearwarnings` `/addrole` `/removerole` `/tool`",
     "",
     "**Server Administration**",
-    "`/announce` `/sendrules` `/bulk` `/prefix` `/capibility` `/setup` `/entry-setup`",
+    "`/announce` `/sendrules` `/bulk` `/prefix` `/capibility` `/setup` `/entry-setup` `/synccommands`",
+    "`/setup quarantine-channel:<voice channel>` updates the voice quarantine destination.",
     "",
     "**Information & Utilities**",
     "`/userinfo` `/avatar` `/serverinfo` `/channelinfo` `/roleinfo`",
@@ -5431,6 +5432,16 @@ async function handleExplicitCommand(message, text) {
     return true;
   }
 
+  if (/^synccommands\b/.test(normalized)) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      await sendMessageChunks(message, "Only an Administrator can synchronize Duck's slash commands.");
+      return true;
+    }
+    const result = await registerCommands(client, { guildIds: [message.guildId], syncGlobal: false });
+    await sendMessageChunks(message, `Synchronized ${result.commandCount} slash commands in this server. Discord should show the current options immediately.`);
+    return true;
+  }
+
   if (/^sendrules\b/.test(normalized)) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       await sendMessageChunks(message, "Only an Administrator can post the server rules embed.");
@@ -5814,7 +5825,15 @@ function slashCommandContent(interaction) {
 }
 
 function validateSlashCommandDispatchers(commandBodies) {
-  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capibility"]);
+  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capibility", "synccommands"]);
+  const setupCommand = commandBodies.find((command) => command.name === "setup");
+  const setupOptions = new Map((setupCommand?.options || []).map((option) => [option.name, option]));
+  if (!setupOptions.has("channel") || !setupOptions.has("quarantine-channel")) {
+    throw new Error("/setup must expose both channel and quarantine-channel options.");
+  }
+  if (setupOptions.get("quarantine-channel").required) {
+    throw new Error("/setup quarantine-channel must remain optional so either setup field can be changed independently.");
+  }
   let validated = 0;
   for (const command of commandBodies) {
     if (separatelyHandled.has(command.name)) continue;
@@ -5852,7 +5871,7 @@ async function makeSlashDuckResponse(interaction, prompt) {
       "- `/clear`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
       "- `/addrole`, `/removerole`, `/tool`",
       "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
-      "- `/setup`, `/entry-setup`, `/duck-tools`",
+      "- `/setup`, `/entry-setup`, `/synccommands`, `/duck-tools`",
       "",
       "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
     ].join("\n");
@@ -6338,6 +6357,8 @@ async function registerCommands(client, options = {}) {
           { name: "Approve for me (Recommended)", value: CAPABILITY_MODES.approve },
           { name: "Agent mode", value: CAPABILITY_MODES.agent },
         )),
+    new SlashCommandBuilder().setName("synccommands").setDescription("Immediately synchronize Duck's slash commands in this server.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
   ];
 
   const body = [
@@ -6352,12 +6373,25 @@ async function registerCommands(client, options = {}) {
   if (options.dryRun) return body;
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-  await rest.put(Routes.applicationCommands(client.user.id), { body });
+  const guildIds = options.guildIds ?? [...client.guilds.cache.keys()];
+  for (const guildId of guildIds) {
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body });
+  }
+  if (options.syncGlobal !== false) {
+    await rest.put(Routes.applicationCommands(client.user.id), { body });
+  }
   logInfo("discord.commands-registered", {
     appId: client.user.id,
-    count: 4 + utilityCommands.length + moderationCommands.length + adminCommands.length,
+    count: body.length,
+    guilds: guildIds.length,
+    global: options.syncGlobal !== false,
     ms: elapsedMs(startedAt),
   });
+  return {
+    commandCount: body.length,
+    guildCount: guildIds.length,
+    globalSynced: options.syncGlobal !== false,
+  };
 }
 
 export {
