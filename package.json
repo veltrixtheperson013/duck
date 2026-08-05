@@ -19,7 +19,7 @@
     "opusscript": "^0.1.1"
   },
   "overrides": {
-    "undici": "^6.27.0"
+    "undici": "^6.28.0"
   },
   "engines": {
     "node": ">=22.12.0"
