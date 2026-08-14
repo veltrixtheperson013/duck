@@ -12,6 +12,8 @@ const voiceSessions = new Map();
 const voiceQuarantineExpiryTimers = new Map();
 const voiceQuarantineMoves = new Set();
 const commandCooldowns = new Map();
+const processedDiscordEvents = new Map();
+const reminderTimers = new Map();
 
 export {
   pendingActions,
@@ -26,4 +28,6 @@ export {
   voiceQuarantineExpiryTimers,
   voiceQuarantineMoves,
   commandCooldowns,
+  processedDiscordEvents,
+  reminderTimers,
 };

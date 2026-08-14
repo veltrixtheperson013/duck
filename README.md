@@ -13,7 +13,7 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Natural language moderation requests in the setup channel become confirmation-gated tool plans.
 - AI chat can request moderation with hidden inline markers like `{{warn::member::reason}}`; Duck hides the marker, validates it locally, then shows an approval embed.
 - Duck also responds when someone says `duck`, mentions `@Duck`, or replies to one of Duck's messages.
-- Queue/thinking messages are posted while AI is working, then edited with the result.
+- Queue/thinking messages are posted while AI is working, then edited with the result. AI work uses a bounded fair queue so one busy server cannot starve the others.
 - Server context and recent-message reads are cached briefly to reduce wait times.
 - Confirmation buttons for every moderation action.
 - Text confirmation with `I confirm` for the latest pending action in the channel.
@@ -29,17 +29,19 @@ Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal c
 - Administrator-only voice quarantine can keep a member in one configured VC for 1-1440 minutes. Members can disconnect, but are moved back if they join another VC before release or expiry.
 - Deterministic prefix commands support `!`, `!!`, and one server-specific prefix configured with `/prefix`.
 - Structured slash commands cover moderation, warnings, utilities, announcements, diagnostics, and voice TTS. `/tool` exposes the remaining tool surface.
-- Slash commands synchronize per guild on every startup and whenever Duck joins a server, avoiding stale global-command options. Administrators can force a refresh with `/synccommands` or `!synccommands`.
+- Slash commands default to guild-only synchronization and stale global commands are removed, preventing Discord from showing each command twice. Set `DUCK_COMMAND_SCOPE=global` only when you intentionally want global propagation.
 - `/bulk` or `!bulk` validates 2-10 actions and runs them behind one Administrator confirmation.
 - Natural-language AI requests can also combine 2-10 validated tools into one ordered, Administrator-approved batch.
 - Message context is allocated dynamically: explicitly targeted channels receive deeper history while unrelated channels use a smaller background sample.
 - `!join` / `/join` streams short messages from the joined voice channel's built-in text chat through ElevenLabs without storing audio files. Duck uses the low-latency Flash model and a low-bitrate MP3 stream by default for small VMs.
 - Background cache refreshes are bounded and non-overlapping, with conservative retention defaults for low-memory hosts.
-- Voice DAVE encryption defaults off for outgoing TTS compatibility. Set `DUCK_VOICE_DAVE=true` only after confirming the deployed `@discordjs/voice` DAVE path produces audible output.
+- Voice DAVE encryption defaults on with `@discordjs/voice` 0.19.2. Voice sessions are isolated per guild, protected from cross-channel hijacking, and have per-user/per-guild TTS budgets.
+- OpenRouter vision is model-aware. `tencent/hy3` is always treated as text-only in automatic mode.
+- Pending actions re-check the original requester's current membership, permissions, target-channel access, and role hierarchy immediately before execution.
 
 ## Commands
 
-Common moderation commands are `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/clear`, `/addrole`, and `/removerole`. Prefix forms use the same names, such as `!warn @member spam` or `!!clear 25`.
+Common moderation commands include `/ban`, `/softban`, `/unban`, `/kick`, `/timeout`, `/untimeout`, `/warn`, `/warnings`, `/clearwarnings`, `/clear`, `/slowmode`, `/lock`, `/unlock`, `/nickname`, `/addrole`, `/removerole`, `/disconnect`, `/voicemute`, `/voiceunmute`, `/deafen`, and `/undeafen`. Prefix forms use the same names, such as `!warn @member spam` or `!!clear 25`.
 
 Administrator commands include `/sendrules`, `/announce`, `/bulk`, `/prefix`, `/capibility`, `/setup`, `/entry-setup`, `/voicequarantine`, `/voicerelease`, and `/synccommands`.
 
@@ -239,14 +241,16 @@ Common tool choices:
    - Groq is still supported with `AI_PROVIDER=groq`, `GROQ_API_KEY`, and `GROQ_MODEL`, but do not use it if Groq login is broken for you.
 
   AI server context is bounded by `AI_CONTEXT_CHANNELS`, `AI_CONTEXT_MESSAGES_PER_CHANNEL`, `AI_CONTEXT_FOCUSED_MESSAGES`, `AI_CONTEXT_BACKGROUND_MESSAGES`, `AI_CONTEXT_MAX_MESSAGES`, `AI_CONTEXT_MAX_CHARS`, `AI_CONTEXT_MESSAGE_CHARS`, `AI_CONTEXT_MEMBER_LIMIT`, `AI_CONTEXT_CHANNEL_LIMIT`, and `AI_CONTEXT_ROLE_LIMIT`. Explicitly targeted channels use the focused allocation; unrelated channels use the background allocation.
-   Set `AI_CONTEXT_CHANNELS` to `all` to scan every cached readable text channel up to Duck's safety cap.
+   Set `AI_CONTEXT_CHANNELS` to `all` to consider readable text channels; `AI_CONTEXT_ALL_CHANNEL_LIMIT` (default `25`) keeps each request bounded.
    Duck compacts context before model calls so large servers do not overload smaller/free models with too much prompt text.
    Private channel message history is only included when the requester has Administrator and Duck has permission to view/read that channel.
    Server context cache lifetime is controlled by `AI_CONTEXT_CACHE_TTL_MS`; the default is `15000` milliseconds.
    Chat response size is controlled by `AI_CHAT_MAX_TOKENS`; the default is `700`.
-   Empty OpenRouter chat responses are retried up to `AI_CHAT_MAX_ATTEMPTS`; the default is `3`.
-   OpenRouter reasoning output is excluded by default with `AI_EXCLUDE_REASONING=true` so reasoning models return visible chat content instead of only an internal `reasoning` field.
-   Queue text is controlled by `DUCK_QUEUE_MESSAGE`.
+   Empty OpenRouter chat responses are retried up to `AI_CHAT_MAX_ATTEMPTS`; retries disable reasoning so a model cannot spend its entire completion budget without visible content.
+   AI calls time out through `AI_REQUEST_TIMEOUT_MS`, retry transient transport failures through `AI_HTTP_MAX_ATTEMPTS`, and use `AI_MAX_CONCURRENT_GLOBAL`, `AI_MAX_CONCURRENT_PER_GUILD`, and `AI_MAX_QUEUE_PER_GUILD` for fair admission control.
+   OpenRouter reasoning output is excluded by default with `AI_EXCLUDE_REASONING=true`; `AI_REASONING_EFFORT=low` preserves more of the completion budget for the visible answer.
+   `AI_VISION_MODE=auto` enables attachments only for recognized vision models and always excludes `tencent/hy3`. Add exact model IDs to `AI_VISION_MODELS` when needed.
+   Queue text is controlled by `DUCK_QUEUE_MESSAGE`. Presence is controlled by `DUCK_STATUS_TEXT`, `DUCK_STATUS_TYPE`, and `DUCK_STATUS_STATE`.
    Pending confirmation persistence is bounded by `PENDING_ACTION_TTL_MS`; the default is `1800000` milliseconds, or 30 minutes.
    Debug logging is on by default. Set `DUCK_DEBUG=false` only when you want quieter logs. `DUCK_DEBUG_AI_BODY` can log model output snippets, but should stay `false` unless you are actively debugging.
 

@@ -108,7 +108,13 @@ function loadJsonFile(filePath, fallback) {
 
 function writeJsonFileNow(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath, { force: true });
+  }
 }
 
 function getJsonWriteDebounceMs() {
@@ -202,7 +208,9 @@ function getAiContextRoleLimit() {
 }
 
 function getAiContextMessageChannelLimit() {
-  if (/^all$/i.test(process.env.AI_CONTEXT_CHANNELS || "")) return 500;
+  if (/^all$/i.test(process.env.AI_CONTEXT_CHANNELS || "")) {
+    return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_ALL_CHANNEL_LIMIT) || 25, 100));
+  }
   return Math.max(1, Math.min(Number(process.env.AI_CONTEXT_CHANNELS) || 500, 500));
 }
 
@@ -339,14 +347,35 @@ function getAiChatMaxAttempts() {
   return Math.max(1, Math.min(Number(process.env.AI_CHAT_MAX_ATTEMPTS) || 3, 10));
 }
 
+function getAiRequestTimeoutMs() {
+  return Math.max(5_000, Math.min(Number(process.env.AI_REQUEST_TIMEOUT_MS) || 30_000, 120_000));
+}
+
+function getAiHttpMaxAttempts() {
+  return Math.max(1, Math.min(Number(process.env.AI_HTTP_MAX_ATTEMPTS) || 2, 5));
+}
+
+function getCommandScope() {
+  return String(process.env.DUCK_COMMAND_SCOPE || "guild").toLowerCase() === "global" ? "global" : "guild";
+}
+
+function getStatusConfig() {
+  const type = String(process.env.DUCK_STATUS_TYPE || "watching").trim().toLowerCase();
+  const status = String(process.env.DUCK_STATUS_STATE || "online").trim().toLowerCase();
+  return {
+    text: String(process.env.DUCK_STATUS_TEXT || "the pond's criminal masterminds 🦆").trim().slice(0, 128),
+    type: ["playing", "streaming", "listening", "watching", "competing"].includes(type) ? type : "watching",
+    status: ["online", "idle", "dnd", "invisible"].includes(status) ? status : "online",
+  };
+}
+
 function shouldExcludeReasoning(config) {
   if (/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "")) return false;
   return config?.providerName === "OpenRouter" || /openrouter\.ai/i.test(config?.baseUrl || "");
 }
 
 function savePendingActions() {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(pendingActionsPath, JSON.stringify([...pendingActions.values()], null, 2));
+  writeJsonFileNow(pendingActionsPath, [...pendingActions.values()]);
   logDebug("pending-actions.saved", { count: pendingActions.size });
 }
 
@@ -400,13 +429,20 @@ function loadPendingActions() {
   try {
     if (!fs.existsSync(pendingActionsPath)) return;
 
-    const saved = JSON.parse(fs.readFileSync(pendingActionsPath, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(pendingActionsPath, "utf8"));
+    const saved = Array.isArray(parsed) ? parsed.slice(-1_000) : [];
     const now = Date.now();
     const ttl = getPendingActionTtlMs();
 
     let skipped = 0;
+    const perGuild = new Map();
     for (const action of saved) {
-      if (!action?.id || !action.guildId || !getActionRequestChannelId(action)) continue;
+      if (!action?.id || !action.guildId || !action.requestedBy || !getActionRequestChannelId(action) || typeof action.tool !== "string") continue;
+      const guildCount = perGuild.get(action.guildId) || 0;
+      if (guildCount >= 50) {
+        skipped += 1;
+        continue;
+      }
 
       const expiresAt = action.expiresAt ?? action.createdAt + ttl;
       if (expiresAt <= now) {
@@ -414,6 +450,7 @@ function loadPendingActions() {
         continue;
       }
 
+      perGuild.set(action.guildId, guildCount + 1);
       const hydrated = { ...action, requestChannelId: getActionRequestChannelId(action), expiresAt };
       pendingActions.set(hydrated.id, hydrated);
       schedulePendingExpiry(hydrated);
@@ -480,6 +517,8 @@ function requireConfig() {
     contextAttachmentLimit: getAiContextAttachmentLimit(),
     chatMaxTokens: getAiChatMaxTokens(),
     chatMaxAttempts: getAiChatMaxAttempts(),
+    aiRequestTimeoutMs: getAiRequestTimeoutMs(),
+    aiHttpMaxAttempts: getAiHttpMaxAttempts(),
     excludeReasoning: !/^(0|false|no|off)$/i.test(process.env.AI_EXCLUDE_REASONING || "true"),
     visionEnabled: isAiVisionEnabled(),
     visionMaxImages: getAiVisionMaxImages(),
@@ -487,6 +526,8 @@ function requireConfig() {
     visionMaxAttachmentBytes: getAiVisionMaxAttachmentBytes(),
     visionDetail: getAiVisionDetail(),
     pendingActionTtlMs: getPendingActionTtlMs(),
+    commandScope: getCommandScope(),
+    status: getStatusConfig(),
   });
   logInfo("voice.dependencies", {
     voicePackageVersion,
@@ -560,6 +601,10 @@ export {
   updateEntryChannelConfig,
   getAiChatMaxTokens,
   getAiChatMaxAttempts,
+  getAiRequestTimeoutMs,
+  getAiHttpMaxAttempts,
+  getCommandScope,
+  getStatusConfig,
   shouldExcludeReasoning,
   savePendingActions,
   getActionRequestChannelId,

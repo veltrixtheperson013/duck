@@ -1,21 +1,79 @@
 import http from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, EmbedBuilder, PermissionsBitField, REST, Routes, SlashCommandBuilder } from "discord.js";
 import { AudioPlayerStatus, StreamType, VoiceConnectionStatus, createAudioPlayer, createAudioResource, entersState, getVoiceConnection, joinVoiceChannel } from "@discordjs/voice";
 import { client } from "./client.js";
 import { isDebugEnabled, shouldLogAiBodies, logInfo, logDebug, logWarn, logError, elapsedMs, limitDiscordContent, splitDiscordLines, AiServiceError, makeAiUserError } from "./logging.js";
-import { pendingActions, pendingByChannel, pendingExpiryTimers, serverContextCache, messageHistoryCache, resourceFetchCache, pendingJsonWrites, voiceSessions, voiceQuarantineExpiryTimers, voiceQuarantineMoves, commandCooldowns } from "./state.js";
+import { pendingActions, pendingByChannel, pendingExpiryTimers, serverContextCache, messageHistoryCache, resourceFetchCache, pendingJsonWrites, voiceSessions, voiceQuarantineExpiryTimers, voiceQuarantineMoves, commandCooldowns, processedDiscordEvents, reminderTimers } from "./state.js";
 import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES, BLESSINGS, EIGHT_BALL_ANSWERS, TOOL_REQUIREMENTS, DUCK_COLORS, COMMAND_PRESENTATION, RISK_COPY, CAPABILITY_MODES } from "./constants.js";
-import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
+import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, getAiRequestTimeoutMs, getAiHttpMaxAttempts, getCommandScope, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
+import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
 let cacheRefreshRunning = false;
 let keepAliveServer = null;
 let inviteCleanupTimer = null;
+let aiScheduler = null;
+
+function getAiScheduler() {
+  aiScheduler ??= new FairGuildScheduler({
+    globalConcurrency: Math.max(1, Math.min(Number(process.env.AI_MAX_CONCURRENT_GLOBAL) || 4, 16)),
+    guildConcurrency: Math.max(1, Math.min(Number(process.env.AI_MAX_CONCURRENT_PER_GUILD) || 1, 4)),
+    maxQueuedPerGuild: Math.max(1, Math.min(Number(process.env.AI_MAX_QUEUE_PER_GUILD) || 20, 100)),
+    maxQueuedGlobal: Math.max(10, Math.min(Number(process.env.AI_MAX_QUEUE_GLOBAL) || 200, 2_000)),
+  });
+  return aiScheduler;
+}
+
+async function scheduleAiRequest(message, kind, task) {
+  const scheduler = getAiScheduler();
+  let scheduled;
+  try {
+    scheduled = scheduler.schedule(message.guildId, task);
+  } catch (err) {
+    if (err instanceof QueueCapacityError) {
+      throw new AiServiceError(err.message, { providerName: getConfiguredAiProvider(), queueFull: true });
+    }
+    throw err;
+  }
+  logDebug("ai.queue.scheduled", {
+    kind,
+    guildId: message.guildId,
+    messageId: message.id,
+    position: scheduled.position,
+    ...scheduler.snapshot(message.guildId),
+  });
+  try {
+    return await scheduled.promise;
+  } finally {
+    logDebug("ai.queue.finished", {
+      kind,
+      guildId: message.guildId,
+      messageId: message.id,
+      ...scheduler.snapshot(message.guildId),
+    });
+  }
+}
 function normalizeText(input) {
   return input.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function claimDiscordEvent(id) {
+  const key = String(id || "");
+  if (!key || processedDiscordEvents.has(key)) return false;
+  const now = Date.now();
+  processedDiscordEvents.set(key, now);
+  if (processedDiscordEvents.size > 5_000) {
+    for (const [eventId, createdAt] of processedDiscordEvents) {
+      if (now - createdAt > 10 * 60_000 || processedDiscordEvents.size > 4_000) {
+        processedDiscordEvents.delete(eventId);
+      }
+      if (processedDiscordEvents.size <= 4_000) break;
+    }
+  }
+  return true;
 }
 
 function parseDurationMs(text) {
@@ -376,19 +434,79 @@ async function handleVoiceQuarantineState(oldState, newState) {
 }
 
 function requesterActionBlockReason(message, action) {
-  const requester = message.member;
+  return requesterActionBlockReasonForMember(message.guild, message.member, action);
+}
+
+function requesterActionBlockReasonForMember(guild, requester, action) {
   if (!requester || requester.permissions.has(PermissionsBitField.Flags.Administrator)) return null;
   if (action.roleId) {
-    const role = message.guild.roles.cache.get(action.roleId);
+    const role = guild.roles.cache.get(action.roleId);
     if (role && role.position >= requester.roles.highest.position) {
       return `You cannot manage @${role.name} because it is at or above your highest role.`;
     }
   }
   if (action.targetId && !["unban_user", "delete_user_messages", "view_warnings"].includes(action.tool)) {
-    const member = message.guild.members.cache.get(action.targetId);
-    if (member?.id === message.guild.ownerId || (member && member.roles.highest.position >= requester.roles.highest.position)) {
+    const member = guild.members.cache.get(action.targetId);
+    if (member?.id === guild.ownerId || (member && member.roles.highest.position >= requester.roles.highest.position)) {
       return `You cannot target ${summarizeMemberName(member)} because they are at or above your highest role.`;
     }
+  }
+  return null;
+}
+
+async function revalidateExecutionAuthorization(guild, action, approver) {
+  if (!approver || approver.guild?.id !== guild.id) {
+    return "I did not run that action because the approver is not a current member of this server.";
+  }
+  if (!action.requestedBy) {
+    return "I did not run that action because its requester identity is missing.";
+  }
+  const requester = await guild.members.fetch({ user: action.requestedBy, force: true }).catch(() => null);
+  if (!requester) {
+    return "I did not run that action because the requester is no longer in this server.";
+  }
+  if (action.tool === "bulk_actions"
+    && !requester.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    return "I did not run `bulk_actions` because it requires a current Administrator requester.";
+  }
+
+  const actions = action.tool === "bulk_actions" ? action.actions ?? [] : [action];
+  for (const child of actions) {
+    const required = TOOL_REQUIREMENTS[child.tool];
+    if (required && !hasPermission(requester, required)) {
+      return `I did not run \`${child.tool}\` because the requester no longer has ${describePermissionRequirement(required)}.`;
+    }
+    if (child.tool === "announce"
+      && !requester.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return `I did not run \`${child.tool}\` because it requires a current Administrator requester.`;
+    }
+
+    if (child.channelId) {
+      const channel = await guild.channels.fetch(child.channelId).catch(() => null);
+      if (!channel || channel.guildId !== guild.id) {
+        return `I did not run \`${child.tool}\` because its target channel is no longer valid.`;
+      }
+      const channelPermissions = channel.permissionsFor(requester);
+      if (required && !requester.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        const permissions = Array.isArray(required) ? required : [required];
+        if (!channelPermissions || !permissions.every((permission) => channelPermissions.has(permission))) {
+          return `I did not run \`${child.tool}\` because the requester no longer has the required permission in ${channel}.`;
+        }
+      }
+      if (!channelPermissions?.has(PermissionsBitField.Flags.ViewChannel)
+        && !requester.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return `I did not run \`${child.tool}\` because the requester cannot view its target channel.`;
+      }
+    }
+
+    if (child.roleId && !guild.roles.cache.has(child.roleId)) {
+      await guild.roles.fetch().catch(() => null);
+    }
+    if (child.targetId && !guild.members.cache.has(child.targetId)) {
+      await guild.members.fetch(child.targetId).catch(() => null);
+    }
+    const hierarchyError = requesterActionBlockReasonForMember(guild, requester, child);
+    if (hierarchyError) return `I did not run \`${child.tool}\`: ${hierarchyError}`;
   }
   return null;
 }
@@ -1368,9 +1486,9 @@ function canIncludeChannelMessages(message, channel, botMember) {
   if (!botPermissions?.has(PermissionsBitField.Flags.ViewChannel) || !botPermissions.has(PermissionsBitField.Flags.ReadMessageHistory)) {
     return false;
   }
-
-  if (!channelIsPrivate(channel)) return true;
-  return message.member?.permissions?.has(PermissionsBitField.Flags.Administrator);
+  const requesterPermissions = message.member ? channel.permissionsFor(message.member) : null;
+  return Boolean(requesterPermissions?.has(PermissionsBitField.Flags.ViewChannel)
+    && requesterPermissions.has(PermissionsBitField.Flags.ReadMessageHistory));
 }
 
 function getChannelCacheKey(channel) {
@@ -1708,6 +1826,8 @@ function startCacheMaintenance() {
 function flushRuntimeStateAndExit(signal) {
   try {
     for (const guildId of voiceSessions.keys()) destroyVoiceSession(guildId);
+    for (const reminder of reminderTimers.values()) clearTimeout(reminder.timer);
+    reminderTimers.clear();
     pruneRuntimeCaches();
   } catch (err) {
     logWarn("cache.shutdown-flush-failed", { signal, error: err?.message || String(err) });
@@ -1716,7 +1836,12 @@ function flushRuntimeStateAndExit(signal) {
 }
 
 function findHistoryChannelTarget(message, text) {
-  const mentioned = message.mentions.channels.find((channel) => channel.isTextBased?.() && "messages" in channel);
+  const requesterCanRead = (channel) => {
+    const permissions = message.member ? channel.permissionsFor(message.member) : null;
+    return permissions?.has(PermissionsBitField.Flags.ViewChannel)
+      && permissions.has(PermissionsBitField.Flags.ReadMessageHistory);
+  };
+  const mentioned = message.mentions.channels.find((channel) => channel.isTextBased?.() && "messages" in channel && requesterCanRead(channel));
   if (mentioned) return mentioned;
 
   const normalizedText = normalizeMemberLookup(text);
@@ -1725,7 +1850,7 @@ function findHistoryChannelTarget(message, text) {
   let best = null;
   let bestScore = 0;
   for (const channel of message.guild.channels.cache.values()) {
-    if (!channel.isTextBased?.() || !("messages" in channel) || !channel.name) continue;
+    if (!channel.isTextBased?.() || !("messages" in channel) || !channel.name || !requesterCanRead(channel)) continue;
 
     const normalizedName = normalizeMemberLookup(channel.name);
     if (normalizedName.length < 3) continue;
@@ -2054,7 +2179,7 @@ async function collectServerContext(message) {
   const cacheTtl = getServerContextCacheTtlMs();
   const requesterScope = message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ? "admin" : "public";
   const focusChannels = getContextPriorityChannels(message).map((channel) => channel.id).join(",");
-  const cacheKey = `${message.guildId}:${message.channelId}:${requesterScope}:${focusChannels}`;
+  const cacheKey = `${message.guildId}:${message.channelId}:${message.author.id}:${requesterScope}:${focusChannels}`;
   const cached = serverContextCache.get(cacheKey);
   if (cacheTtl > 0 && cached && cached.expiresAt > Date.now()) {
     logDebug("context.cache-hit", {
@@ -2075,6 +2200,7 @@ async function collectServerContext(message) {
     .slice(0, getAiContextMemberLimit());
   const channels = message.guild.channels.cache
     .filter((channel) => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice || channel.type === ChannelType.GuildCategory)
+    .filter((channel) => message.member && channel.permissionsFor(message.member)?.has(PermissionsBitField.Flags.ViewChannel))
     .sort((a, b) => a.rawPosition - b.rawPosition)
     .map(summarizeChannelForContext)
     .slice(0, getAiContextChannelLimit());
@@ -2117,8 +2243,10 @@ async function collectServerContext(message) {
   if (cacheTtl > 0) {
     serverContextCache.set(cacheKey, {
       expiresAt: Date.now() + cacheTtl,
+      touchedAt: Date.now(),
       context,
     });
+    pruneMapToLimit(serverContextCache, Math.max(25, Math.min(Number(process.env.DUCK_CONTEXT_CACHE_MAX_ITEMS) || 200, 2_000)));
   }
 
   logDebug("context.cache-miss", {
@@ -2672,6 +2800,15 @@ function isOpenRouterProvider(providerName) {
   return String(providerName || "").toLowerCase() === "openrouter";
 }
 
+function getReasoningConfig(config) {
+  if (!shouldExcludeReasoning(config)) return null;
+  const effort = String(process.env.AI_REASONING_EFFORT || "low").toLowerCase();
+  return {
+    effort: ["none", "minimal", "low", "medium", "high"].includes(effort) ? effort : "low",
+    exclude: true,
+  };
+}
+
 async function makePlannerMessages(message, providedContext = null, options = {}) {
   const context = providedContext ?? await collectServerContext(message);
   const tools = TOOL_DEFINITIONS.map((tool) => `${tool.name} (${tool.risk})`).join(", ");
@@ -2784,7 +2921,10 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
   const startedAt = Date.now();
   const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   const serverContext = await collectServerContext(message);
-  const includeVision = isOpenRouterProvider(providerName);
+  const includeVision = isAiVisionEnabled() && modelSupportsVision(providerName, model, {
+    mode: process.env.AI_VISION_MODE || "auto",
+    models: process.env.AI_VISION_MODELS,
+  });
   const plannerMessages = await makePlannerMessages(message, serverContext, { includeVision });
   const visionImages = includeVision ? collectVisionAttachmentsFromContext(serverContext).length : 0;
   logDebug("ai.planner.request", {
@@ -2808,12 +2948,13 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
       body.response_format = responseFormat;
     }
 
-    if (shouldExcludeReasoning({ providerName, baseUrl })) {
-      body.reasoning = { exclude: true };
+    const reasoning = getReasoningConfig({ providerName, baseUrl });
+    if (reasoning) {
+      body.reasoning = reasoning;
       body.include_reasoning = false;
     }
 
-    return fetch(url, {
+    return fetchWithTimeoutAndRetry(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -2821,6 +2962,9 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
         ...extraHeaders,
       },
       body: JSON.stringify(body),
+    }, {
+      timeoutMs: getAiRequestTimeoutMs(),
+      attempts: getAiHttpMaxAttempts(),
     });
   };
 
@@ -2844,7 +2988,7 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
+    const errorText = await readBoundedText(response, 64 * 1024);
     const canRetryWithoutFormat = responseFormatKind !== "none"
       && response.status === 400
       && /response_?format|json_object|json_schema/i.test(errorText);
@@ -2876,7 +3020,7 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
     }
 
     if (!response.ok) {
-      const retryError = await response.text();
+      const retryError = canRetryWithoutFormat ? await readBoundedText(response, 64 * 1024) : errorText;
       logWarn("ai.planner.http-failed", {
         providerName,
         model,
@@ -2892,7 +3036,7 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
     }
   }
 
-  const body = await response.json();
+  const body = await readBoundedJson(response, 2 * 1024 * 1024);
   const content = body.choices?.[0]?.message?.content;
   if (!content) {
     logWarn("ai.planner.empty-content", { providerName, model, ms: elapsedMs(startedAt) });
@@ -2936,7 +3080,7 @@ async function planWithOllama(message) {
   logDebug("ai.ollama.planner.request", { model, baseUrl, messageId: message.id, channelId: message.channelId });
 
   try {
-    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
+    response = await fetchWithTimeoutAndRetry(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2950,6 +3094,9 @@ async function planWithOllama(message) {
         },
         messages: plannerMessages,
       }),
+    }, {
+      timeoutMs: getAiRequestTimeoutMs(),
+      attempts: 1,
     });
   } catch (err) {
     logError("ai.ollama.planner.request-failed", err, { model, baseUrl, ms: elapsedMs(startedAt) });
@@ -2965,12 +3112,12 @@ async function planWithOllama(message) {
       baseUrl,
       status: response.status,
       ms: elapsedMs(startedAt),
-      error: (await response.text()).slice(0, 800),
+      error: (await readBoundedText(response, 64 * 1024)).slice(0, 800),
     });
     throw new AiServiceError(`Ollama planner returned HTTP ${response.status}.`, { model, baseUrl, status: response.status });
   }
 
-  const body = await response.json();
+  const body = await readBoundedJson(response, 2 * 1024 * 1024);
   const content = body.message?.content;
   if (!content) {
     logWarn("ai.ollama.planner.empty-content", { model, baseUrl, ms: elapsedMs(startedAt) });
@@ -3143,7 +3290,10 @@ async function chatWithOpenAiCompatible(message, config) {
   const startedAt = Date.now();
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const context = await collectServerContext(message);
-  const includeVision = isOpenRouterProvider(config.providerName);
+  const includeVision = isAiVisionEnabled() && modelSupportsVision(config.providerName, config.model, {
+    mode: process.env.AI_VISION_MODE || "auto",
+    models: process.env.AI_VISION_MODELS,
+  });
   const messages = await makeChatMessages(message, { includeVision, providedContext: context });
   const visionImages = includeVision ? collectVisionAttachmentsFromContext(context).length : 0;
   logDebug("ai.chat.request", {
@@ -3160,24 +3310,38 @@ async function chatWithOpenAiCompatible(message, config) {
   const requestBody = {
     model: config.model,
     temperature: 0.4,
-    max_tokens: getAiChatMaxTokens(),
+    max_completion_tokens: getAiChatMaxTokens(),
     messages,
   };
 
-  if (shouldExcludeReasoning(config)) {
-    requestBody.reasoning = { exclude: true };
+  const reasoning = getReasoningConfig(config);
+  if (reasoning) {
+    requestBody.reasoning = reasoning;
     requestBody.include_reasoning = false;
   }
 
-  const requestChat = () => fetch(url, {
+  const requestChat = (attempt) => {
+    const attemptBody = attempt > 1 && isOpenRouterProvider(config.providerName)
+      ? {
+          ...requestBody,
+          temperature: 0.2,
+          reasoning: { effort: "none", exclude: true },
+          include_reasoning: false,
+        }
+      : requestBody;
+    return fetchWithTimeoutAndRetry(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       "Content-Type": "application/json",
       ...config.extraHeaders,
     },
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(attemptBody),
+  }, {
+    timeoutMs: getAiRequestTimeoutMs(),
+    attempts: getAiHttpMaxAttempts(),
   });
+  };
 
   const maxAttempts = config.providerName === "OpenRouter" ? getAiChatMaxAttempts() : 1;
   let body = null;
@@ -3187,7 +3351,7 @@ async function chatWithOpenAiCompatible(message, config) {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let response;
     try {
-      response = await requestChat();
+      response = await requestChat(attempt);
     } catch (err) {
       logError("ai.chat.request-failed", err, {
         providerName: config.providerName,
@@ -3203,7 +3367,7 @@ async function chatWithOpenAiCompatible(message, config) {
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readBoundedText(response, 64 * 1024);
       logWarn("ai.chat.http-failed", {
         providerName: config.providerName,
         model: config.model,
@@ -3220,7 +3384,7 @@ async function chatWithOpenAiCompatible(message, config) {
       });
     }
 
-    body = await response.json();
+    body = await readBoundedJson(response, 2 * 1024 * 1024);
     choiceMessage = body.choices?.[0]?.message;
     content = extractAiTextContent(choiceMessage);
     if (typeof content === "string" && content.trim()) break;
@@ -3270,7 +3434,7 @@ async function chatWithOllama(message) {
 
   let response;
   try {
-    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
+    response = await fetchWithTimeoutAndRetry(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3284,6 +3448,9 @@ async function chatWithOllama(message) {
         },
         messages,
       }),
+    }, {
+      timeoutMs: getAiRequestTimeoutMs(),
+      attempts: 1,
     });
   } catch (err) {
     logError("ai.ollama.chat.request-failed", err, { model, baseUrl, ms: elapsedMs(startedAt) });
@@ -3294,7 +3461,7 @@ async function chatWithOllama(message) {
   }
 
   if (!response.ok) {
-    const errorText = await response.text();
+    const errorText = await readBoundedText(response, 64 * 1024);
     logWarn("ai.ollama.chat.http-failed", {
       model,
       baseUrl,
@@ -3309,7 +3476,7 @@ async function chatWithOllama(message) {
     });
   }
 
-  const body = await response.json();
+  const body = await readBoundedJson(response, 2 * 1024 * 1024);
   const content = extractAiTextContent(body.message);
   logDebug("ai.ollama.chat.result", {
     model,
@@ -3555,12 +3722,12 @@ async function generateChatResponse(message) {
   logDebug("ai.chat.provider", { provider, messageId: message.id, channelId: message.channelId });
   try {
     if (provider === "ollama") {
-      return { content: await chatWithOllama(message), error: null };
+      return { content: await scheduleAiRequest(message, "chat", () => chatWithOllama(message)), error: null };
     }
 
     const config = getOpenAiCompatibleConfig();
     if (config) {
-      return { content: await chatWithOpenAiCompatible(message, config), error: null };
+      return { content: await scheduleAiRequest(message, "chat", () => chatWithOpenAiCompatible(message, config)), error: null };
     }
 
     return { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
@@ -3577,7 +3744,7 @@ async function generateChatResponse(message) {
 async function planModerationRequest(message) {
   let aiError = null;
   try {
-    const aiPlan = await planWithConfiguredAi(message);
+    const aiPlan = await scheduleAiRequest(message, "planner", () => planWithConfiguredAi(message));
     if (aiPlan) return aiPlan;
   } catch (err) {
     aiError = makeAiUserError(err, "AI failed before it could plan that tool.");
@@ -3867,7 +4034,27 @@ function makeActionAuditReason(action, approver, detail = action.reason) {
 
 async function promptForConfirmation(message, action, options = {}) {
   const startedAt = Date.now();
-  const actionId = `${Date.now()}_${message.id}`;
+  const existingActionId = pendingByChannel.get(message.channelId);
+  if (existingActionId) {
+    pendingActions.delete(existingActionId);
+    const existingTimer = pendingExpiryTimers.get(existingActionId);
+    if (existingTimer) clearTimeout(existingTimer);
+    pendingExpiryTimers.delete(existingActionId);
+  }
+  const guildActions = [...pendingActions.values()]
+    .filter((item) => item.guildId === message.guildId)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  while (guildActions.length >= 50) {
+    const oldest = guildActions.shift();
+    pendingActions.delete(oldest.id);
+    const timer = pendingExpiryTimers.get(oldest.id);
+    if (timer) clearTimeout(timer);
+    pendingExpiryTimers.delete(oldest.id);
+    if (pendingByChannel.get(getActionRequestChannelId(oldest)) === oldest.id) {
+      pendingByChannel.delete(getActionRequestChannelId(oldest));
+    }
+  }
+  const actionId = randomUUID();
   const createdAt = Date.now();
   const pending = {
     ...action,
@@ -3918,6 +4105,18 @@ async function executeAction(client, action, approver) {
     approverId: approver.id,
   });
   const guild = await cachedGuild(action.guildId);
+  const authorizationError = await revalidateExecutionAuthorization(guild, action, approver);
+  if (authorizationError) {
+    logWarn("moderation.execute.authorization-changed", {
+      actionId: action.id,
+      tool: action.tool,
+      guildId: action.guildId,
+      requestedBy: action.requestedBy,
+      approverId: approver?.id,
+      reason: authorizationError,
+    });
+    return authorizationError;
+  }
   const botMember = await cachedBotMember(guild);
   const needed = TOOL_REQUIREMENTS[action.tool];
 
@@ -3935,6 +4134,7 @@ async function executeAction(client, action, approver) {
           ...childAction,
           id: `${action.id}:${index + 1}`,
           guildId: action.guildId,
+          requestedBy: action.requestedBy,
           requestChannelId: action.requestChannelId,
           promptId: action.promptId,
           approvalMode: action.approvalMode,
@@ -4521,6 +4721,25 @@ async function approveAction(source, actionId, client) {
     return;
   }
 
+  const sourceGuildId = source.guildId ?? source.guild?.id;
+  const sourceChannelId = source.channelId ?? source.channel?.id;
+  const sourceMessageId = source.isButton?.() ? source.message?.id : null;
+  if (sourceGuildId !== action.guildId
+    || sourceChannelId !== getActionRequestChannelId(action)
+    || (sourceMessageId && action.promptId && sourceMessageId !== action.promptId)) {
+    logWarn("moderation.approve.context-mismatch", {
+      actionId,
+      sourceGuildId,
+      sourceChannelId,
+      sourceMessageId,
+    });
+    if ("reply" in source) {
+      const payload = { content: "That confirmation does not belong to this server, channel, or prompt.", ephemeral: true };
+      await source.reply(source.isButton?.() ? payload : payload.content).catch(() => {});
+    }
+    return;
+  }
+
   const approver = await resolveApprover(source);
   if (!approver || !canApprove(action, approver)) {
     const content = "I need confirmation from a person that has Administrator.";
@@ -4631,6 +4850,14 @@ async function cancelAction(interaction, actionId) {
   if (!action) {
     logWarn("moderation.cancel.missing-action", { actionId });
     await interaction.reply({ content: "That Duck confirmation expired or was already handled.", ephemeral: true });
+    return;
+  }
+
+  if (interaction.guildId !== action.guildId
+    || interaction.channelId !== getActionRequestChannelId(action)
+    || (action.promptId && interaction.message?.id !== action.promptId)) {
+    logWarn("moderation.cancel.context-mismatch", { actionId, guildId: interaction.guildId, channelId: interaction.channelId });
+    await interaction.reply({ content: "That cancellation does not belong to this server, channel, or prompt.", ephemeral: true });
     return;
   }
 
@@ -4757,7 +4984,7 @@ async function makeRecentHistoryResponse(message) {
 
   if (!canIncludeChannelMessages(message, targetChannel, botMember)) {
     if (channelIsPrivate(targetChannel) && !message.member?.permissions?.has(PermissionsBitField.Flags.Administrator)) {
-      return `#${targetChannel.name} is private. I can only read private channel history when the requester has Administrator.`;
+      return `I cannot read #${targetChannel.name} because you do not currently have View Channel and Read Message History there.`;
     }
     return `I cannot read message history in #${targetChannel.name}. Make sure Duck can view the channel and read message history.`;
   }
@@ -4905,13 +5132,24 @@ function formatRoleInfo(role) {
   ].join("\n");
 }
 
-function loadQuotes() {
-  const quotes = loadJsonFile(quotesPath, DEFAULT_QUOTES);
-  return Array.isArray(quotes) ? quotes.filter((quote) => typeof quote === "string" && quote.trim()) : [...DEFAULT_QUOTES];
+function loadQuoteStore() {
+  const stored = loadJsonFile(quotesPath, { version: 2, guilds: {} });
+  if (!stored || Array.isArray(stored) || typeof stored !== "object") return { version: 2, guilds: {} };
+  if (!stored.guilds || typeof stored.guilds !== "object") stored.guilds = {};
+  return stored;
 }
 
-function saveQuotes(quotes) {
-  saveJsonFile(quotesPath, quotes);
+function loadQuotes(guildId) {
+  const quotes = loadQuoteStore().guilds[String(guildId)];
+  return Array.isArray(quotes)
+    ? quotes.filter((quote) => typeof quote === "string" && quote.trim()).slice(0, 100)
+    : [...DEFAULT_QUOTES];
+}
+
+function saveQuotes(guildId, quotes) {
+  const store = loadQuoteStore();
+  store.guilds[String(guildId)] = quotes.slice(0, 100);
+  saveJsonFile(quotesPath, store);
 }
 
 function parseReminderDuration(text) {
@@ -5070,7 +5308,7 @@ async function synthesizeVoiceAudio(text) {
 
   if (!response.ok) {
     clearTimeout(timeout);
-    const details = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+    const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
     throw new Error(`ElevenLabs TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
   }
   if (!response.body) {
@@ -5107,12 +5345,13 @@ async function playNextVoiceItem(guildId) {
   const session = voiceSessions.get(guildId);
   if (!session || !session.ready || session.playing || !session.queue.length) return;
   session.playing = true;
-  const text = session.queue.shift();
+  const item = session.queue.shift();
+  const text = typeof item === "string" ? item : item.text;
   try {
     const audio = await synthesizeVoiceAudio(text);
     if (voiceSessions.get(guildId) !== session || !session.ready) {
       session.playing = false;
-      session.queue.unshift(text);
+      session.queue.unshift(item);
       return;
     }
     session.player.play(createAudioResource(Readable.from([audio]), {
@@ -5192,7 +5431,11 @@ function createVoiceSession(message, channel, connection) {
     handshakeTimer: null,
     voiceChannelId: channel.id,
     textChannelId: channel.id,
+    ownerId: message.author.id,
     lastErrorNoticeAt: 0,
+    ttsWindowStartedAt: Date.now(),
+    ttsCharsInWindow: 0,
+    ttsUserUsage: new Map(),
   };
 
   voiceSessions.set(guildId, session);
@@ -5322,14 +5565,19 @@ async function joinVoiceForMessage(message) {
       : `I am already in ${channel}, but Discord's voice handshake is still connecting. Messages will stay queued and play automatically when it becomes ready.`;
   }
 
+  if (current && current.voiceChannelId !== channel.id
+    && !hasPermission(message.member, PermissionsBitField.Flags.MoveMembers)) {
+    return `Duck is already active in <#${current.voiceChannelId}>. Join that channel or ask someone with Move Members permission to move me.`;
+  }
+
   destroyVoiceSession(message.guildId);
   const connection = joinVoiceChannel({
     channelId: channel.id,
     guildId: message.guildId,
     adapterCreator: message.guild.voiceAdapterCreator,
     selfDeaf: false,
-    // DAVE currently causes silent outgoing audio for some Discord bot connections.
-    daveEncryption: getEnvBoolean("DUCK_VOICE_DAVE", false),
+    // Current Discord voice channels require DAVE-capable clients. 0.19.2 includes the packet guards needed for TTS.
+    daveEncryption: getEnvBoolean("DUCK_VOICE_DAVE", true),
     debug: isDebugEnabled(),
   });
   createVoiceSession(message, channel, connection);
@@ -5339,7 +5587,7 @@ async function joinVoiceForMessage(message) {
     voiceChannelId: channel.id,
     textChannelId: channel.id,
     userId: message.author.id,
-    daveEncryption: getEnvBoolean("DUCK_VOICE_DAVE", false),
+    daveEncryption: getEnvBoolean("DUCK_VOICE_DAVE", true),
     ready,
     status: connection.state.status,
   });
@@ -5348,16 +5596,31 @@ async function joinVoiceForMessage(message) {
     : `Joined ${channel}. Discord's voice handshake is still connecting; messages in this voice channel's text chat will queue and play automatically when it becomes ready.`;
 }
 
-function enqueueVoiceText(guildId, spoken) {
+function enqueueVoiceText(guildId, spoken, userId = null) {
   const session = voiceSessions.get(guildId);
   if (!session) return false;
+  const now = Date.now();
+  const text = String(spoken).slice(0, 200);
+  const windowMs = 60_000;
+  if (now - session.ttsWindowStartedAt >= windowMs) {
+    session.ttsWindowStartedAt = now;
+    session.ttsCharsInWindow = 0;
+    session.ttsUserUsage.clear();
+  }
+  const guildCharacterLimit = Math.max(200, Math.min(Number(process.env.DUCK_TTS_CHARS_PER_MINUTE) || 3_000, 20_000));
+  const userCharacterLimit = Math.max(200, Math.min(Number(process.env.DUCK_TTS_USER_CHARS_PER_MINUTE) || 1_200, guildCharacterLimit));
+  const userUsage = userId ? session.ttsUserUsage.get(userId) ?? { chars: 0, lastAt: 0 } : null;
+  if (session.ttsCharsInWindow + text.length > guildCharacterLimit) return false;
+  if (userUsage && (now - userUsage.lastAt < 1_500 || userUsage.chars + text.length > userCharacterLimit)) return false;
   if (session.queue.length >= 20) session.queue.shift();
-  session.queue.push(String(spoken).slice(0, 200));
+  session.queue.push({ text, userId });
+  session.ttsCharsInWindow += text.length;
+  if (userId) session.ttsUserUsage.set(userId, { chars: userUsage.chars + text.length, lastAt: now });
   logDebug("voice.tts-queued", {
     guildId,
     channelId: session.textChannelId,
     queueLength: session.queue.length,
-    textLength: String(spoken).length,
+    textLength: text.length,
   });
   playNextVoiceItem(guildId).catch((err) => logError("voice.queue-failed", err, { guildId }));
   return true;
@@ -5369,7 +5632,7 @@ function queueVoiceMessage(message) {
   if (getLegacyCommandContent(message.content, message.guildId) || /^\s*(duck\b|<@!?\d+>)/i.test(message.content)) return;
   const spoken = message.cleanContent.replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim().slice(0, 200);
   if (!spoken) return;
-  enqueueVoiceText(message.guildId, `${message.member?.displayName || message.author.username} says: ${spoken}`);
+  enqueueVoiceText(message.guildId, `${message.member?.displayName || message.author.username} says: ${spoken}`, message.author.id);
 }
 
 function parseBulkCommands(text) {
@@ -5556,6 +5819,26 @@ async function makeUtilityResponse(message, text) {
     return makeDiagnosticResponse(message);
   }
 
+  if (/^quack\b/.test(normalized)) {
+    const quacks = [
+      "Quack. Legally, that counts as expert testimony.",
+      "QUACK! The pond has reviewed your request.",
+      "Quack quack. Translation: ship it after tests pass.",
+      "A suspiciously authoritative quack echoes through the server.",
+    ];
+    return quacks[Math.floor(Math.random() * quacks.length)];
+  }
+
+  if (/^(duckfact|duck fact)\b/.test(normalized)) {
+    const facts = [
+      "Duck fact: the bot's natural predator is an expired API token.",
+      "Duck fact: every queue looks shorter when viewed from a pond.",
+      "Duck fact: breadcrumbs are not a valid production database.",
+      "Duck fact: this server is now 3% more waterproof.",
+    ];
+    return facts[Math.floor(Math.random() * facts.length)];
+  }
+
   if (/^join\b/.test(normalized)) {
     try {
       return await joinVoiceForMessage(message);
@@ -5566,6 +5849,12 @@ async function makeUtilityResponse(message, text) {
   }
 
   if (/^leave\b/.test(normalized)) {
+    const session = voiceSessions.get(message.guildId);
+    if (!session) return "I am not connected to voice.";
+    const inSessionChannel = message.member?.voice?.channelId === session.voiceChannelId;
+    if (!inSessionChannel && !hasPermission(message.member, PermissionsBitField.Flags.MoveMembers)) {
+      return `Join Duck in <#${session.voiceChannelId}> or use Move Members permission before disconnecting the active session.`;
+    }
     return destroyVoiceSession(message.guildId) ? "Disconnected from voice." : "I am not connected to voice.";
   }
 
@@ -5581,7 +5870,8 @@ async function makeUtilityResponse(message, text) {
         ? `TTS is active in <#${session.textChannelId}>. Send a normal message there and Duck will read it aloud.`
         : `TTS is bound to <#${session.textChannelId}>, but the voice handshake is still connecting. Messages will queue until it is ready.`;
     }
-    enqueueVoiceText(message.guildId, `${message.member.displayName} says: ${spoken}`);
+    const queued = enqueueVoiceText(message.guildId, `${message.member.displayName} says: ${spoken}`, message.author.id);
+    if (!queued) return "TTS is cooling down or this server reached its one-minute speech budget. Try again shortly.";
     return session.ready ? `Queued for voice: ${spoken}` : `Queued while voice connects: ${spoken}`;
   }
 
@@ -5591,13 +5881,21 @@ async function makeUtilityResponse(message, text) {
 
   if (/^quote\b/.test(normalized)) {
     const rest = text.replace(/^quote\b/i, "").trim();
-    const quotes = loadQuotes();
+    const quotes = loadQuotes(message.guildId);
 
     if (/^add\b/i.test(rest)) {
       const quoteText = rest.replace(/^add\b/i, "").trim();
       if (!quoteText) return "Usage: `duck quote add <text>`";
-      quotes.push(limitDiscordContent(quoteText, 500));
-      saveQuotes(quotes);
+      const cooldownKey = `${message.guildId}:${message.author.id}:quote-add`;
+      const now = Date.now();
+      const lastAddedAt = commandCooldowns.get(cooldownKey) || 0;
+      if (now - lastAddedAt < 30_000) return `Quote add is on cooldown for ${Math.ceil((30_000 - (now - lastAddedAt)) / 1000)}s.`;
+      if (quotes.length >= 100) return "This server's quote book is full (100 quotes).";
+      const sanitized = limitDiscordContent(quoteText, 500);
+      if (quotes.some((quote) => quote.toLowerCase() === sanitized.toLowerCase())) return "That quote is already in this server's quote book.";
+      commandCooldowns.set(cooldownKey, now);
+      quotes.push(sanitized);
+      saveQuotes(message.guildId, quotes);
       return `Quote #${quotes.length} saved.`;
     }
 
@@ -5660,12 +5958,34 @@ async function makeUtilityResponse(message, text) {
     const seconds = parseReminderDuration(match[1]);
     const reminderText = match[2].trim();
     if (!seconds || !reminderText) return "Pick a reminder time from 1 second to 7 days. Use `s`, `m`, `h`, or `d`.";
-    setTimeout(() => {
-      message.channel.send({
-        content: `<@${message.author.id}> Reminder: ${limitDiscordContent(reminderText, 1700)}`,
-        allowedMentions: { users: [message.author.id] },
-      }).catch((err) => logWarn("reminder.send-failed", { messageId: message.id, error: err?.message || String(err) }));
+    const outstanding = [...reminderTimers.values()];
+    const userCount = outstanding.filter((item) => item.guildId === message.guildId && item.userId === message.author.id).length;
+    const guildCount = outstanding.filter((item) => item.guildId === message.guildId).length;
+    if (userCount >= 5) return "You already have 5 reminders pending in this server.";
+    if (guildCount >= 100 || reminderTimers.size >= 500) return "Duck's reminder queue is full right now.";
+
+    const reminderId = `${message.guildId}:${message.author.id}:${message.id}`;
+    const compactText = limitDiscordContent(reminderText, 1700);
+    const record = {
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id,
+      dueAt: Date.now() + seconds * 1000,
+      text: compactText,
+      timer: null,
+    };
+    record.timer = setTimeout(async () => {
+      reminderTimers.delete(reminderId);
+      const channel = client.channels.cache.get(record.channelId)
+        ?? await client.channels.fetch(record.channelId).catch(() => null);
+      if (!channel?.isTextBased?.() || !("send" in channel)) return;
+      await channel.send({
+        content: `<@${record.userId}> Reminder: ${record.text}`,
+        allowedMentions: { users: [record.userId] },
+      }).catch((err) => logWarn("reminder.send-failed", { reminderId, error: err?.message || String(err) }));
     }, seconds * 1000);
+    record.timer.unref?.();
+    reminderTimers.set(reminderId, record);
     return `Reminder set for ${match[1]}.`;
   }
 
@@ -5785,6 +6105,8 @@ function slashCommandContent(interaction) {
     case "commands": return "commands";
     case "ping": return "ping";
     case "test": return "test";
+    case "quack": return "quack";
+    case "duckfact": return "duckfact";
     case "serverinfo": return "serverinfo";
     case "userinfo": return `userinfo ${userMention("member")}`;
     case "avatar": return `avatar ${userMention("member")}`;
@@ -5804,10 +6126,21 @@ function slashCommandContent(interaction) {
     case "unban": return `unban ${interaction.options.getString("user-id", true)} ${reason()}`;
     case "kick": return `kick ${userMention("member")} ${reason()}`;
     case "timeout": return `timeout ${userMention("member")} ${interaction.options.getInteger("minutes", true)}m ${reason()}`;
+    case "untimeout": return `untimeout ${userMention("member")} ${reason()}`;
+    case "softban": return `softban ${userMention("member")} ${reason()}`;
     case "warn": return `warn ${userMention("member")} ${reason()}`;
     case "warnings": return `warnings ${userMention("member")}`;
     case "clearwarnings": return `clear ${interaction.options.getString("count", true)} warnings for ${userMention("member")}`;
     case "clear": return `purge ${interaction.options.getInteger("count", true)}`;
+    case "slowmode": return `slowmode ${channelMention("channel")} ${interaction.options.getInteger("seconds", true)}s ${reason()}`;
+    case "lock": return `lock ${channelMention("channel")} ${reason()}`;
+    case "unlock": return `unlock ${channelMention("channel")} ${reason()}`;
+    case "nickname": return `nickname ${userMention("member")} "${interaction.options.getString("nickname", true)}" ${reason()}`;
+    case "disconnect": return `disconnect ${userMention("member")} ${reason()}`;
+    case "voicemute": return `voice mute ${userMention("member")} ${reason()}`;
+    case "voiceunmute": return `voice unmute ${userMention("member")} ${reason()}`;
+    case "deafen": return `deafen ${userMention("member")} ${reason()}`;
+    case "undeafen": return `undeafen ${userMention("member")} ${reason()}`;
     case "voicequarantine": return `voice quarantine ${userMention("member")} ${interaction.options.getInteger("minutes", true)}m ${reason()}`;
     case "voicerelease": return `voice release ${userMention("member")} ${reason()}`;
     case "addrole": return `add role ${roleMention("role")} to ${userMention("member")} ${reason()}`;
@@ -6251,6 +6584,8 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("commands").setDescription("Show Duck's command list."),
     new SlashCommandBuilder().setName("ping").setDescription("Show Duck's Discord gateway latency."),
     new SlashCommandBuilder().setName("test").setDescription("Run Duck's diagnostic checks."),
+    new SlashCommandBuilder().setName("quack").setDescription("Request an expertly calibrated quack."),
+    new SlashCommandBuilder().setName("duckfact").setDescription("Receive extremely serious Duck knowledge."),
     new SlashCommandBuilder().setName("serverinfo").setDescription("Show server information."),
     new SlashCommandBuilder().setName("userinfo").setDescription("Show member information.")
       .addUserOption((option) => option.setName("member").setDescription("Member to inspect.").setRequired(false)),
@@ -6297,6 +6632,8 @@ async function registerCommands(client, options = {}) {
       .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
       .addIntegerOption((option) => option.setName("minutes").setDescription("Timeout duration in minutes.").setMinValue(1).setMaxValue(40320).setRequired(true))
       .addStringOption((option) => option.setName("reason").setDescription("Reason for timeout.").setRequired(true)),
+    memberReasonCommand("untimeout", "Remove a member's active timeout after confirmation.", PermissionsBitField.Flags.ModerateMembers),
+    memberReasonCommand("softban", "Ban and immediately unban a member to clean messages.", PermissionsBitField.Flags.BanMembers),
     memberReasonCommand("warn", "Store and DM a warning after confirmation.", PermissionsBitField.Flags.ModerateMembers),
     new SlashCommandBuilder().setName("warnings").setDescription("List stored warnings for a member.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.ModerateMembers)
@@ -6308,6 +6645,29 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("clear").setDescription("Purge recent messages after confirmation.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
       .addIntegerOption((option) => option.setName("count").setDescription("Messages to remove.").setMinValue(1).setMaxValue(100).setRequired(true)),
+    new SlashCommandBuilder().setName("slowmode").setDescription("Set a channel's slowmode after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageChannels)
+      .addIntegerOption((option) => option.setName("seconds").setDescription("Slowmode seconds (0 disables).").setMinValue(0).setMaxValue(21600).setRequired(true))
+      .addChannelOption((option) => option.setName("channel").setDescription("Target text channel; defaults to here.").addChannelTypes(ChannelType.GuildText).setRequired(false))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for the change.").setRequired(false)),
+    new SlashCommandBuilder().setName("lock").setDescription("Lock a text channel after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageChannels)
+      .addChannelOption((option) => option.setName("channel").setDescription("Target text channel; defaults to here.").addChannelTypes(ChannelType.GuildText).setRequired(false))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for locking.").setRequired(false)),
+    new SlashCommandBuilder().setName("unlock").setDescription("Unlock a text channel after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageChannels)
+      .addChannelOption((option) => option.setName("channel").setDescription("Target text channel; defaults to here.").addChannelTypes(ChannelType.GuildText).setRequired(false))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for unlocking.").setRequired(false)),
+    new SlashCommandBuilder().setName("nickname").setDescription("Change a member's nickname after confirmation.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageNicknames)
+      .addUserOption((option) => option.setName("member").setDescription("Target member.").setRequired(true))
+      .addStringOption((option) => option.setName("nickname").setDescription("New nickname.").setMaxLength(32).setRequired(true))
+      .addStringOption((option) => option.setName("reason").setDescription("Reason for the change.").setRequired(false)),
+    memberReasonCommand("disconnect", "Disconnect a member from voice after confirmation.", PermissionsBitField.Flags.MoveMembers),
+    memberReasonCommand("voicemute", "Server-mute a member in voice after confirmation.", PermissionsBitField.Flags.MuteMembers),
+    memberReasonCommand("voiceunmute", "Remove a member's server voice mute after confirmation.", PermissionsBitField.Flags.MuteMembers),
+    memberReasonCommand("deafen", "Server-deafen a member after confirmation.", PermissionsBitField.Flags.DeafenMembers),
+    memberReasonCommand("undeafen", "Remove a member's server deafen after confirmation.", PermissionsBitField.Flags.DeafenMembers),
     new SlashCommandBuilder().setName("voicequarantine").setDescription("Keep a member in the configured quarantine VC for up to 24 hours.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
       .addUserOption((option) => option.setName("member").setDescription("Member to quarantine.").setRequired(true))
@@ -6374,23 +6734,31 @@ async function registerCommands(client, options = {}) {
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   const guildIds = options.guildIds ?? [...client.guilds.cache.keys()];
-  for (const guildId of guildIds) {
-    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body });
-  }
+  const scope = options.scope ?? getCommandScope();
+  const syncConcurrency = Math.max(1, Math.min(Number(process.env.DUCK_COMMAND_SYNC_CONCURRENCY) || 2, 5));
+  await runBoundedTasks(guildIds, syncConcurrency, async (guildId) => {
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), {
+      body: scope === "guild" ? body : [],
+    });
+  });
   if (options.syncGlobal !== false) {
-    await rest.put(Routes.applicationCommands(client.user.id), { body });
+    await rest.put(Routes.applicationCommands(client.user.id), {
+      body: scope === "global" ? body : [],
+    });
   }
   logInfo("discord.commands-registered", {
     appId: client.user.id,
     count: body.length,
     guilds: guildIds.length,
-    global: options.syncGlobal !== false,
+    scope,
+    global: options.syncGlobal !== false && scope === "global",
     ms: elapsedMs(startedAt),
   });
   return {
     commandCount: body.length,
     guildCount: guildIds.length,
-    globalSynced: options.syncGlobal !== false,
+    scope,
+    globalSynced: options.syncGlobal !== false && scope === "global",
   };
 }
 
@@ -6400,6 +6768,7 @@ export {
   cacheRefreshRunning,
   keepAliveServer,
   inviteCleanupTimer,
+  claimDiscordEvent,
   normalizeText,
   parseDurationMs,
   parseSlowmodeSeconds,

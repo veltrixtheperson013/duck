@@ -7,9 +7,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node .",
-    "check": "node --check src/index.js",
+    "check": "node --check src/index.js && node --check src/core.js && node --check src/runtime.js",
     "check:commands": "node . --check-commands",
-    "lint": "eslint src"
+    "lint": "eslint src test",
+    "test": "node --test"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
