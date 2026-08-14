@@ -40,6 +40,8 @@
   "DUCK_VOICE_DAVE": "true",
   "DUCK_TTS_CHARS_PER_MINUTE": "3000",
   "DUCK_TTS_USER_CHARS_PER_MINUTE": "1200",
+  "DUCK_KEEP_ALIVE": "true",
+  "DUCK_KEEP_ALIVE_PORT": "9044",
   "DUCK_DEBUG": "true",
   "DUCK_DEBUG_AI_BODY": "false",
   "OLLAMA_MODEL": "llama3.1:8b",

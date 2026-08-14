@@ -7,7 +7,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node .",
-    "check": "node --check src/index.js && node --check src/core.js && node --check src/runtime.js",
+    "check": "node --check src/index.js && node --check src/core.js && node --check src/runtime.js && node --check src/web.js",
     "check:commands": "node . --check-commands",
     "lint": "eslint src test",
     "test": "node --test"

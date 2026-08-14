@@ -1,4 +1,3 @@
-import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, EmbedBuilder, PermissionsBitField, REST, Routes, SlashCommandBuilder } from "discord.js";
@@ -9,6 +8,7 @@ import { pendingActions, pendingByChannel, pendingExpiryTimers, serverContextCac
 import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES, BLESSINGS, EIGHT_BALL_ANSWERS, TOOL_REQUIREMENTS, DUCK_COLORS, COMMAND_PRESENTATION, RISK_COPY, CAPABILITY_MODES } from "./constants.js";
 import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, getAiRequestTimeoutMs, getAiHttpMaxAttempts, getCommandScope, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
+import { createDuckWebsiteServer } from "./web.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
@@ -6361,13 +6361,10 @@ async function getDuckInvocation(message, client) {
 }
 
 function startKeepAliveServer() {
-  if (!getEnvBoolean("DUCK_KEEP_ALIVE", false) || keepAliveServer) return;
+  if (!getEnvBoolean("DUCK_KEEP_ALIVE", true) || keepAliveServer) return;
 
-  const port = Math.max(1, Math.min(Number(process.env.PORT) || Number(process.env.DUCK_KEEP_ALIVE_PORT) || 8080, 65535));
-  keepAliveServer = http.createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Duck is alive.");
-  });
+  const port = Math.max(1, Math.min(Number(process.env.DUCK_KEEP_ALIVE_PORT) || Number(process.env.PORT) || 9044, 65535));
+  keepAliveServer = createDuckWebsiteServer();
   keepAliveServer.on("error", (err) => {
     logWarn("keep-alive.failed", { port, error: err?.message || String(err) });
     keepAliveServer = null;

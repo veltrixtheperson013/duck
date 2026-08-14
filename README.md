@@ -6,6 +6,8 @@ The important safety rule: Duck validates permissions, hierarchy, and targets be
 
 Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal chat and AI tool planning. For obvious moderation requests, Duck asks AI for a tool plan, validates it, and falls back to the built-in local parser only when AI is unavailable or fails.
 
+The built-in website serves Duck's homepage at `/`, setup guide at `/guide`, privacy policy at `/privacy-policy`, and a JSON health check at `/health`. It binds to `0.0.0.0` on `DUCK_KEEP_ALIVE_PORT` (`9044` by default) for Wispbyte deployments. Set `DUCK_KEEP_ALIVE=false` to disable it.
+
 ## Features
 
 - `/setup channel:#channel` chooses the channel where Duck listens. `/setup quarantine-channel:<voice channel>` configures the Administrator-only voice quarantine destination.
