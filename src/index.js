@@ -3,8 +3,8 @@ import { client } from "./client.js";
 import { logInfo, logDebug, logWarn, logError, elapsedMs, splitDiscordLines } from "./logging.js";
 import { pendingActions, pendingByChannel } from "./state.js";
 import { TOOL_DEFINITIONS, TOOL_REQUIREMENTS, DUCK_COLORS } from "./constants.js";
-import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyCommandContent, getEntryChannelConfig, updateEntryChannelConfig, loadPendingActions, getGuildSettings, updateGuildSettings, requireConfig } from "./config.js";
-import { normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
+import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyCommandContent, getEntryChannelConfig, updateEntryChannelConfig, loadPendingActions, getGuildSettings, updateGuildSettings, getStatusConfig, requireConfig } from "./config.js";
+import { claimDiscordEvent, normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, planLocalModerationTool, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, requesterActionBlockReason, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
@@ -73,14 +73,22 @@ client.once(Events.ClientReady, async () => {
     commit: buildInfo.commit,
     commitName: buildInfo.commitName,
   });
+  const configuredStatus = getStatusConfig();
+  const activityTypes = {
+    playing: ActivityType.Playing,
+    streaming: ActivityType.Streaming,
+    listening: ActivityType.Listening,
+    watching: ActivityType.Watching,
+    competing: ActivityType.Competing,
+  };
   client.user.setPresence({
     activities: [
       {
-        name: "for duck / @Duck",
-        type: ActivityType.Watching,
+        name: configuredStatus.text,
+        type: activityTypes[configuredStatus.type],
       },
     ],
-    status: "online",
+    status: configuredStatus.status,
   });
 
   logInfo("pending-actions.ready", { count: pendingActions.size });
@@ -103,6 +111,7 @@ client.on(Events.GuildCreate, async (guild) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (!claimDiscordEvent(`interaction:${interaction.id}`)) return;
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "duck") {
         const prompt = interaction.options.getString("prompt", false) || "commands";
@@ -365,6 +374,7 @@ client.on(Events.MessageBulkDelete, (messages) => {
 client.on(Events.MessageCreate, async (message) => {
   const messageStartedAt = Date.now();
   try {
+    if (!claimDiscordEvent(`message:${message.id}`)) return;
     rememberMessage(message);
     if (!message.guild || message.author.bot) return;
     queueVoiceMessage(message);
@@ -493,7 +503,11 @@ client.on(Events.MessageCreate, async (message) => {
           && Boolean(toolResponseContent)
           && !hasExplicitSpeakMessage(planningMessage.content);
         if (!shouldSkipPlannerFallback) {
-          plan = await planModerationRequest(planningMessage);
+          // A successful chat response already consumed one provider request. Prefer the
+          // deterministic parser instead of calling the same model a second time.
+          plan = toolResponseContent
+            ? planLocalModerationTool(planningMessage)
+            : await planModerationRequest(planningMessage);
           if (!toolResponseContent && chatError) {
             toolResponseContent = chatError;
           }
@@ -537,6 +551,14 @@ client.on(Events.MessageCreate, async (message) => {
         if (parsedToolCall.plan && !parsedToolCall.plan.error) {
           const needed = TOOL_REQUIREMENTS[parsedToolCall.plan.tool];
           if (!needed || hasPermission(message.member, needed)) {
+            const hierarchyError = requesterActionBlockReason(planningMessage, parsedToolCall.plan);
+            if (hierarchyError) {
+              await queueMessage.edit(makeDuckChatPayload(message, hierarchyError, {
+                title: "Hierarchy Check Failed",
+                color: DUCK_COLORS.danger,
+              })).catch(() => {});
+              return;
+            }
             await dispatchPlannedAction(message, parsedToolCall.plan, {
               messageToEdit: queueMessage,
               content: parsedToolCall.content || "Prepared a moderation plan. Waiting for Administrator confirmation.",
@@ -606,6 +628,21 @@ client.on(Events.MessageCreate, async (message) => {
       } else {
         await message.reply(makeDuckChatPayload(message, content, {
           title: "Permission Required",
+          color: DUCK_COLORS.danger,
+        }));
+      }
+      return;
+    }
+    const hierarchyError = requesterActionBlockReason(planningMessage, plan);
+    if (hierarchyError) {
+      if (queueMessage) {
+        await queueMessage.edit(makeDuckChatPayload(message, hierarchyError, {
+          title: "Hierarchy Check Failed",
+          color: DUCK_COLORS.danger,
+        })).catch(() => {});
+      } else {
+        await message.reply(makeDuckChatPayload(message, hierarchyError, {
+          title: "Hierarchy Check Failed",
           color: DUCK_COLORS.danger,
         }));
       }
