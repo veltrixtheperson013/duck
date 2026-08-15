@@ -6,8 +6,8 @@
   <meta name="description" content="Learn how to invite, configure, and use the Duck Discord moderation bot.">
   <title>Guide — Duck</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="styles.css?v=20260823" as="style"><link rel="stylesheet" href="styles.css?v=20260823">
-  <script src="site.js?v=20260823" defer></script>
+  <link rel="preload" href="styles.css?v=20260824" as="style"><link rel="stylesheet" href="styles.css?v=20260824">
+  <script src="site.js?v=20260824" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -61,7 +61,7 @@
             <article><span>🔊</span><div><h3>Voice</h3><small>Use free OpenRouter Flux TTS or Plus-only ElevenLabs and control speaker announcements.</small></div></article>
             <article><span>👋</span><div><h3>Community</h3><small>Choose welcome and log channels, then customize entry and farewell messages.</small></div></article>
             <article><span>🎨</span><div><h3>Branding</h3><small>After three paid Plus months, set Duck’s nickname, avatar, banner, and bio for one server.</small></div></article>
-            <article><span>🎲</span><div><h3>Fun and Plan</h3><small>Toggle playful commands individually and review billing or loyalty progress.</small></div></article>
+            <article><span>🎲</span><div><h3>Fun and Plan</h3><small>Toggle playful commands in Settings, then open the server’s separate Plan page for billing and loyalty.</small></div></article>
           </div>
           <p>You can still configure core Discord behavior with slash commands:</p>
           <ol class="command-list">
@@ -80,7 +80,7 @@
 
       <section id="actions" class="guide-step"><div class="step-number">04</div><div><h2>Create no-code custom actions</h2><p>Custom Actions are an if-this-then-that builder—not a JavaScript executor. Each rule can match every message, text a message contains, or text it starts with. Narrow it to a channel or user ID, then choose an allowlisted result.</p><div class="example-grid"><div><small>Welcome response</small><p>If a message starts with <code>hello duck</code>, reply with <code>Hi {user}!</code></p></div><div><small>Channel reaction</small><p>If anyone speaks in <code>#showcase</code>, react with <code>💚</code>.</p></div><div><small>Plus moderation</small><p>If a member posts a blocked trigger in one channel, warn, timeout, kick, or softban.</p></div><div><small>Templates</small><p>Replies support <code>{user}</code>, <code>{username}</code>, <code>{channel}</code>, and <code>{server}</code>.</p></div></div><p>Duck runs at most three matching actions per message, rate-limits repeated triggers, and never evaluates uploaded code.</p></div></section>
 
-      <section id="plus" class="guide-step"><div class="step-number">05</div><div><h2>Understand Plus loyalty</h2><p>Open your profile menu inside a server workspace to see the current tier, progress line, next unlock date, current perks, and next milestone.</p><ul class="clean-list"><li><strong>Free</strong> — 5 safe custom actions and memory of 6 recent Duck replies.</li><li><strong>Duck Plus</strong> — 25 actions, automated moderation outcomes, premium AI/TTS, and memory of 16 replies.</li><li><strong>Three paid months</strong> — 50 actions, 30-reply AI memory, and server-specific bot branding.</li><li><strong>Six paid months</strong> — unlimited custom actions and memory of 50 recent Duck replies.</li></ul><p>Conversation memory is bounded, expires after six hours, and stays isolated by Discord server. Duck’s AI may also call enabled fun tools; the same plan and dashboard toggles are enforced.</p></div></section>
+      <section id="plus" class="guide-step"><div class="step-number">05</div><div><h2>Understand Plus loyalty</h2><p>Choose a server, then use <strong>View plan</strong> to open its dedicated Plus page. Your desktop profile menu now links to a separate Account center for Discord identity, session security, and server access.</p><ul class="clean-list"><li><strong>Free</strong> — 5 safe custom actions and memory of 6 recent Duck replies.</li><li><strong>Duck Plus</strong> — 25 actions, automated moderation outcomes, premium AI/TTS, and memory of 16 replies.</li><li><strong>Three paid months</strong> — 50 actions, 30-reply AI memory, and server-specific bot branding.</li><li><strong>Six paid months</strong> — unlimited custom actions and memory of 50 recent Duck replies.</li></ul><p>The Plan page shows the current tier, renewal or access-end date, billing controls, loyalty progress, current perks, and the next milestone. Conversation memory remains bounded, expires after six hours, and stays isolated by Discord server.</p></div></section>
 
       <section id="use" class="guide-step">
         <div class="step-number">06</div>

@@ -59,7 +59,10 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260823/);
+    assert.match(dashboardText, /styles\.css\?v=20260824/);
+    assert.match(dashboardText, /Account center/);
+    assert.match(dashboardText, /data-global-account/);
+    assert.doesNotMatch(dashboardText, /data-settings-tab="billing"/);
     assert.match(dashboardText, /data-back/);
     assert.match(dashboardText, /Back to servers/);
     assert.match(dashboardText, /Controlled chaos/);
@@ -69,6 +72,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     const serverDashboard = await fetch(`${origin}/dashboard/servers/123456789012345678`);
     assert.equal(serverDashboard.status, 200);
     assert.match(await serverDashboard.text(), /Server control panel/);
+    assert.equal((await fetch(`${origin}/dashboard/account`)).status, 200);
+    assert.equal((await fetch(`${origin}/dashboard/servers/123456789012345678/plan`)).status, 200);
     assert.equal((await fetch(`${origin}/favicon.svg`)).status, 200);
     assert.match(await (await fetch(`${origin}/pricing`)).text(), /Annual saves \$8\.89/);
     assert.match(await (await fetch(`${origin}/donate`)).text(), /seriously thankful/i);
@@ -156,7 +161,29 @@ test("Discord OAuth dependency work is aborted by the server deadline", async ()
       const callback = await fetch(`${origin}/auth/discord/callback?code=slow&state=${encodeURIComponent(oauthUrl.searchParams.get("state"))}`, { redirect: "manual", headers: { Cookie: `duck_oauth_state=${stateCookie}` } });
       assert.equal(callback.status, 504);
       assert.match((await callback.json()).error, /too long/i);
-    }, { fetchImpl, discordTimeoutMs: 100 });
+    }, { fetchImpl, discordTimeoutMs: 100, logErrorImpl: () => {} });
+  } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
+});
+
+test("temporary Discord failures retry once and return traceable upstream errors", async () => {
+  const environmentKeys = ["CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_SESSION_SECURE"];
+  const previous = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { CLIENT_ID: "1507850959642955816", DISCORD_CLIENT_SECRET: "test-client-secret", DISCORD_OAUTH_REDIRECT_URI: "http://127.0.0.1/auth/discord/callback", DUCK_SESSION_SECURE: "false" });
+  let guildRequests = 0; let rateLimited = false; const logged = [];
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/oauth2/token")) return Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
+    if (String(url).endsWith("/users/@me")) return Response.json({ id: "999999999999999999", username: "duck-user" });
+    if (String(url).endsWith("/users/@me/guilds")) { guildRequests += 1; if (rateLimited) return Response.json({ retry_after: 1 }, { status: 429 }); return guildRequests === 1 ? Response.json({ error: "temporary" }, { status: 503 }) : Response.json([]); }
+    return new Response("not found", { status: 404 });
+  };
+  try {
+    await withWebsite(async (origin) => {
+      const begin = await fetch(`${origin}/auth/discord`, { redirect: "manual" }); const oauthUrl = new URL(begin.headers.get("location")); const stateCookie = begin.headers.get("set-cookie").match(/duck_oauth_state=([^;]+)/)[1];
+      const callback = await fetch(`${origin}/auth/discord/callback?code=valid&state=${encodeURIComponent(oauthUrl.searchParams.get("state"))}`, { redirect: "manual", headers: { Cookie: `duck_oauth_state=${stateCookie}` } }); const cookie = callback.headers.get("set-cookie").match(/duck_session=([^;]+)/)[1];
+      const guilds = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } });
+      assert.equal(guilds.status, 200); assert.equal(guildRequests, 2); assert.match(guilds.headers.get("x-request-id"), /^[a-f0-9]{16}$/); assert.equal(logged.length, 0);
+      rateLimited = true; const limited = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } }); const limitedBody = await limited.json(); assert.equal(limited.status, 503); assert.match(limitedBody.error, /rate limiting/); assert.equal(limitedBody.requestId, limited.headers.get("x-request-id")); assert.equal(logged.length, 1);
+    }, { fetchImpl, logErrorImpl: (...args) => logged.push(args) });
   } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });
 

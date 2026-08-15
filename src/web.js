@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { PermissionsBitField, Routes } from "discord.js";
 import { getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, makeSettingsPatch } from "./dashboard-config.js";
+import { logError } from "./logging.js";
 import { readBoundedJson } from "./runtime.js";
 import { getPublicBaseUrl, getStripeClient, isPlusEnabled, isStripeServerConfigured, makeDonationCheckoutInput, makePlusCheckoutInput, makeStripeSubscriptionPatch } from "./stripe.js";
 
@@ -114,11 +115,16 @@ function discordTokenExpiry(tokens) {
   return Date.now() + Math.max(60, Math.min(Number.isFinite(seconds) ? seconds : 3_600, 86_400)) * 1_000;
 }
 
+function serviceError(message, status, code, details = {}) {
+  return Object.assign(new Error(message, details), { status, code });
+}
+
 function createDuckWebsiteServer(options = {}) {
   const discordFetch = options.fetchImpl || fetch;
   const client = options.client;
   const getGuildSettings = options.getGuildSettings || (() => ({}));
   const updateGuildSettings = options.updateGuildSettings || (() => {});
+  const reportError = options.logErrorImpl || logError;
   const stripe = options.stripeClient ?? getStripeClient();
   const sessions = new Map(); const webhookEvents = new Map();
   const oauthStateSecret = randomBytes(32);
@@ -147,14 +153,30 @@ function createDuckWebsiteServer(options = {}) {
       throw error;
     } finally { clearTimeout(timeout); discordInflight -= 1; if (session) session.discordInflight -= 1; }
   }
-  async function tokenRequest(parameters, session = null) { const { response, body } = await discordJson("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: clientId(), client_secret: clientSecret(), ...parameters }) }, session, 128 * 1024); if (!response.ok || typeof body.access_token !== "string" || !body.access_token || body.access_token.length > 4_096 || (body.refresh_token != null && (typeof body.refresh_token !== "string" || body.refresh_token.length > 4_096))) throw new Error("Discord sign-in could not be completed."); return body; }
-  async function discordApi(session, route) { if (session.tokenExpiresAt <= Date.now() + 60_000) { session.refreshPromise ??= tokenRequest({ grant_type: "refresh_token", refresh_token: session.refreshToken }, session).then((tokens) => { session.accessToken = tokens.access_token; session.refreshToken = tokens.refresh_token || session.refreshToken; session.tokenExpiresAt = discordTokenExpiry(tokens); }).finally(() => { session.refreshPromise = null; }); await session.refreshPromise; } const { response, body } = await discordJson(`https://discord.com/api/v10${route}`, { headers: { Authorization: `Bearer ${session.accessToken}` } }, session); if (!response.ok) throw new Error("Discord could not return your server list."); return route === "/users/@me/guilds" ? normalizeDiscordGuilds(body) : body; }
+  async function tokenRequest(parameters, session = null) { let result; try { result = await discordJson("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: clientId(), client_secret: clientSecret(), ...parameters }) }, session, 128 * 1024); } catch (error) { if (error.status) throw error; throw serviceError("Discord sign-in is temporarily unavailable.", 502, "discord_oauth_unreachable", { cause: error }); } const { response, body } = result; if (!response.ok || typeof body.access_token !== "string" || !body.access_token || body.access_token.length > 4_096 || (body.refresh_token != null && (typeof body.refresh_token !== "string" || body.refresh_token.length > 4_096))) throw serviceError("Discord sign-in could not be completed.", 502, "discord_oauth_failed"); return body; }
+  async function refreshDiscordSession(session) {
+    if (!session.refreshToken) throw serviceError("Your Discord session expired. Sign in again.", 401, "discord_session_expired");
+    session.refreshPromise ??= tokenRequest({ grant_type: "refresh_token", refresh_token: session.refreshToken }, session).then((tokens) => { session.accessToken = tokens.access_token; session.refreshToken = tokens.refresh_token || session.refreshToken; session.tokenExpiresAt = discordTokenExpiry(tokens); }).catch((error) => { throw serviceError("Your Discord session expired. Sign in again.", 401, "discord_session_expired", { cause: error }); }).finally(() => { session.refreshPromise = null; });
+    await session.refreshPromise;
+  }
+  async function discordApi(session, route) {
+    if (session.tokenExpiresAt <= Date.now() + 60_000) await refreshDiscordSession(session);
+    const request = () => discordJson(`https://discord.com/api/v10${route}`, { headers: { Authorization: `Bearer ${session.accessToken}` } }, session);
+    const requestAvailable = async () => { try { return await request(); } catch (error) { if (error.status) throw error; await new Promise((resolve) => setTimeout(resolve, 100)); try { return await request(); } catch (retryError) { if (retryError.status) throw retryError; throw serviceError("Discord is temporarily unreachable. Try again shortly.", 502, "discord_unreachable", { cause: retryError }); } } };
+    let result = await requestAvailable();
+    if (result.response.status === 401) { await refreshDiscordSession(session); result = await requestAvailable(); }
+    if (result.response.status >= 500) { await new Promise((resolve) => setTimeout(resolve, 100)); try { result = await request(); } catch (error) { if (error.status) throw error; throw serviceError("Discord is temporarily unreachable. Try again shortly.", 502, "discord_unreachable"); } }
+    if (result.response.status === 401) throw serviceError("Your Discord session expired. Sign in again.", 401, "discord_session_expired");
+    if (result.response.status === 429) throw serviceError("Discord is rate limiting requests. Try again in a moment.", 503, "discord_rate_limited");
+    if (!result.response.ok) throw serviceError("Discord could not verify your account right now.", 502, "discord_upstream_error");
+    return route === "/users/@me/guilds" ? normalizeDiscordGuilds(result.body) : result.body;
+  }
   function getSession(req) { prune(); const id = parseCookies(req).duck_session; const session = id && sessions.get(id); return session ? { id, session } : null; }
   async function guildAccess(req, guildId, fresh = false) { const auth = getSession(req); if (!auth) return { error: "Sign in with Discord first.", status: 401 }; const guilds = !fresh && auth.session.guilds && auth.session.guildsAt > Date.now() - 30_000 ? auth.session.guilds : await discordApi(auth.session, "/users/@me/guilds"); auth.session.guilds = guilds; auth.session.guildsAt = Date.now(); const guild = guilds.find(({ id }) => id === guildId); if (!guild) return { error: "You are not a member of that server.", status: 403 }; if (!hasManageGuildPermission(guild)) return { error: "Manage Server permission is required.", status: 403 }; const botGuild = client?.guilds?.cache?.get(guildId); if (!botGuild) return { error: "Invite Duck to this server before configuring it.", status: 409 }; const isAdministrator = hasAdministratorPermission(guild); let member = null; if (!isAdministrator) { member = botGuild.members?.cache?.get(auth.session.user.id) ?? (botGuild.members?.fetch ? await botGuild.members.fetch({ user: auth.session.user.id, force: true }).catch(() => null) : null); if (!member) return { error: "Duck could not verify your current server membership.", status: 403 }; } return { ...auth, guild, botGuild, member, isAdministrator }; }
   function requireCsrf(req, auth) { const supplied = Buffer.from(String(req.headers["x-duck-csrf"] || "")); const expected = Buffer.from(String(auth.session.csrf || "")); return supplied.length > 20 && supplied.length === expected.length && timingSafeEqual(supplied, expected); }
 
   const server = http.createServer({ maxHeaderSize: 16 * 1024 }, async (req, res) => {
-    const method = req.method || "GET"; let pathname;
+    const method = req.method || "GET"; const requestId = randomBytes(8).toString("hex"); res.setHeader("X-Request-ID", requestId); let pathname;
     try { pathname = new URL(req.url || "/", "http://duck.local").pathname; } catch { return send(res, 400, "text/plain; charset=utf-8", "Bad request.", method); }
     try {
       prune();
@@ -203,11 +225,12 @@ function createDuckWebsiteServer(options = {}) {
       }
       if (pathname === "/dashboard/") return redirect(res, "/dashboard");
       const dashboardGuildPage = /^\/dashboard\/servers\/\d{10,}\/?$/.test(pathname);
-      const page = pages.get(pathname); if ((page || dashboardGuildPage) && ["GET", "HEAD"].includes(method)) return sendAsset(req, res, page || pages.get("/dashboard"), method);
+      const dashboardSubpage = pathname === "/dashboard/account" || /^\/dashboard\/servers\/\d{10,}\/plan\/?$/.test(pathname);
+      const page = pages.get(pathname); if ((page || dashboardGuildPage || dashboardSubpage) && ["GET", "HEAD"].includes(method)) return sendAsset(req, res, page || pages.get("/dashboard"), method);
       if (pathname === "/donate/checkout") return json(res, 405, { error: "Method not allowed." }, method, { Allow: "POST" });
-      if (page || dashboardGuildPage || pathname.startsWith("/api/") || pathname.startsWith("/auth/")) return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD" });
+      if (page || dashboardGuildPage || dashboardSubpage || pathname.startsWith("/api/") || pathname.startsWith("/auth/")) return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD" });
       return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
-    } catch (error) { const status = error.code === "plus_required" ? 402 : error instanceof SyntaxError ? 400 : error.status || 500; return json(res, status, { error: status === 500 ? "Duck hit an unexpected server error." : error.message }); }
+    } catch (error) { const status = error.code === "plus_required" ? 402 : error instanceof SyntaxError ? 400 : error.status || 500; if (status >= 500) reportError("website_request_failed", error, { requestId, method, pathname, status, code: error.code || null }); return json(res, status, { error: status === 500 ? `Duck hit an unexpected server error. Reference: ${requestId}` : error.message, requestId }); }
   });
   server.requestTimeout = 20_000;
   server.headersTimeout = 10_000;
