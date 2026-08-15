@@ -71,6 +71,8 @@ const FUN_COMMANDS = Object.freeze([
   { command: "wouldyourather", key: "funWouldYouRatherEnabled", label: "Would you rather", tier: "plus" },
 ]);
 const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
+const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with"]);
+const CUSTOM_ACTION_TYPES = new Set(["reply", "react", "delete", "warn", "timeout", "kick", "softban"]);
 
 function getAiModelDefinition(id) {
   return AI_MODELS.find((model) => model.id === id) ?? null;
@@ -89,6 +91,32 @@ function getBrandingEligibleAt(settings) {
   const targetMonth = startedAt.getUTCMonth() + 3;
   const finalDay = new Date(Date.UTC(startedAt.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
   return new Date(Date.UTC(startedAt.getUTCFullYear(), targetMonth, Math.min(startedAt.getUTCDate(), finalDay), startedAt.getUTCHours(), startedAt.getUTCMinutes(), startedAt.getUTCSeconds(), startedAt.getUTCMilliseconds())).toISOString();
+}
+
+function addSubscriptionMonths(value, months) {
+  const startedAt = new Date(value || "");
+  if (Number.isNaN(startedAt.valueOf())) return null;
+  const targetMonth = startedAt.getUTCMonth() + months;
+  const finalDay = new Date(Date.UTC(startedAt.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(startedAt.getUTCFullYear(), targetMonth, Math.min(startedAt.getUTCDate(), finalDay), startedAt.getUTCHours(), startedAt.getUTCMinutes(), startedAt.getUTCSeconds(), startedAt.getUTCMilliseconds())).toISOString();
+}
+
+function getPlusLoyalty(settings, now = Date.now()) {
+  const plus = hasPlusEntitlement(settings, now);
+  const subscription = settings?.subscription ?? {};
+  const paid = plus && subscription.provider === "stripe";
+  const startedAt = paid ? Date.parse(subscription.startedAt || "") : NaN;
+  const threeAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 3) || "") : NaN;
+  const sixAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 6) || "") : NaN;
+  const months = Number.isFinite(startedAt) ? Math.max(0, Math.floor((now - startedAt) / (30.4375 * 24 * 60 * 60_000))) : 0;
+  const level = !plus ? "free" : Number.isFinite(sixAt) && now >= sixAt ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : "plus";
+  const customActionLimit = level === "plus_6" ? null : level === "plus_3" ? 50 : plus ? 25 : 5;
+  const memoryReplies = level === "plus_6" ? 50 : level === "plus_3" ? 30 : plus ? 16 : 6;
+  const nextAt = level === "plus" && Number.isFinite(threeAt) ? new Date(threeAt).toISOString() : level === "plus_3" && Number.isFinite(sixAt) ? new Date(sixAt).toISOString() : null;
+  const progressStart = level === "plus" ? startedAt : level === "plus_3" ? threeAt : NaN;
+  const progressEnd = level === "plus" ? threeAt : level === "plus_3" ? sixAt : NaN;
+  const progress = Number.isFinite(progressStart) && Number.isFinite(progressEnd) ? Math.max(0, Math.min(1, (now - progressStart) / (progressEnd - progressStart))) : level === "plus_6" ? 1 : 0;
+  return { level, paid, months, startedAt: paid ? subscription.startedAt : null, nextAt, progress, customActionLimit, memoryReplies };
 }
 
 function hasMaturePlusEntitlement(settings, now = Date.now()) {
@@ -119,6 +147,12 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
   const plus = hasPlusEntitlement(settings, now);
   const selectedTts = TTS_MODELS.find(({ id }) => id === settings.ttsModel);
   const ttsModel = selectedTts && (selectedTts.tier !== "plus" || plus) ? selectedTts.id : TTS_MODELS.find(({ tier }) => tier === "free").id;
+  const loyalty = getPlusLoyalty(settings, now);
+  const customActions = Array.isArray(settings.customActions)
+    ? settings.customActions
+      .filter((action) => plus || !["warn", "timeout", "kick", "softban"].includes(action?.actionType))
+      .slice(0, loyalty.customActionLimit ?? settings.customActions.length)
+    : [];
   return {
     aiChatEnabled: settings.aiChatEnabled !== false,
     aiModel,
@@ -139,6 +173,17 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     logChannelId: /^\d{10,}$/.test(settings.entryChannels?.logChannelId || "") ? settings.entryChannels.logChannelId : null,
     funCommandsEnabled: settings.funCommandsEnabled !== false,
     ...Object.fromEntries(FUN_COMMANDS.map((command) => [command.key, command.tier === "free" ? settings[command.key] !== false : plus && settings[command.key] === true])),
+    automodEnabled: settings.automodEnabled === true,
+    automodSwearFilter: settings.automodSwearFilter === true,
+    automodNsfwFilter: settings.automodNsfwFilter === true,
+    automodCustomWords: plus && Array.isArray(settings.automodCustomWords) ? settings.automodCustomWords : [],
+    automodViolationsBeforeWarn: Number.isInteger(settings.automodViolationsBeforeWarn) ? settings.automodViolationsBeforeWarn : 3,
+    automodWarningsBeforeAction: Number.isInteger(settings.automodWarningsBeforeAction) ? settings.automodWarningsBeforeAction : 3,
+    automodEscalation: ["kick", "softban"].includes(settings.automodEscalation) ? settings.automodEscalation : "kick",
+    automodGlobalSlowmodeSeconds: Number.isInteger(settings.automodGlobalSlowmodeSeconds) ? settings.automodGlobalSlowmodeSeconds : 0,
+    automodChannelSlowmodes: Array.isArray(settings.automodChannelSlowmodes) ? settings.automodChannelSlowmodes : [],
+    customActions,
+    loyalty,
     subscription: {
       tier: plus ? "plus" : "free",
       status: plus ? subscription.status : "inactive",
@@ -153,14 +198,45 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodSwearFilter", "automodNsfwFilter", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", ...FUN_COMMANDS.map(({ key }) => key)]) {
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodSwearFilter", "automodNsfwFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
     }
+  }
+  if ("automodCustomWords" in input) {
+    if (!hasPlusEntitlement(current, now) && input.automodCustomWords?.length) { const error = new Error("Custom AutoMod words require Duck Plus."); error.code = "plus_required"; throw error; }
+    if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
+    const words = [...new Set(input.automodCustomWords.map((value) => String(value).trim().toLocaleLowerCase("en-US")).filter(Boolean))];
+    if (words.some((value) => value.length > 40)) throw new TypeError("Each custom word must be 40 characters or fewer.");
+    patch.automodCustomWords = words;
+  }
+  for (const key of ["automodViolationsBeforeWarn", "automodWarningsBeforeAction"]) if (key in input) { if (!Number.isInteger(input[key]) || input[key] < 1 || input[key] > 20) throw new TypeError(`${key} must be an integer from 1 to 20.`); patch[key] = input[key]; }
+  if ("automodEscalation" in input) { if (!["kick", "softban"].includes(input.automodEscalation)) throw new TypeError("Unsupported AutoMod escalation."); patch.automodEscalation = input.automodEscalation; }
+  if ("automodGlobalSlowmodeSeconds" in input) { if (!Number.isInteger(input.automodGlobalSlowmodeSeconds) || input.automodGlobalSlowmodeSeconds < 0 || input.automodGlobalSlowmodeSeconds > 21_600) throw new TypeError("Global rate guard must be 0-21600 seconds."); patch.automodGlobalSlowmodeSeconds = input.automodGlobalSlowmodeSeconds; }
+  if ("automodChannelSlowmodes" in input) {
+    if (!Array.isArray(input.automodChannelSlowmodes) || input.automodChannelSlowmodes.length > 50) throw new TypeError("Channel rate guards must be a list of up to 50 channels.");
+    patch.automodChannelSlowmodes = input.automodChannelSlowmodes.map((item) => { if (!/^\d{10,}$/.test(String(item?.channelId || "")) || !Number.isInteger(item?.seconds) || item.seconds < 0 || item.seconds > 21_600) throw new TypeError("Each channel rate guard needs a valid channel and 0-21600 seconds."); return { channelId: String(item.channelId), seconds: item.seconds }; });
+  }
+  if ("customActions" in input) {
+    if (!Array.isArray(input.customActions)) throw new TypeError("Custom actions must be a list.");
+    const loyalty = getPlusLoyalty(current, now); if (loyalty.customActionLimit !== null && input.customActions.length > loyalty.customActionLimit) throw new TypeError(`This server can have up to ${loyalty.customActionLimit} custom actions.`);
+    patch.customActions = input.customActions.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new TypeError(`Custom action ${index + 1} is invalid.`);
+      if (!/^[a-zA-Z0-9_-]{1,36}$/.test(String(item.id || ""))) throw new TypeError(`Custom action ${index + 1} needs a valid ID.`);
+      const name = String(item.name || "").trim(); if (!name || name.length > 40) throw new TypeError(`Custom action ${index + 1} needs a 1-40 character name.`);
+      if (!CUSTOM_ACTION_TRIGGERS.has(item.triggerType) || !CUSTOM_ACTION_TYPES.has(item.actionType)) throw new TypeError(`Custom action ${index + 1} has an unsupported trigger or action.`);
+      if (["warn", "timeout", "kick", "softban"].includes(item.actionType) && !hasPlusEntitlement(current, now)) { const error = new Error("Automated moderation actions require Duck Plus."); error.code = "plus_required"; throw error; }
+      const triggerValue = String(item.triggerValue || "").trim(); if (item.triggerType !== "message" && (!triggerValue || triggerValue.length > 80)) throw new TypeError(`Custom action ${index + 1} needs a 1-80 character trigger.`);
+      const response = String(item.response || "").trim(); if (["reply", "react"].includes(item.actionType) && (!response || response.length > 500)) throw new TypeError(`Custom action ${index + 1} needs a bounded response.`);
+      const channelId = item.channelId ? String(item.channelId) : null; const userId = item.userId ? String(item.userId) : null;
+      if (channelId && !/^\d{10,}$/.test(channelId)) throw new TypeError(`Custom action ${index + 1} has an invalid channel.`);
+      if (userId && !/^\d{10,}$/.test(userId)) throw new TypeError(`Custom action ${index + 1} has an invalid user.`);
+      return { id: String(item.id), name, enabled: item.enabled !== false, triggerType: item.triggerType, triggerValue, channelId, userId, actionType: item.actionType, response };
+    });
   }
   for (const command of FUN_COMMANDS) {
     if (command.tier === "plus" && input[command.key] === true && !hasPlusEntitlement(current, now)) {
@@ -261,6 +337,7 @@ export {
   getDefaultAiModel,
   getPublicGuildSettings,
   getPublicModelCatalog,
+  getPlusLoyalty,
   getBrandingEligibleAt,
   hasMaturePlusEntitlement,
   hasPlusEntitlement,

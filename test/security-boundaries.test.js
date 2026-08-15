@@ -4,6 +4,7 @@ import test from "node:test";
 
 const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+const automodSource = await readFile(new URL("../src/automod.js", import.meta.url), "utf8");
 
 test("pending moderation revalidates the original requester at execution time", () => {
   const start = coreSource.indexOf("async function revalidateExecutionAuthorization");
@@ -43,4 +44,13 @@ test("command registration has a single configured scope", () => {
   assert.match(implementation, /getCommandScope\(\)/);
   assert.match(implementation, /scope === "global" \? body : \[\]/);
   assert.match(implementation, /scope === "guild" \? body : \[\]/);
+});
+
+test("custom actions cannot execute arbitrary uploaded code", () => {
+  assert.doesNotMatch(automodSource, /\beval\s*\(|new\s+Function\s*\(/);
+  assert.match(automodSource, /executed >= 3/);
+  assert.match(automodSource, /member\.id === message\.guild\.ownerId/);
+  assert.match(automodSource, /member\.moderatable/);
+  assert.match(automodSource, /member\.kickable/);
+  assert.match(automodSource, /member\.bannable/);
 });

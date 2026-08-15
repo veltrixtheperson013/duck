@@ -9,7 +9,7 @@ import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES,
 import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, getAiRequestTimeoutMs, getAiHttpMaxAttempts, getCommandScope, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
 import { createDuckWebsiteServer } from "./web.js";
-import { getAiModelDefinition, getDefaultAiModel, getFunCommandAccess, hasPlusEntitlement } from "./dashboard-config.js";
+import { getAiModelDefinition, getDefaultAiModel, getFunCommandAccess, getPlusLoyalty, hasPlusEntitlement } from "./dashboard-config.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
@@ -17,6 +17,26 @@ let cacheRefreshRunning = false;
 let keepAliveServer = null;
 let inviteCleanupTimer = null;
 let aiScheduler = null;
+const aiReplyMemory = new Map();
+const AI_REPLY_MEMORY_TTL_MS = 6 * 60 * 60_000;
+
+function getRecentAiReplies(guildId, now = Date.now()) {
+  const replies = aiReplyMemory.get(guildId) || [];
+  const active = replies.filter((item) => item.createdAt > now - AI_REPLY_MEMORY_TTL_MS);
+  if (active.length !== replies.length) active.length ? aiReplyMemory.set(guildId, active) : aiReplyMemory.delete(guildId);
+  const limit = getPlusLoyalty(getGuildSettings(guildId), now).memoryReplies;
+  return active.slice(-limit).map(({ channelId, content, createdAt }) => ({ channelId, content, createdAt: new Date(createdAt).toISOString() }));
+}
+
+function rememberAiReply(message, content, now = Date.now()) {
+  const value = String(content || "").replace(/\{\{[^{}]{1,500}\}\}/g, "").trim().slice(0, 1_500);
+  if (!value || !message.guildId) return;
+  const limit = getPlusLoyalty(getGuildSettings(message.guildId), now).memoryReplies;
+  const replies = aiReplyMemory.get(message.guildId) || [];
+  replies.push({ channelId: message.channelId, content: value, createdAt: now });
+  aiReplyMemory.set(message.guildId, replies.filter((item) => item.createdAt > now - AI_REPLY_MEMORY_TTL_MS).slice(-limit));
+  while (aiReplyMemory.size > 1_000) aiReplyMemory.delete(aiReplyMemory.keys().next().value);
+}
 
 function getAiScheduler() {
   aiScheduler ??= new FairGuildScheduler({
@@ -2821,6 +2841,7 @@ async function makePlannerMessages(message, providedContext = null, options = {}
   const payload = {
     request: message.content,
     currentChannelId: message.channelId,
+    recentDuckReplies: getRecentAiReplies(message.guildId),
     serverContext: context,
   };
   return [
@@ -3279,6 +3300,7 @@ async function makeChatMessages(message, options = {}) {
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
+        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, eightball, roll, choose, rate, compliment, roast, wouldyourather, ship, curse, and spinwheel. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
@@ -3747,12 +3769,16 @@ async function generateChatResponse(message) {
       return { content: null, error: "AI chat is disabled for this server." };
     }
     if (provider === "ollama") {
-      return { content: await scheduleAiRequest(message, "chat", () => chatWithOllama(message)), error: null };
+      const content = await resolveAiFunCall(message, await scheduleAiRequest(message, "chat", () => chatWithOllama(message)));
+      rememberAiReply(message, content);
+      return { content, error: null };
     }
 
     const config = getOpenAiCompatibleConfig(message.guildId);
     if (config) {
-      return { content: await scheduleAiRequest(message, "chat", () => chatWithOpenAiCompatible(message, config)), error: null };
+      const content = await resolveAiFunCall(message, await scheduleAiRequest(message, "chat", () => chatWithOpenAiCompatible(message, config)));
+      rememberAiReply(message, content);
+      return { content, error: null };
     }
 
     return { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
@@ -3764,6 +3790,18 @@ async function generateChatResponse(message) {
     });
     return { content: null, error: makeAiUserError(err, "AI failed before it could answer.") };
   }
+}
+
+async function resolveAiFunCall(message, content) {
+  const source = String(content || "");
+  const match = source.match(/\{\{fun::([a-z]+)(?:::(.{0,300}?))?\}\}/i);
+  if (!match) return content;
+  const supported = new Set(["quack", "duckfact", "coinflip", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "ship", "curse", "spinwheel"]);
+  const command = match[1].toLocaleLowerCase("en-US");
+  const clean = source.replace(match[0], "").trim();
+  if (!supported.has(command)) return clean;
+  const response = await makeUtilityResponse(makeMessageWithContent(message, `${command} ${match[2] || ""}`.trim()), `${command} ${match[2] || ""}`.trim());
+  return [clean, response].filter(Boolean).join("\n\n");
 }
 
 async function planModerationRequest(message) {

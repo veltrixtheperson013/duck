@@ -59,7 +59,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260820/);
+    assert.match(dashboardText, /styles\.css\?v=20260821/);
     assert.match(dashboardText, /data-back/);
     assert.match(dashboardText, /Back to servers/);
     assert.match(dashboardText, /Controlled chaos/);
@@ -219,6 +219,8 @@ test("Discord OAuth session can list and update only a present manageable guild"
       assert.equal(invalidSetting.status, 400);
       const forbidden = await fetch(`${origin}/api/guilds/${guildId}/settings`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ capabilityMode: "approve" }) });
       assert.equal(forbidden.status, 403);
+      const forbiddenAutomod = await fetch(`${origin}/api/guilds/${guildId}/settings`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ automodEnabled: true }) });
+      assert.equal(forbiddenAutomod.status, 403);
       const earlyBranding = await fetch(`${origin}/api/guilds/${guildId}/branding`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ nickname: "Pond Duck" }) });
       assert.equal(earlyBranding.status, 402);
       const checkout = await fetch(`${origin}/api/guilds/${guildId}/billing/checkout`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ period: "month" }) });

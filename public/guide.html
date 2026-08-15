@@ -6,8 +6,8 @@
   <meta name="description" content="Learn how to invite, configure, and use the Duck Discord moderation bot.">
   <title>Guide — Duck</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="styles.css?v=20260820" as="style"><link rel="stylesheet" href="styles.css?v=20260820">
-  <script src="site.js?v=20260820" defer></script>
+  <link rel="preload" href="styles.css?v=20260821" as="style"><link rel="stylesheet" href="styles.css?v=20260821">
+  <script src="site.js?v=20260821" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -23,8 +23,11 @@
       <p>Everything a server owner or moderator needs to configure and use Duck inside Discord.</p>
       <nav aria-label="Guide sections">
         <a href="#invite"><span>01</span> Invite Duck</a>
-        <a href="#discord"><span>02</span> Server setup</a>
-        <a href="#use"><span>03</span> Commands and tools</a>
+        <a href="#dashboard"><span>02</span> Dashboard tour</a>
+        <a href="#automod"><span>03</span> AutoMod</a>
+        <a href="#actions"><span>04</span> Custom actions</a>
+        <a href="#plus"><span>05</span> Plus milestones</a>
+        <a href="#use"><span>06</span> Commands and tools</a>
       </nav>
     </aside>
 
@@ -32,7 +35,7 @@
       <div class="guide-intro">
         <p class="eyebrow">A quick Discord guide</p>
         <h2>Set up your pond</h2>
-        <p>Invite Duck, choose where it should listen, select an approval policy, and start using its moderation and community tools.</p>
+        <p>Invite Duck, sign into the dashboard, configure each server independently, and learn how AutoMod, AI memory, custom actions, voice, and loyalty perks work.</p>
       </div>
 
       <section id="invite" class="guide-step">
@@ -45,11 +48,22 @@
         </div>
       </section>
 
-      <section id="discord" class="guide-step">
+      <section id="dashboard" class="guide-step">
         <div class="step-number">02</div>
         <div>
-          <h2>Configure your server</h2>
-          <p>Once Duck appears online, run these commands as a server Administrator:</p>
+          <h2>Tour the dashboard</h2>
+          <p>Choose <strong>Dashboard</strong>, sign in with Discord, and select a server where you have Manage Server. Duck verifies membership and permissions again whenever settings are saved.</p>
+          <div class="tool-catalog">
+            <article><span>🛡️</span><div><h3>Safety</h3><small>Choose the moderation channel, command prefix, and approval policy.</small></div></article>
+            <article><span>🚨</span><div><h3>AutoMod</h3><small>Configure local content filters, rate guards, warning thresholds, and escalation.</small></div></article>
+            <article><span>🧩</span><div><h3>Custom actions</h3><small>Build no-code message triggers and bounded actions without running arbitrary code.</small></div></article>
+            <article><span>✨</span><div><h3>AI</h3><small>Select a model, context range, response style, vision behavior, and Plus personality.</small></div></article>
+            <article><span>🔊</span><div><h3>Voice</h3><small>Use free OpenRouter Flux TTS or Plus-only ElevenLabs and control speaker announcements.</small></div></article>
+            <article><span>👋</span><div><h3>Community</h3><small>Choose welcome and log channels, then customize entry and farewell messages.</small></div></article>
+            <article><span>🎨</span><div><h3>Branding</h3><small>After three paid Plus months, set Duck’s nickname, avatar, banner, and bio for one server.</small></div></article>
+            <article><span>🎲</span><div><h3>Fun and Plan</h3><small>Toggle playful commands individually and review billing or loyalty progress.</small></div></article>
+          </div>
+          <p>You can still configure core Discord behavior with slash commands:</p>
           <ol class="command-list">
             <li><code>/setup channel:#duck-chat</code><span>Choose where Duck listens for chat and natural-language requests.</span></li>
             <li><code>/capibility mode:Ask for approval</code><span>Keep important actions behind confirmation while your staff learns Duck.</span></li>
@@ -62,8 +76,14 @@
         </div>
       </section>
 
+      <section id="automod" class="guide-step"><div class="step-number">03</div><div><h2>Build an AutoMod ladder</h2><p>AutoMod runs locally before a message is sent to an AI provider. Enable the module, then choose the protections you actually want:</p><ul class="clean-list"><li><strong>Rate guards</strong> — set one server-wide member delay and optional channel overrides. Staff with Manage Messages are exempt.</li><li><strong>Swear filter</strong> — blocks a conservative local list of severe profanity and slurs.</li><li><strong>Sexual / NSFW filter</strong> — checks text and attachment filenames. It is not presented as perfect image classification.</li><li><strong>Custom blocked words</strong> — Plus servers can add up to 100 server-specific words or phrases.</li><li><strong>Escalation</strong> — choose violations per warning, warnings per removal, then kick or softban.</li></ul><div class="note"><strong>Hierarchy still wins.</strong> Duck cannot punish the server owner, members above its highest role, or members Discord marks as unmanageable.</div></div></section>
+
+      <section id="actions" class="guide-step"><div class="step-number">04</div><div><h2>Create no-code custom actions</h2><p>Custom Actions are an if-this-then-that builder—not a JavaScript executor. Each rule can match every message, text a message contains, or text it starts with. Narrow it to a channel or user ID, then choose an allowlisted result.</p><div class="example-grid"><div><small>Welcome response</small><p>If a message starts with <code>hello duck</code>, reply with <code>Hi {user}!</code></p></div><div><small>Channel reaction</small><p>If anyone speaks in <code>#showcase</code>, react with <code>💚</code>.</p></div><div><small>Plus moderation</small><p>If a member posts a blocked trigger in one channel, warn, timeout, kick, or softban.</p></div><div><small>Templates</small><p>Replies support <code>{user}</code>, <code>{username}</code>, <code>{channel}</code>, and <code>{server}</code>.</p></div></div><p>Duck runs at most three matching actions per message, rate-limits repeated triggers, and never evaluates uploaded code.</p></div></section>
+
+      <section id="plus" class="guide-step"><div class="step-number">05</div><div><h2>Understand Plus loyalty</h2><p>Open your profile menu inside a server workspace to see the current tier, progress line, next unlock date, current perks, and next milestone.</p><ul class="clean-list"><li><strong>Free</strong> — 5 safe custom actions and memory of 6 recent Duck replies.</li><li><strong>Duck Plus</strong> — 25 actions, automated moderation outcomes, premium AI/TTS, and memory of 16 replies.</li><li><strong>Three paid months</strong> — 50 actions, 30-reply AI memory, and server-specific bot branding.</li><li><strong>Six paid months</strong> — unlimited custom actions and memory of 50 recent Duck replies.</li></ul><p>Conversation memory is bounded, expires after six hours, and stays isolated by Discord server. Duck’s AI may also call enabled fun tools; the same plan and dashboard toggles are enforced.</p></div></section>
+
       <section id="use" class="guide-step">
-        <div class="step-number">03</div>
+        <div class="step-number">06</div>
         <div>
           <h2>Commands and tools</h2>
           <p>Talk to Duck in its setup channel, mention <code>@Duck</code>, reply to one of its messages, use a slash command, or use the configured prefix.</p>

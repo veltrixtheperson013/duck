@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getBrandingEligibleAt, getFunCommandAccess, getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
+import { getBrandingEligibleAt, getFunCommandAccess, getPlusLoyalty, getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
 
 test("dashboard settings allowlist fields and gate Plus models per guild", () => {
   const free = makeSettingsPatch({}, { aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" });
@@ -99,4 +99,53 @@ test("Plus profiles can set a bounded custom AI personality", () => {
   const result = makeSettingsPatch(current, { aiPersonality: "Friendly, playful, and fond of terrible pond jokes." });
   assert.equal(result.settings.aiPersonality, "Friendly, playful, and fond of terrible pond jokes.");
   assert.throws(() => makeSettingsPatch(current, { aiPersonality: "x".repeat(241) }), /240 characters or fewer/);
+});
+
+test("AutoMod settings are bounded and server custom words require Plus", () => {
+  const basic = makeSettingsPatch({}, {
+    automodEnabled: true,
+    automodSwearFilter: true,
+    automodNsfwFilter: true,
+    automodGlobalSlowmodeSeconds: 12,
+    automodChannelSlowmodes: [{ channelId: "123456789012345678", seconds: 30 }],
+    automodViolationsBeforeWarn: 2,
+    automodWarningsBeforeAction: 4,
+    automodEscalation: "softban",
+  });
+  assert.equal(basic.settings.automodEnabled, true);
+  assert.equal(basic.settings.automodChannelSlowmodes[0].seconds, 30);
+  assert.throws(() => makeSettingsPatch({}, { automodCustomWords: ["spoiler"] }), /require Duck Plus/);
+  assert.throws(() => makeSettingsPatch({}, { automodGlobalSlowmodeSeconds: 21_601 }), /0-21600/);
+  assert.throws(() => makeSettingsPatch({}, { automodViolationsBeforeWarn: 0 }), /1 to 20/);
+
+  const plus = { subscription: { provider: "stripe", tier: "plus", status: "active" } };
+  assert.deepEqual(makeSettingsPatch(plus, { automodCustomWords: [" Spoiler ", "spoiler"] }).settings.automodCustomWords, ["spoiler"]);
+});
+
+test("custom actions use safe allowlists and loyalty-based caps", () => {
+  const action = (index, actionType = "reply") => ({
+    id: `rule_${index}`,
+    name: `Rule ${index}`,
+    enabled: true,
+    triggerType: "contains",
+    triggerValue: "hello",
+    channelId: null,
+    userId: null,
+    actionType,
+    response: actionType === "reply" ? "Hi {user}" : "",
+  });
+  assert.equal(makeSettingsPatch({}, { customActions: Array.from({ length: 5 }, (_, index) => action(index)) }).settings.customActions.length, 5);
+  assert.throws(() => makeSettingsPatch({}, { customActions: Array.from({ length: 6 }, (_, index) => action(index)) }), /up to 5/);
+  assert.throws(() => makeSettingsPatch({}, { customActions: [action(1, "kick")] }), /require Duck Plus/);
+  assert.throws(() => makeSettingsPatch({}, { customActions: [{ ...action(1), actionType: "execute" }] }), /unsupported/);
+
+  const now = Date.parse("2026-08-14T00:00:00.000Z");
+  const basePlus = { subscription: { provider: "stripe", tier: "plus", status: "active", startedAt: "2026-07-14T00:00:00.000Z" } };
+  const threeMonthPlus = { subscription: { ...basePlus.subscription, startedAt: "2026-05-14T00:00:00.000Z" } };
+  const sixMonthPlus = { subscription: { ...basePlus.subscription, startedAt: "2026-02-14T00:00:00.000Z" } };
+  assert.equal(getPlusLoyalty(basePlus, now).customActionLimit, 25);
+  assert.equal(getPlusLoyalty(threeMonthPlus, now).customActionLimit, 50);
+  assert.equal(getPlusLoyalty(sixMonthPlus, now).customActionLimit, null);
+  assert.equal(makeSettingsPatch(basePlus, { customActions: [action(1, "kick")] }, "", now).settings.customActions[0].actionType, "kick");
+  assert.deepEqual(getPublicGuildSettings({ customActions: [action(1), action(2, "kick")] }).customActions.map(({ actionType }) => actionType), ["reply"]);
 });
