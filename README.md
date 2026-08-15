@@ -6,7 +6,13 @@ The important safety rule: Duck validates permissions, hierarchy, and targets be
 
 Duck uses OpenRouter, Ollama, or another OpenAI-compatible provider for normal chat and AI tool planning. For obvious moderation requests, Duck asks AI for a tool plan, validates it, and falls back to the built-in local parser only when AI is unavailable or fails.
 
-The built-in website serves Duck's homepage at `/`, setup guide at `/guide`, privacy policy at `/privacy-policy`, and a JSON health check at `/health`. It binds to `0.0.0.0` on `DUCK_KEEP_ALIVE_PORT` (`9044` by default) for Wispbyte deployments. Set `DUCK_KEEP_ALIVE=false` to disable it.
+The built-in website serves Duck's homepage at `/`, dashboard at `/dashboard`, pricing at `/pricing`, development support at `/donate`, setup guide at `/guide`, privacy policy at `/privacy-policy`, refund policy at `/refunds`, terms at `/terms-of-service`, and a JSON health check at `/health`. It binds to `0.0.0.0` on `DUCK_KEEP_ALIVE_PORT` (`9584` by default) for Wispbyte deployments. Set `DUCK_KEEP_ALIVE=false` to disable it.
+
+Dashboard login uses Discord OAuth scopes `identify` and `guilds`. Configure `DISCORD_CLIENT_SECRET` and register `https://duck.wispbyte.app/auth/discord/callback` in the Discord Developer Portal. Dashboard sessions and OAuth tokens are memory-only, use HttpOnly SameSite cookies, and expire after 12 hours. Guild changes require current Manage Server or Administrator permission and are rejected unless Duck is present in the target guild.
+
+Duck Plus uses hosted Stripe Checkout. Configure `DUCK_PUBLIC_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PLUS_MONTHLY_PRICE_ID`, and `STRIPE_PLUS_YEARLY_PRICE_ID`. Create a Stripe webhook endpoint at `https://duck.wispbyte.app/api/billing/webhook` and subscribe to `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, and `customer.subscription.resumed`. Enable the Stripe customer portal so server managers can update payment details, review invoices, or cancel. Duck verifies Stripe's raw-body signature, binds subscription metadata to the authenticated Discord server, rejects foreign Price IDs, rejects stale/replayed events, and provisions Plus only from verified subscription events. All Stripe credentials remain server-side; this flow does not need a publishable key.
+
+The fixed one-time support amounts on `/donate` also use hosted Stripe Checkout when `STRIPE_SECRET_KEY` is configured. `DUCK_DONATION_CHECKOUT_URL` remains available as an optional HTTPS fallback and may include `{amount}`.
 
 ## Features
 

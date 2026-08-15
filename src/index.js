@@ -65,6 +65,11 @@ client.on(Events.ShardReady, (shardId) => {
 });
 
 client.once(Events.ClientReady, async () => {
+  try {
+    await client.application.fetch();
+  } catch (error) {
+    logWarn("discord.application-owner-fetch-failed", { message: error.message });
+  }
   logInfo("discord.ready", {
     user: client.user.tag,
     userId: client.user.id,
@@ -422,7 +427,7 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
-    if (!inConfiguredChannel && !invocation.invoked) return;
+    if ((!inConfiguredChannel || guildSettings.aiChannelMode === "mentions") && !invocation.invoked) return;
 
     if (invocation.invoked && !invocation.content) {
       await message.reply(makeDuckChatPayload(message, makeDuckHelp(invocation.content), {

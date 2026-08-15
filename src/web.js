@@ -1,116 +1,108 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import { getPublicGuildSettings, getPublicModelCatalog, makeSettingsPatch } from "./dashboard-config.js";
+import { getPublicBaseUrl, getStripeClient, isPlusEnabled, isStripeServerConfigured, makeDonationCheckoutInput, makePlusCheckoutInput, makeStripeSubscriptionPatch } from "./stripe.js";
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 const pages = new Map([
-  ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
-  ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
-  ["/privacy-policy", { file: "privacy-policy.html", type: "text/html; charset=utf-8" }],
-  ["/privacy-policy/", { file: "privacy-policy.html", type: "text/html; charset=utf-8" }],
-  ["/privacy-policy.html", { file: "privacy-policy.html", type: "text/html; charset=utf-8" }],
-  ["/guide", { file: "guide.html", type: "text/html; charset=utf-8" }],
-  ["/guide/", { file: "guide.html", type: "text/html; charset=utf-8" }],
-  ["/guide.html", { file: "guide.html", type: "text/html; charset=utf-8" }],
-  ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
-  ["/site.js", { file: "site.js", type: "text/javascript; charset=utf-8" }],
+  ["/", { file: "index.html", type: "text/html; charset=utf-8" }], ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
+  ["/dashboard", { file: "dashboard.html", type: "text/html; charset=utf-8" }], ["/dashboard/", { file: "dashboard.html", type: "text/html; charset=utf-8" }], ["/dashboard.html", { file: "dashboard.html", type: "text/html; charset=utf-8" }],
+  ["/pricing", { file: "pricing.html", type: "text/html; charset=utf-8" }], ["/pricing/", { file: "pricing.html", type: "text/html; charset=utf-8" }], ["/pricing.html", { file: "pricing.html", type: "text/html; charset=utf-8" }],
+  ["/donate", { file: "donate.html", type: "text/html; charset=utf-8" }], ["/donate/", { file: "donate.html", type: "text/html; charset=utf-8" }], ["/donate.html", { file: "donate.html", type: "text/html; charset=utf-8" }],
+  ["/refunds", { file: "refunds.html", type: "text/html; charset=utf-8" }], ["/refunds/", { file: "refunds.html", type: "text/html; charset=utf-8" }], ["/refunds.html", { file: "refunds.html", type: "text/html; charset=utf-8" }],
+  ["/terms-of-service", { file: "terms-of-service.html", type: "text/html; charset=utf-8" }], ["/terms-of-service/", { file: "terms-of-service.html", type: "text/html; charset=utf-8" }], ["/terms-of-service.html", { file: "terms-of-service.html", type: "text/html; charset=utf-8" }],
+  ["/privacy-policy", { file: "privacy-policy.html", type: "text/html; charset=utf-8" }], ["/privacy-policy/", { file: "privacy-policy.html", type: "text/html; charset=utf-8" }], ["/privacy-policy.html", { file: "privacy-policy.html", type: "text/html; charset=utf-8" }],
+  ["/guide", { file: "guide.html", type: "text/html; charset=utf-8" }], ["/guide/", { file: "guide.html", type: "text/html; charset=utf-8" }], ["/guide.html", { file: "guide.html", type: "text/html; charset=utf-8" }],
+  ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }], ["/site.js", { file: "site.js", type: "text/javascript; charset=utf-8" }], ["/dashboard.js", { file: "dashboard.js", type: "text/javascript; charset=utf-8" }],
+  ["/billing.js", { file: "billing.js", type: "text/javascript; charset=utf-8" }],
+  ["/favicon.svg", { file: "favicon.svg", type: "image/svg+xml" }],
 ]);
+const assetCache = new Map([...new Set([...pages.values()].map(({ file }) => file))].map((file) => { const body = fs.readFileSync(path.join(publicDirectory, file)); return [file, { body, gzip: gzipSync(body, { level: 6 }), etag: `"${createHash("sha256").update(body).digest("base64url").slice(0, 24)}"` }]; }));
+const MANAGE_GUILD = 1n << 5n;
+const ADMINISTRATOR = 1n << 3n;
 
-const assetCache = new Map([...new Set([...pages.values()].map((page) => page.file))].map((file) => {
-  const body = fs.readFileSync(path.join(publicDirectory, file));
-  return [file, {
-    body,
-    gzip: gzipSync(body, { level: 6 }),
-    etag: `"${createHash("sha256").update(body).digest("base64url").slice(0, 24)}"`,
-  }];
-}));
+function securityHeaders(contentType) { return { "Content-Type": contentType, "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data: https://cdn.discordapp.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin", "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()", "Referrer-Policy": "no-referrer", "Strict-Transport-Security": "max-age=31536000; includeSubDomains", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY" }; }
+function send(res, status, contentType, body, method = "GET", extraHeaders = {}) { const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body)); res.writeHead(status, { ...securityHeaders(contentType), "Cache-Control": "no-store", "Content-Length": payload.length, ...extraHeaders }); res.end(method === "HEAD" ? undefined : payload); }
+function json(res, status, body, method = "GET", headers = {}) { send(res, status, "application/json; charset=utf-8", JSON.stringify(body), method, headers); }
+function redirect(res, location, headers = {}) { res.writeHead(302, { ...securityHeaders("text/plain; charset=utf-8"), "Cache-Control": "no-store", Location: location, ...headers }); res.end(); }
+function sendAsset(req, res, page, method) { const asset = assetCache.get(page.file); if (!asset) return send(res, 500, "text/plain; charset=utf-8", "Duck could not load this page.", method); const common = { ...securityHeaders(page.type), "Cache-Control": page.type.startsWith("text/css") || page.type.startsWith("text/javascript") ? "public, max-age=86400, stale-while-revalidate=604800" : "public, max-age=300, stale-while-revalidate=86400", ETag: asset.etag, Vary: "Accept-Encoding" }; if (req.headers["if-none-match"] === asset.etag) { res.writeHead(304, common); return res.end(); } const zipped = /(?:^|,)\s*gzip\s*(?:,|$)/i.test(req.headers["accept-encoding"] || ""); const body = zipped ? asset.gzip : asset.body; res.writeHead(200, { ...common, ...(zipped ? { "Content-Encoding": "gzip" } : {}), "Content-Length": body.length }); res.end(method === "HEAD" ? undefined : body); }
+function parseCookies(req) { return Object.fromEntries(String(req.headers.cookie || "").split(";").map((part) => part.trim().split(/=(.*)/s)).filter(([key]) => key).map(([key, value]) => [key, decodeURIComponent(value || "")])); }
+function randomToken() { return randomBytes(32).toString("base64url"); }
+function hasManageGuildPermission(guild) { if (guild?.owner) return true; try { const permissions = BigInt(guild?.permissions || "0"); return (permissions & (MANAGE_GUILD | ADMINISTRATOR)) !== 0n; } catch { return false; } }
+function hasAdministratorPermission(guild) { if (guild?.owner) return true; try { return (BigInt(guild?.permissions || "0") & ADMINISTRATOR) !== 0n; } catch { return false; } }
+function makeBotInviteUrl(guildId, clientId = process.env.CLIENT_ID || "1507850959642955816") { const url = new URL("https://discord.com/oauth2/authorize"); url.searchParams.set("client_id", clientId); url.searchParams.set("guild_id", guildId); url.searchParams.set("disable_guild_select", "true"); return url.toString(); }
+function makeDonationUrl(template, amount) { if (!template || ![1, 5, 10, 20, 50, 100].includes(amount)) return null; try { const url = new URL(template.replaceAll("{amount}", String(amount))); return url.protocol === "https:" ? url.toString() : null; } catch { return null; } }
+function applicationOwnerIds(client) { const ids = new Set(String(process.env.DUCK_OWNER_USER_IDS || "").split(",").map((id) => id.trim()).filter((id) => /^\d{10,}$/.test(id))); const owner = client?.application?.owner; if (/^\d{10,}$/.test(owner?.id || "")) ids.add(owner.id); for (const member of owner?.members?.values?.() || []) { const id = member?.user?.id || member?.id; if (/^\d{10,}$/.test(id || "")) ids.add(id); } return ids; }
+function isDuckOwner(userId, client) { return applicationOwnerIds(client).has(String(userId || "")); }
+function getGuildTextChannels(client, guildId) { const guild = client?.guilds?.cache?.get(guildId); if (!guild?.channels?.cache) return []; return [...guild.channels.cache.values()].filter((channel) => channel?.isTextBased?.() && !channel?.isThread?.() && typeof channel.send === "function").sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0)).slice(0, 500).map((channel) => ({ id: channel.id, name: channel.name || "unnamed-channel" })); }
+async function readBody(req, maxBytes = 16 * 1024) { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > maxBytes) { const error = new Error("Request body is too large."); error.status = 413; throw error; } chunks.push(chunk); } return Buffer.concat(chunks, total); }
 
-function securityHeaders(contentType) {
-  return {
-    "Content-Type": contentType,
-    "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Resource-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-  };
-}
+function createDuckWebsiteServer(options = {}) {
+  const discordFetch = options.fetchImpl || fetch;
+  const client = options.client;
+  const getGuildSettings = options.getGuildSettings || (() => ({}));
+  const updateGuildSettings = options.updateGuildSettings || (() => {});
+  const stripe = options.stripeClient ?? getStripeClient();
+  const sessions = new Map(); const webhookEvents = new Map();
+  const oauthStateSecret = randomBytes(32);
+  const requestRates = new Map();
+  const clientId = () => String(process.env.CLIENT_ID || "").trim();
+  const clientSecret = () => String(process.env.DISCORD_CLIENT_SECRET || "").trim();
+  const redirectUri = () => String(process.env.DISCORD_OAUTH_REDIRECT_URI || "https://duck.wispbyte.app/auth/discord/callback").trim();
+  const secureCookie = () => !/^(0|false|no)$/i.test(process.env.DUCK_SESSION_SECURE || "") && redirectUri().startsWith("https:");
+  const cookie = (name, value, maxAge) => `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
+  const prune = () => { const now = Date.now(); for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key); for (const [key, value] of webhookEvents) if (value <= now) webhookEvents.delete(key); while (sessions.size > 5_000) sessions.delete(sessions.keys().next().value); };
+  function makeOAuthState() { const payload = `${Date.now()}.${randomToken()}`; const signature = createHmac("sha256", oauthStateSecret).update(payload).digest("base64url"); return `${payload}.${signature}`; }
+  function verifyOAuthState(value) { const parts = String(value || "").split("."); const createdAt = Number(parts[0]); if (parts.length !== 3 || !Number.isFinite(createdAt) || createdAt > Date.now() + 60_000 || Date.now() - createdAt > 10 * 60_000) return false; const expected = createHmac("sha256", oauthStateSecret).update(`${parts[0]}.${parts[1]}`).digest(); let supplied; try { supplied = Buffer.from(parts[2], "base64url"); } catch { return false; } return supplied.length === expected.length && timingSafeEqual(supplied, expected); }
+  function allowRequest(req, bucket, limit, windowMs) { const now = Date.now(); const key = `${req.socket.remoteAddress || "unknown"}:${bucket}`; const current = requestRates.get(key); if (!current || current.resetAt <= now) { requestRates.set(key, { count: 1, resetAt: now + windowMs }); return true; } current.count += 1; if (requestRates.size > 10_000) { for (const [item, value] of requestRates) if (value.resetAt <= now) requestRates.delete(item); while (requestRates.size > 10_000) requestRates.delete(requestRates.keys().next().value); } return current.count <= limit; }
+  async function tokenRequest(parameters) { const response = await discordFetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: clientId(), client_secret: clientSecret(), ...parameters }) }); const body = await response.json().catch(() => ({})); if (!response.ok || !body.access_token) throw new Error("Discord sign-in could not be completed."); return body; }
+  async function discordApi(session, route) { if (session.tokenExpiresAt <= Date.now() + 60_000) { const tokens = await tokenRequest({ grant_type: "refresh_token", refresh_token: session.refreshToken }); session.accessToken = tokens.access_token; session.refreshToken = tokens.refresh_token || session.refreshToken; session.tokenExpiresAt = Date.now() + Number(tokens.expires_in || 3600) * 1000; } const response = await discordFetch(`https://discord.com/api/v10${route}`, { headers: { Authorization: `Bearer ${session.accessToken}` } }); if (!response.ok) throw new Error("Discord could not return your server list."); return response.json(); }
+  function getSession(req) { prune(); const id = parseCookies(req).duck_session; const session = id && sessions.get(id); return session ? { id, session } : null; }
+  async function guildAccess(req, guildId, fresh = false) { const auth = getSession(req); if (!auth) return { error: "Sign in with Discord first.", status: 401 }; const guilds = !fresh && auth.session.guilds && auth.session.guildsAt > Date.now() - 30_000 ? auth.session.guilds : await discordApi(auth.session, "/users/@me/guilds"); auth.session.guilds = guilds; auth.session.guildsAt = Date.now(); const guild = guilds.find(({ id }) => id === guildId); if (!guild) return { error: "You are not a member of that server.", status: 403 }; if (!hasManageGuildPermission(guild)) return { error: "Manage Server permission is required.", status: 403 }; if (!client?.guilds?.cache?.has(guildId)) return { error: "Invite Duck to this server before configuring it.", status: 409 }; return { ...auth, guild }; }
+  function requireCsrf(req, auth) { const supplied = String(req.headers["x-duck-csrf"] || ""); return supplied.length > 20 && supplied === auth.session.csrf; }
 
-function send(res, status, contentType, body, method = "GET", extraHeaders = {}) {
-  const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
-  res.writeHead(status, {
-    ...securityHeaders(contentType),
-    "Cache-Control": contentType.startsWith("text/css") ? "public, max-age=3600" : "no-cache",
-    "Content-Length": payload.length,
-    ...extraHeaders,
-  });
-  res.end(method === "HEAD" ? undefined : payload);
-}
-
-function sendAsset(req, res, page, method) {
-  const asset = assetCache.get(page.file);
-  if (!asset) {
-    send(res, 500, "text/plain; charset=utf-8", "Duck could not load this page.", method);
-    return;
-  }
-  const cacheControl = page.type.startsWith("text/css")
-    ? "public, max-age=86400, stale-while-revalidate=604800"
-    : "public, max-age=300, stale-while-revalidate=86400";
-  const commonHeaders = {
-    ...securityHeaders(page.type),
-    "Cache-Control": cacheControl,
-    ETag: asset.etag,
-    Vary: "Accept-Encoding",
-  };
-  if (req.headers["if-none-match"] === asset.etag) {
-    res.writeHead(304, commonHeaders);
-    res.end();
-    return;
-  }
-  const useGzip = /(?:^|,)\s*gzip\s*(?:,|$)/i.test(req.headers["accept-encoding"] || "");
-  const body = useGzip ? asset.gzip : asset.body;
-  res.writeHead(200, {
-    ...commonHeaders,
-    "Content-Encoding": useGzip ? "gzip" : undefined,
-    "Content-Length": body.length,
-  });
-  res.end(method === "HEAD" ? undefined : body);
-}
-
-function createDuckWebsiteServer() {
-  return http.createServer((req, res) => {
-    const method = req.method || "GET";
-    if (!['GET', 'HEAD'].includes(method)) {
-      send(res, 405, "text/plain; charset=utf-8", "Method not allowed.", method, { Allow: "GET, HEAD" });
-      return;
-    }
-
-    let pathname;
+  const server = http.createServer(async (req, res) => {
+    const method = req.method || "GET"; let pathname;
+    try { pathname = new URL(req.url || "/", "http://duck.local").pathname; } catch { return send(res, 400, "text/plain; charset=utf-8", "Bad request.", method); }
     try {
-      pathname = new URL(req.url || "/", "http://duck.local").pathname;
-    } catch {
-      send(res, 400, "text/plain; charset=utf-8", "Bad request.", method);
-      return;
-    }
-
-    if (pathname === "/health") {
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, service: "duck" }), method);
-      return;
-    }
-
-    const page = pages.get(pathname);
-    if (!page) {
-      send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
-      return;
-    }
-
-    sendAsset(req, res, page, method);
+      const rate = pathname.startsWith("/auth/") ? ["auth", 30, 10 * 60_000] : pathname === "/api/billing/webhook" ? ["billing", 120, 60_000] : pathname.includes("/billing/") ? ["billing-user", 20, 60_000] : ["web", 300, 60_000];
+      if (!allowRequest(req, ...rate)) return json(res, 429, { error: "Too many requests. Try again shortly." }, method, { "Retry-After": "60" });
+      if (pathname === "/health" && ["GET", "HEAD"].includes(method)) return json(res, 200, { ok: true, service: "duck" }, method);
+      if (pathname === "/api/stats" && method === "GET") return json(res, 200, { servers: Math.max(0, Number(client?.guilds?.cache?.size) || 0) }, method, { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" });
+      if (pathname === "/api/site-config" && method === "GET") return json(res, 200, { plusEnabled: isPlusEnabled() }, method);
+      if (pathname === "/auth/discord" && method === "GET") { if (!clientId() || !clientSecret()) return json(res, 503, { error: "Discord login is not configured yet." }); prune(); const state = makeOAuthState(); const url = new URL("https://discord.com/oauth2/authorize"); url.searchParams.set("client_id", clientId()); url.searchParams.set("response_type", "code"); url.searchParams.set("redirect_uri", redirectUri()); url.searchParams.set("scope", "identify guilds"); url.searchParams.set("state", state); return redirect(res, url.toString(), { "Set-Cookie": cookie("duck_oauth_state", state, 600) }); }
+      if (pathname === "/auth/discord/callback" && method === "GET") { const url = new URL(req.url, "http://duck.local"); const state = url.searchParams.get("state"); const code = url.searchParams.get("code"); const expected = parseCookies(req).duck_oauth_state; if (!state || !code || expected !== state || !verifyOAuthState(state)) return json(res, 400, { error: "Discord sign-in state was invalid or expired." }); const tokens = await tokenRequest({ grant_type: "authorization_code", code, redirect_uri: redirectUri() }); const userResponse = await discordFetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${tokens.access_token}` } }); if (!userResponse.ok) return json(res, 502, { error: "Discord could not return your account." }); const user = await userResponse.json(); const id = randomToken(); sessions.set(id, { user: { id: user.id, username: user.username, globalName: user.global_name || null, avatar: user.avatar || null }, accessToken: tokens.access_token, refreshToken: tokens.refresh_token, tokenExpiresAt: Date.now() + Number(tokens.expires_in || 3600) * 1000, expiresAt: Date.now() + 12 * 60 * 60_000, csrf: randomToken(), guilds: null, guildsAt: 0 }); return redirect(res, "/dashboard", { "Set-Cookie": [cookie("duck_session", id, 43_200), cookie("duck_oauth_state", "", 0)] }); }
+      if (pathname === "/auth/logout" && method === "POST") { const auth = getSession(req); if (!auth) return json(res, 401, { error: "No active session." }); if (!requireCsrf(req, auth)) return json(res, 403, { error: "Invalid request token." }); sessions.delete(auth.id); return json(res, 200, { ok: true }, method, { "Set-Cookie": cookie("duck_session", "", 0) }); }
+      if (pathname === "/api/me" && method === "GET") { const auth = getSession(req); return auth ? json(res, 200, { user: auth.session.user, csrf: auth.session.csrf, isOwner: isDuckOwner(auth.session.user.id, client) }) : json(res, 401, { error: "Sign in with Discord first." }); }
+      if (pathname === "/donate/checkout" && method === "GET") { const amount = Number(new URL(req.url, "http://duck.local").searchParams.get("amount")); if (stripe && String(process.env.STRIPE_SECRET_KEY || "").trim()) { const checkout = await stripe.checkout.sessions.create(makeDonationCheckoutInput(amount)); if (!checkout?.url) throw new Error("Stripe did not return a checkout URL."); return redirect(res, checkout.url); } const url = makeDonationUrl(String(process.env.DUCK_DONATION_CHECKOUT_URL || ""), amount); return url ? redirect(res, url) : json(res, 503, { error: "Development support payments are not configured yet." }); }
+      if (pathname === "/api/guilds" && method === "GET") { const auth = getSession(req); if (!auth) return json(res, 401, { error: "Sign in with Discord first." }); const guilds = await discordApi(auth.session, "/users/@me/guilds"); auth.session.guilds = guilds; auth.session.guildsAt = Date.now(); return json(res, 200, { guilds: guilds.map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, owner: Boolean(guild.owner), canManage: hasManageGuildPermission(guild), isAdministrator: hasAdministratorPermission(guild), botPresent: Boolean(client?.guilds?.cache?.has(guild.id)), inviteUrl: makeBotInviteUrl(guild.id, clientId()) })) }); }
+      const settingsMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/settings$/);
+      if (settingsMatch && method === "GET") { const access = await guildAccess(req, settingsMatch[1]); if (access.error) return json(res, access.status, { error: access.error }); const current = getGuildSettings(settingsMatch[1]); const owner = isDuckOwner(access.session.user.id, client); const plusEnabled = isPlusEnabled(); return json(res, 200, { settings: getPublicGuildSettings(current, process.env.OPENROUTER_MODEL), models: getPublicModelCatalog(), channels: getGuildTextChannels(client, settingsMatch[1]), isAdministrator: hasAdministratorPermission(access.guild), isDuckOwner: owner, plusEnabled, canClaimOwnerPlus: owner && current.subscription?.provider !== "stripe" && current.subscription?.provider !== "owner", billingConfigured: Boolean(plusEnabled && stripe && isStripeServerConfigured()), canManageSubscription: current.subscription?.provider === "stripe" && Boolean(current.subscription?.customerId), canCancelSubscription: current.subscription?.provider === "stripe" && Boolean(current.subscription?.customerId) && Boolean(current.subscription?.subscriptionId) && !current.subscription?.cancelAtPeriodEnd }); }
+      if (settingsMatch && method === "PUT") { const access = await guildAccess(req, settingsMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." }); const input = JSON.parse((await readBody(req)).toString("utf8") || "{}"); const channelIds = new Set(getGuildTextChannels(client, settingsMatch[1]).map(({ id }) => id)); for (const key of ["modChannelId", "welcomeChannelId", "logChannelId"]) if (input[key] != null && !channelIds.has(String(input[key]))) return json(res, 400, { error: `${key} must belong to this server and be visible to Duck.` }); const current = getGuildSettings(settingsMatch[1]); const result = makeSettingsPatch(current, input, process.env.OPENROUTER_MODEL); const changesAdminPolicy = ("capabilityMode" in result.patch && result.patch.capabilityMode !== (current.capabilityMode || "ask")) || ("commandPrefix" in result.patch && result.patch.commandPrefix !== (current.commandPrefix || "!")); if (changesAdminPolicy && !hasAdministratorPermission(access.guild)) return json(res, 403, { error: "Administrator permission is required to change approval policy or command prefix." }); if (result.patch.capabilityMode === "agent" && result.patch.capabilityMode !== current.capabilityMode) return json(res, 400, { error: "Agent mode must be enabled through Discord's Administrator confirmation flow." }); updateGuildSettings(settingsMatch[1], result.patch); return json(res, 200, { ok: true, settings: result.settings }); }
+      const ownerPlusMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/billing\/owner-plus$/);
+      if (ownerPlusMatch && method === "POST") { const access = await guildAccess(req, ownerPlusMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." }); if (!isDuckOwner(access.session.user.id, client)) return json(res, 403, { error: "Only Duck's application owner can activate owner Plus." }); const current = getGuildSettings(ownerPlusMatch[1]); if (current.subscription?.provider === "stripe") return json(res, 409, { error: "This server already has a Stripe subscription. Manage that subscription instead." }); updateGuildSettings(ownerPlusMatch[1], { subscription: { provider: "owner", tier: "plus", status: "active", expiresAt: null, grantedTo: access.session.user.id, updatedAt: new Date().toISOString() } }); return json(res, 200, { ok: true }); }
+      const checkoutMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/billing\/checkout$/);
+      if (checkoutMatch && method === "POST") { const access = await guildAccess(req, checkoutMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." }); if (!isPlusEnabled()) return json(res, 503, { error: "Duck Plus is currently unavailable." }); if (!stripe || !isStripeServerConfigured()) return json(res, 503, { error: "Duck Plus checkout is not configured yet." }); const input = JSON.parse((await readBody(req)).toString("utf8") || "{}"); if (!["month", "year"].includes(input.period)) return json(res, 400, { error: "Choose monthly or annual billing." }); const current = getGuildSettings(checkoutMatch[1]).subscription || {}; if (["active", "trialing"].includes(current.status)) return json(res, 409, { error: "This server already has Duck Plus. Use subscription settings to change or cancel it." }); const checkout = await stripe.checkout.sessions.create(makePlusCheckoutInput({ guildId: checkoutMatch[1], discordUserId: access.session.user.id, period: input.period })); if (!checkout?.url) throw new Error("Stripe did not return a checkout URL."); return json(res, 200, { url: checkout.url }); }
+      const portalMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/billing\/portal$/);
+      if (portalMatch && method === "POST") { const access = await guildAccess(req, portalMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." }); const subscription = getGuildSettings(portalMatch[1]).subscription || {}; if (!stripe || subscription.provider !== "stripe" || !subscription.customerId) return json(res, 409, { error: "No Stripe subscription is linked to this server." }); const portal = await stripe.billingPortal.sessions.create({ customer: subscription.customerId, return_url: `${getPublicBaseUrl()}/dashboard` }); if (!portal?.url) throw new Error("Stripe did not return a billing portal URL."); return json(res, 200, { url: portal.url }); }
+      const cancelMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/billing\/cancel$/);
+      if (cancelMatch && method === "POST") { const access = await guildAccess(req, cancelMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." }); const subscription = getGuildSettings(cancelMatch[1]).subscription || {}; if (!stripe || subscription.provider !== "stripe" || !subscription.customerId || !subscription.subscriptionId) return json(res, 409, { error: "No Stripe subscription is linked to this server." }); if (subscription.cancelAtPeriodEnd) return json(res, 409, { error: "This subscription is already scheduled to cancel." }); const returnUrl = `${getPublicBaseUrl()}/dashboard?billing=canceled&guild=${encodeURIComponent(cancelMatch[1])}`; const portal = await stripe.billingPortal.sessions.create({ customer: subscription.customerId, return_url: `${getPublicBaseUrl()}/dashboard`, flow_data: { type: "subscription_cancel", subscription_cancel: { subscription: subscription.subscriptionId }, after_completion: { type: "redirect", redirect: { return_url: returnUrl } } } }); if (!portal?.url) throw new Error("Stripe did not return a cancellation URL."); return json(res, 200, { url: portal.url }); }
+      if (pathname === "/api/billing/webhook" && method === "POST") { const signature = String(req.headers["stripe-signature"] || ""); const raw = await readBody(req, 256 * 1024); if (!signature || !raw.length) return json(res, 400, { error: "Missing signature or body." }); if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return json(res, 503, { error: "Stripe webhooks are not configured." }); let event; try { event = stripe.webhooks.constructEvent(raw, signature, process.env.STRIPE_WEBHOOK_SECRET); } catch { return json(res, 400, { error: "Invalid Stripe webhook signature." }); } try { const billing = makeStripeSubscriptionPatch(event); if (!billing) return json(res, 200, { ok: true, ignored: true }); const current = getGuildSettings(billing.guildId).subscription || {}; const occurredAtMs = Date.parse(billing.occurredAt || ""); const currentOccurredAtMs = Date.parse(current.eventCreatedAt || ""); if (current.eventId === billing.eventId || webhookEvents.has(billing.eventId)) return json(res, 200, { ok: true, duplicate: true }); if (!Number.isFinite(occurredAtMs)) throw new Error("Stripe event has no valid creation time."); if (Number.isFinite(currentOccurredAtMs) && occurredAtMs < currentOccurredAtMs) return json(res, 200, { ok: true, stale: true }); webhookEvents.set(billing.eventId, Date.now() + 3 * 24 * 60 * 60_000); updateGuildSettings(billing.guildId, { subscription: billing.subscription }); return json(res, 200, { ok: true }); } catch { return json(res, 500, { error: "Stripe webhook processing failed." }); } }
+      if (pathname === "/dashboard/") return redirect(res, "/dashboard");
+      const page = pages.get(pathname); if (page && ["GET", "HEAD"].includes(method)) return sendAsset(req, res, page, method);
+      if (page || pathname.startsWith("/api/") || pathname.startsWith("/auth/")) return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD" });
+      return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
+    } catch (error) { const status = error.code === "plus_required" ? 402 : error instanceof SyntaxError ? 400 : error.status || 500; return json(res, status, { error: status === 500 ? "Duck hit an unexpected server error." : error.message }); }
   });
+  server.requestTimeout = 20_000;
+  server.headersTimeout = 10_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 100;
+  return server;
 }
 
-export { assetCache, createDuckWebsiteServer, securityHeaders };
+export { assetCache, createDuckWebsiteServer, hasAdministratorPermission, hasManageGuildPermission, isDuckOwner, makeBotInviteUrl, makeDonationUrl, securityHeaders };

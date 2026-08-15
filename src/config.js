@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { generateDependencyReport, version as voicePackageVersion } from "@discordjs/voice";
-import { dataDir, settingsPath, pendingActionsPath, warningsPath, MAX_TIMER_DELAY_MS, CAPABILITY_MODES, CAPABILITY_MODE_LABELS } from "./constants.js";
+import { settingsPath, pendingActionsPath, warningsPath, MAX_TIMER_DELAY_MS, CAPABILITY_MODES, CAPABILITY_MODE_LABELS } from "./constants.js";
 import { pendingActions, pendingByChannel, pendingExpiryTimers, jsonFileCache, pendingJsonWrites } from "./state.js";
 import { isDebugEnabled, logInfo, logDebug, logWarn, logError, redact } from "./logging.js";
 

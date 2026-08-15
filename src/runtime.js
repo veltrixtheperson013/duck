@@ -18,10 +18,11 @@ class FairGuildScheduler {
     this.guilds = new Map();
     this.order = [];
     this.cursor = 0;
+    this.priorityBurst = 0;
     this.drainScheduled = false;
   }
 
-  schedule(guildId, task) {
+  schedule(guildId, task, options = {}) {
     const key = String(guildId || "global");
     if (this.queuedGlobal >= this.maxQueuedGlobal) {
       throw new QueueCapacityError("Duck's global AI queue is full. Try again after the current requests finish.");
@@ -32,13 +33,15 @@ class FairGuildScheduler {
       this.guilds.set(key, state);
       this.order.push(key);
     }
-    if (state.queue.length >= this.maxQueuedPerGuild) {
+    const priority = options.priority === true;
+    const guildQueueLimit = priority ? Math.min(this.maxQueuedPerGuild * 2, 200) : this.maxQueuedPerGuild;
+    if (state.queue.length >= guildQueueLimit) {
       throw new QueueCapacityError("This server's AI queue is full. Try again after the current requests finish.");
     }
 
     const position = state.queue.length + state.active + 1;
     const promise = new Promise((resolve, reject) => {
-      state.queue.push({ task, resolve, reject });
+      state.queue.push({ task, resolve, reject, priority });
       this.queuedGlobal += 1;
     });
     this.scheduleDrain();
@@ -67,20 +70,26 @@ class FairGuildScheduler {
 
   drain() {
     while (this.activeGlobal < this.globalConcurrency && this.order.length) {
-      let selected = null;
-      for (let checked = 0; checked < this.order.length; checked += 1) {
-        this.cursor %= this.order.length;
-        const key = this.order[this.cursor];
-        this.cursor = (this.cursor + 1) % this.order.length;
-        const state = this.guilds.get(key);
-        if (state && state.active < this.guildConcurrency && state.queue.length) {
-          selected = { key, state };
-          break;
+      const select = (priorityOnly, normalOnly = false) => {
+        for (let checked = 0; checked < this.order.length; checked += 1) {
+          this.cursor %= this.order.length;
+          const key = this.order[this.cursor];
+          this.cursor = (this.cursor + 1) % this.order.length;
+          const state = this.guilds.get(key);
+          const next = state?.queue?.[0];
+          if (!state || state.active >= this.guildConcurrency || !next) continue;
+          if (priorityOnly && !next.priority) continue;
+          if (normalOnly && next.priority) continue;
+          return { key, state };
         }
-      }
+        return null;
+      };
+      let selected = this.priorityBurst < 2 ? select(true) : select(false, true);
+      selected ??= select(false);
       if (!selected) return;
 
       const item = selected.state.queue.shift();
+      this.priorityBurst = item.priority ? this.priorityBurst + 1 : 0;
       this.queuedGlobal -= 1;
       selected.state.active += 1;
       this.activeGlobal += 1;

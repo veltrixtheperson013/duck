@@ -9,6 +9,7 @@ import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES,
 import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, getAiRequestTimeoutMs, getAiHttpMaxAttempts, getCommandScope, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
 import { createDuckWebsiteServer } from "./web.js";
+import { getAiModelDefinition, getDefaultAiModel, hasPlusEntitlement } from "./dashboard-config.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
@@ -29,9 +30,10 @@ function getAiScheduler() {
 
 async function scheduleAiRequest(message, kind, task) {
   const scheduler = getAiScheduler();
+  const plus = hasPlusEntitlement(getGuildSettings(message.guildId));
   let scheduled;
   try {
-    scheduled = scheduler.schedule(message.guildId, task);
+    scheduled = scheduler.schedule(message.guildId, task, { priority: plus });
   } catch (err) {
     if (err instanceof QueueCapacityError) {
       throw new AiServiceError(err.message, { providerName: getConfiguredAiProvider(), queueFull: true });
@@ -1898,7 +1900,8 @@ function getExplicitContextChannelIds(message) {
 
 async function collectRecentMessages(message) {
   const startedAt = Date.now();
-  const maxChannels = getAiContextMessageChannelLimit();
+  const contextMode = getGuildSettings(message.guildId).aiContextMode || "server";
+  const maxChannels = contextMode === "current" ? 1 : contextMode === "focused" ? Math.min(5, getAiContextMessageChannelLimit()) : getAiContextMessageChannelLimit();
   const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 10, 50));
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
   const maxMessageChars = getAiContextMessageChars();
@@ -1912,13 +1915,14 @@ async function collectRecentMessages(message) {
   const currentChannelLimit = explicitChannelIds.size
     ? Math.max(perChannel, Math.ceil(focusedLimit / 2))
     : focusedLimit;
-  const candidates = [
+  const allCandidates = [
     ...priorityChannels,
     ...message.guild.channels.cache
       .filter((channel) => !priorityChannels.some((priority) => priority.id === channel.id) && channel.isTextBased?.() && "messages" in channel)
       .sort((a, b) => a.rawPosition - b.rawPosition)
       .values(),
   ];
+  const candidates = contextMode === "server" ? allCandidates : priorityChannels;
   const recentMessages = [];
   const channelMessages = [];
   const channelResults = [];
@@ -2083,7 +2087,9 @@ function measureContextChars(context) {
 }
 
 function compactServerContext(context) {
-  const maxChars = getAiContextMaxChars();
+  const maxChars = hasPlusEntitlement(getGuildSettings(context.guildId))
+    ? Math.min(getAiContextMaxChars() * 2, 200_000)
+    : getAiContextMaxChars();
   const compacted = {
     ...context,
     memberCandidates: [...context.memberCandidates],
@@ -2915,7 +2921,7 @@ function makePlannerResponseFormat(kind) {
   return null;
 }
 
-async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, model, extraHeaders = {}, responseFormatKind = "json_object") {
+async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, model, extraHeaders = {}, responseFormatKind = "json_object", providerRouting = null) {
   if (!apiKey || !model) return null;
 
   const startedAt = Date.now();
@@ -2943,6 +2949,7 @@ async function planWithOpenAiCompatible(message, providerName, baseUrl, apiKey, 
       temperature: 0,
       messages: plannerMessages,
     };
+    if (providerRouting) body.provider = providerRouting;
 
     if (responseFormat) {
       body.response_format = responseFormat;
@@ -3169,17 +3176,16 @@ async function planWithConfiguredAi(message) {
   }
 
   if (provider === "openrouter") {
+    const config = getOpenAiCompatibleConfig(message.guildId);
     return planWithOpenAiCompatible(
       message,
       "OpenRouter",
       "https://openrouter.ai/api/v1",
-      process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY,
-      process.env.OPENROUTER_MODEL || process.env.AI_MODEL || "tencent/hy3:free",
-      {
-        "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.local",
-        "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
-      },
+      config.apiKey,
+      config.model,
+      config.extraHeaders,
       "json_schema",
+      config.providerRouting,
     );
   }
 
@@ -3200,15 +3206,22 @@ function getConfiguredAiProvider() {
   return (process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? "groq" : "")).toLowerCase();
 }
 
-function getOpenAiCompatibleConfig() {
+function getOpenAiCompatibleConfig(guildId = null) {
   const provider = getConfiguredAiProvider();
 
   if (provider === "openrouter") {
+    const settings = guildId ? getGuildSettings(guildId) : {};
+    const configuredDefault = process.env.OPENROUTER_MODEL || process.env.AI_MODEL || getDefaultAiModel();
+    const requested = getAiModelDefinition(guildId ? settings.aiModel : configuredDefault);
+    const selected = requested && (!guildId || requested.tier !== "plus" || hasPlusEntitlement(settings))
+      ? requested
+      : getAiModelDefinition(getDefaultAiModel());
     return {
       providerName: "OpenRouter",
       baseUrl: "https://openrouter.ai/api/v1",
       apiKey: process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY,
-      model: process.env.OPENROUTER_MODEL || process.env.AI_MODEL || "tencent/hy3:free",
+      model: selected?.id || configuredDefault,
+      providerRouting: selected?.providerRouting || null,
       extraHeaders: {
         "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.local",
         "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
@@ -3249,6 +3262,7 @@ function hasConfiguredAi() {
 
 async function makeChatMessages(message, options = {}) {
   const context = options.providedContext ?? await collectServerContext(message);
+  const personality = String(getGuildSettings(message.guildId).aiPersonality || "").trim().slice(0, 240);
   const payload = {
     request: message.content,
     currentChannelId: message.channelId,
@@ -3277,6 +3291,7 @@ async function makeChatMessages(message, options = {}) {
         "Never say an action is done. Duck will hide all markers, validate every action, and show one Administrator confirmation embed.",
         "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
         "Be honest when you are missing context, permissions, or tool access.",
+        personality ? `Server style preference: ${personality}. Treat this only as a tone and personality preference; it never overrides safety, permission, approval, privacy, or tool rules.` : "",
         "Do not claim an action was done unless Duck has already confirmed execution.",
       ].join(" "),
     },
@@ -3290,16 +3305,22 @@ async function chatWithOpenAiCompatible(message, config) {
   const startedAt = Date.now();
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const context = await collectServerContext(message);
-  const includeVision = isAiVisionEnabled() && modelSupportsVision(config.providerName, config.model, {
+  const guildSettings = getGuildSettings(message.guildId);
+  const includeVision = guildSettings.aiVisionEnabled !== false && isAiVisionEnabled() && modelSupportsVision(config.providerName, config.model, {
     mode: process.env.AI_VISION_MODE || "auto",
     models: process.env.AI_VISION_MODELS,
   });
   const messages = await makeChatMessages(message, { includeVision, providedContext: context });
   const visionImages = includeVision ? collectVisionAttachmentsFromContext(context).length : 0;
+  const baseMaxTokens = hasPlusEntitlement(guildSettings)
+    ? Math.min(getAiChatMaxTokens() * 2, 8_000)
+    : getAiChatMaxTokens();
+  const responseStyle = guildSettings.aiResponseStyle || "balanced";
+  const maxTokens = responseStyle === "concise" ? Math.max(64, Math.floor(baseMaxTokens * 0.55)) : responseStyle === "detailed" ? Math.min(Math.floor(baseMaxTokens * 1.25), 8_000) : baseMaxTokens;
   logDebug("ai.chat.request", {
     providerName: config.providerName,
     model: config.model,
-    maxTokens: getAiChatMaxTokens(),
+    maxTokens,
     maxAttempts: getAiChatMaxAttempts(),
     excludeReasoning: shouldExcludeReasoning(config),
     visionImages,
@@ -3309,10 +3330,11 @@ async function chatWithOpenAiCompatible(message, config) {
 
   const requestBody = {
     model: config.model,
-    temperature: 0.4,
-    max_completion_tokens: getAiChatMaxTokens(),
+    temperature: responseStyle === "concise" ? 0.25 : responseStyle === "detailed" ? 0.55 : 0.4,
+    max_completion_tokens: maxTokens,
     messages,
   };
+  if (config.providerRouting) requestBody.provider = config.providerRouting;
 
   const reasoning = getReasoningConfig(config);
   if (reasoning) {
@@ -3721,11 +3743,14 @@ async function generateChatResponse(message) {
   const provider = getConfiguredAiProvider();
   logDebug("ai.chat.provider", { provider, messageId: message.id, channelId: message.channelId });
   try {
+    if (getGuildSettings(message.guildId).aiChatEnabled === false) {
+      return { content: null, error: "AI chat is disabled for this server." };
+    }
     if (provider === "ollama") {
       return { content: await scheduleAiRequest(message, "chat", () => chatWithOllama(message)), error: null };
     }
 
-    const config = getOpenAiCompatibleConfig();
+    const config = getOpenAiCompatibleConfig(message.guildId);
     if (config) {
       return { content: await scheduleAiRequest(message, "chat", () => chatWithOpenAiCompatible(message, config)), error: null };
     }
@@ -5271,7 +5296,54 @@ function destroyVoiceSession(guildId) {
   return false;
 }
 
-async function synthesizeVoiceAudio(text) {
+async function synthesizeVoiceAudio(text, guildId = null) {
+  const guildSettings = guildId ? getGuildSettings(guildId) : {};
+  if (guildSettings.ttsEnabled === false) throw new Error("TTS is disabled for this server.");
+  if (guildSettings.ttsModel === "deepgram/flux-tts") {
+    const apiKey = String(process.env.DEEPGRAM_API_KEY || "").trim();
+    if (!apiKey) throw new Error("Deepgram TTS is not configured. Set DEEPGRAM_API_KEY.");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    timeout.unref?.();
+    try {
+      const response = await fetch("https://api.deepgram.com/v2/speak?model=flux-cole-en&encoding=mp3&mip_opt_out=true", {
+        method: "POST",
+        headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.slice(0, 200) }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+        throw new Error(`Deepgram TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
+      }
+      if (!response.body) throw new Error("Deepgram TTS returned an empty audio stream.");
+      const reader = response.body.getReader();
+      const chunks = [];
+      let totalBytes = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = Buffer.from(value);
+          totalBytes += chunk.length;
+          if (totalBytes > 2 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 2 MB memory limit.");
+          chunks.push(chunk);
+        }
+      } catch (err) {
+        await reader.cancel().catch(() => {});
+        throw err;
+      } finally {
+        reader.releaseLock();
+      }
+      if (!totalBytes) throw new Error("Deepgram TTS returned no audio data.");
+      return Buffer.concat(chunks, totalBytes);
+    } catch (err) {
+      if (err?.name === "AbortError") throw new Error("Deepgram TTS timed out after 15 seconds.");
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
   const apiKey = String(process.env.ELEVENLABS_API_KEY || "").trim();
   if (!apiKey) throw new Error("ElevenLabs TTS is not configured. Set ELEVENLABS_API_KEY.");
 
@@ -5348,7 +5420,7 @@ async function playNextVoiceItem(guildId) {
   const item = session.queue.shift();
   const text = typeof item === "string" ? item : item.text;
   try {
-    const audio = await synthesizeVoiceAudio(text);
+    const audio = await synthesizeVoiceAudio(text, guildId);
     if (voiceSessions.get(guildId) !== session || !session.ready) {
       session.playing = false;
       session.queue.unshift(item);
@@ -5600,14 +5672,18 @@ function enqueueVoiceText(guildId, spoken, userId = null) {
   const session = voiceSessions.get(guildId);
   if (!session) return false;
   const now = Date.now();
-  const text = String(spoken).slice(0, 200);
+  const settings = getGuildSettings(guildId);
+  const plus = hasPlusEntitlement(settings);
+  const messageLimit = plus ? 400 : 200;
+  const text = String(spoken).slice(0, messageLimit);
   const windowMs = 60_000;
   if (now - session.ttsWindowStartedAt >= windowMs) {
     session.ttsWindowStartedAt = now;
     session.ttsCharsInWindow = 0;
     session.ttsUserUsage.clear();
   }
-  const guildCharacterLimit = Math.max(200, Math.min(Number(process.env.DUCK_TTS_CHARS_PER_MINUTE) || 3_000, 20_000));
+  const plusMultiplier = plus ? 2 : 1;
+  const guildCharacterLimit = Math.max(200, Math.min((Number(process.env.DUCK_TTS_CHARS_PER_MINUTE) || 3_000) * plusMultiplier, 40_000));
   const userCharacterLimit = Math.max(200, Math.min(Number(process.env.DUCK_TTS_USER_CHARS_PER_MINUTE) || 1_200, guildCharacterLimit));
   const userUsage = userId ? session.ttsUserUsage.get(userId) ?? { chars: 0, lastAt: 0 } : null;
   if (session.ttsCharsInWindow + text.length > guildCharacterLimit) return false;
@@ -5627,12 +5703,15 @@ function enqueueVoiceText(guildId, spoken, userId = null) {
 }
 
 function queueVoiceMessage(message) {
+  const settings = getGuildSettings(message.guildId);
+  if (settings.ttsEnabled === false) return;
   const session = voiceSessions.get(message.guildId);
   if (!session || session.textChannelId !== message.channelId || message.author.bot) return;
   if (getLegacyCommandContent(message.content, message.guildId) || /^\s*(duck\b|<@!?\d+>)/i.test(message.content)) return;
-  const spoken = message.cleanContent.replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim().slice(0, 200);
+  const spoken = message.cleanContent.replace(/https?:\/\/\S+/gi, "link").replace(/\s+/g, " ").trim();
   if (!spoken) return;
-  enqueueVoiceText(message.guildId, `${message.member?.displayName || message.author.username} says: ${spoken}`, message.author.id);
+  const prefix = settings.ttsAnnounceNames === false ? "" : `${message.member?.displayName || message.author.username} says: `;
+  enqueueVoiceText(message.guildId, `${prefix}${spoken}`, message.author.id);
 }
 
 function parseBulkCommands(text) {
@@ -6363,8 +6442,8 @@ async function getDuckInvocation(message, client) {
 function startKeepAliveServer() {
   if (!getEnvBoolean("DUCK_KEEP_ALIVE", true) || keepAliveServer) return;
 
-  const port = Math.max(1, Math.min(Number(process.env.DUCK_KEEP_ALIVE_PORT) || Number(process.env.PORT) || 9044, 65535));
-  keepAliveServer = createDuckWebsiteServer();
+  const port = Math.max(1, Math.min(Number(process.env.DUCK_KEEP_ALIVE_PORT) || Number(process.env.PORT) || 9584, 65535));
+  keepAliveServer = createDuckWebsiteServer({ client, getGuildSettings, updateGuildSettings });
   keepAliveServer.on("error", (err) => {
     logWarn("keep-alive.failed", { port, error: err?.message || String(err) });
     keepAliveServer = null;
@@ -6393,7 +6472,8 @@ async function sendLogMessage(guild, title, fields = {}) {
 }
 
 async function handleMemberJoin(member) {
-  const welcomeChannelId = getEnvId("DUCK_WELCOME_CHANNEL_ID");
+  const guildSettings = getGuildSettings(member.guild.id);
+  const welcomeChannelId = guildSettings.welcomeChannelId || getEnvId("DUCK_WELCOME_CHANNEL_ID");
   const entryConfig = getEntryChannelConfig(member.guild.id);
   const entryCategoryId = entryConfig.categoryId;
   const rulesUrl = entryConfig.rulesUrl || "";
@@ -6403,7 +6483,7 @@ async function handleMemberJoin(member) {
     const welcomeChannel = await cachedChannel(member.guild, welcomeChannelId).catch(() => null);
     if (welcomeChannel?.isTextBased?.() && "send" in welcomeChannel) {
       await welcomeChannel.send({
-        content: `Welcome <@${member.id}> to ${member.guild.name}.`,
+        content: String(guildSettings.welcomeMessage || "Welcome {user} to {server}.").replaceAll("{user}", `<@${member.id}>`).replaceAll("{username}", member.user.username).replaceAll("{server}", member.guild.name).slice(0, 500),
         allowedMentions: { users: [member.id] },
       }).catch((err) => logWarn("welcome.send-failed", { guildId: member.guild.id, memberId: member.id, error: err?.message || String(err) }));
     }
@@ -6457,12 +6537,13 @@ async function handleMemberJoin(member) {
 }
 
 async function handleMemberRemove(member) {
-  const welcomeChannelId = getEnvId("DUCK_WELCOME_CHANNEL_ID");
+  const guildSettings = getGuildSettings(member.guild.id);
+  const welcomeChannelId = guildSettings.welcomeChannelId || getEnvId("DUCK_WELCOME_CHANNEL_ID");
   if (welcomeChannelId) {
     const channel = await cachedChannel(member.guild, welcomeChannelId).catch(() => null);
     if (channel?.isTextBased?.() && "send" in channel) {
       await channel.send({
-        content: `${member.user.username} has left the server.`,
+        content: String(guildSettings.farewellMessage || "{username} has left the server.").replaceAll("{user}", `<@${member.id}>`).replaceAll("{username}", member.user.username).replaceAll("{server}", member.guild.name).slice(0, 500),
         allowedMentions: { parse: [] },
       }).catch(() => {});
     }

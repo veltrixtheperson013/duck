@@ -1,5 +1,13 @@
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+const serverCount = document.querySelector("[data-server-count]");
+if (serverCount) {
+  fetch("/api/stats")
+    .then((response) => response.ok ? response.json() : Promise.reject(new Error("Stats unavailable")))
+    .then(({ servers }) => { serverCount.textContent = new Intl.NumberFormat().format(Math.max(0, Number(servers) || 0)); })
+    .catch(() => { serverCount.closest("span").textContent = "Multi-server ready"; });
+}
+
 const menuButton = document.querySelector(".menu-button");
 const mainNavigation = document.querySelector(".main-nav");
 if (menuButton && mainNavigation) {

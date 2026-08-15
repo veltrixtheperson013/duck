@@ -51,6 +51,22 @@ test("the scheduler rejects work beyond the per-guild queue cap", async () => {
   await Promise.all([active, queued]);
 });
 
+test("Plus priority gets faster service without starving normal guilds", async () => {
+  const scheduler = new FairGuildScheduler({ globalConcurrency: 1, guildConcurrency: 1, maxQueuedPerGuild: 4 });
+  const events = [];
+  let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const active = scheduler.schedule("active", () => blocker).promise;
+  await new Promise((resolve) => setImmediate(resolve));
+  const normal = scheduler.schedule("free", async () => events.push("free")).promise;
+  const plusOne = scheduler.schedule("plus-a", async () => events.push("plus-a"), { priority: true }).promise;
+  const plusTwo = scheduler.schedule("plus-b", async () => events.push("plus-b"), { priority: true }).promise;
+  const plusThree = scheduler.schedule("plus-c", async () => events.push("plus-c"), { priority: true }).promise;
+  release();
+  await Promise.all([active, normal, plusOne, plusTwo, plusThree]);
+  assert.deepEqual(events, ["plus-a", "plus-b", "free", "plus-c"]);
+});
+
 test("bounded readers accept small JSON and reject oversized responses", async () => {
   assert.deepEqual(await readBoundedJson(new Response('{"ok":true}'), 100), { ok: true });
   await assert.rejects(() => readBoundedText(new Response("x".repeat(101)), 100), /exceeded 100 bytes/);
