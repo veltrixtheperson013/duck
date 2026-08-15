@@ -174,6 +174,8 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     funCommandsEnabled: settings.funCommandsEnabled !== false,
     ...Object.fromEntries(FUN_COMMANDS.map((command) => [command.key, command.tier === "free" ? settings[command.key] !== false : plus && settings[command.key] === true])),
     automodEnabled: settings.automodEnabled === true,
+    automodHoneypotEnabled: settings.automodHoneypotEnabled === true,
+    automodHoneypotChannelId: /^\d{10,}$/.test(settings.automodHoneypotChannelId || "") ? settings.automodHoneypotChannelId : null,
     automodSwearFilter: settings.automodSwearFilter === true,
     automodNsfwFilter: settings.automodNsfwFilter === true,
     automodCustomWords: plus && Array.isArray(settings.automodCustomWords) ? settings.automodCustomWords : [],
@@ -198,15 +200,16 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodSwearFilter", "automodNsfwFilter", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodSwearFilter", "automodNsfwFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
     }
   }
+  if ("automodHoneypotChannelId" in input) { if (input.automodHoneypotChannelId !== null && (typeof input.automodHoneypotChannelId !== "string" || !/^\d{10,}$/.test(input.automodHoneypotChannelId))) throw new TypeError("Honeypot channel must be a valid Discord channel or null."); patch.automodHoneypotChannelId = input.automodHoneypotChannelId; }
   if ("automodCustomWords" in input) {
     if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
     if (input.automodCustomWords.some((value) => typeof value !== "string")) throw new TypeError("Every custom word must be text.");

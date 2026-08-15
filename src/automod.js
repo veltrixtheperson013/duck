@@ -1,5 +1,5 @@
-import { EmbedBuilder, PermissionsBitField } from "discord.js";
-import { addMemberWarning, getGuildSettings } from "./config.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionsBitField } from "discord.js";
+import { addMemberWarning, getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings } from "./dashboard-config.js";
 
 const SWEAR_WORDS = ["fuck", "shit", "bitch", "cunt", "nigger", "nigga", "faggot", "retard"];
@@ -7,6 +7,7 @@ const SEXUAL_TERMS = ["porn", "hentai", "nudes", "nude", "onlyfans", "sex tape",
 const violationCounts = new Map();
 const messageCooldowns = new Map();
 const actionCooldowns = new Map();
+const honeypotProcessing = new Set();
 
 function normalizedText(value) {
   return String(value || "").normalize("NFKC").toLocaleLowerCase("en-US").replace(/[\u200b-\u200d\ufeff]/g, "");
@@ -155,9 +156,32 @@ async function handleCustomActions(message, settings, now = Date.now()) {
   return false;
 }
 
+async function handleHoneypot(message, settings, storedSettings = {}, persist = updateGuildSettings) {
+  if (!settings.automodHoneypotEnabled || settings.automodHoneypotChannelId !== message.channelId) return false;
+  const member = message.member;
+  if (!member || member.permissions?.has(PermissionsBitField.Flags.BanMembers) || !member.bannable) return false;
+  const key = `${message.guildId}:${member.id}`;
+  if (honeypotProcessing.has(key)) return true;
+  honeypotProcessing.add(key);
+  try {
+    const previous = Array.isArray(storedSettings.honeypotTriggeredUserIds) && storedSettings.honeypotTriggeredUserIds.includes(member.id);
+    const reason = previous ? "Duck honeypot: repeated entry after softban" : "Duck honeypot: message in protected trap channel";
+    if (previous) { await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason }); return true; }
+    const invite = await message.channel.createInvite({ maxAge: 86_400, maxUses: 1, unique: true, reason: "Duck honeypot one-time return invitation" }).catch(() => null);
+    const triggered = [...new Set([...(Array.isArray(storedSettings.honeypotTriggeredUserIds) ? storedSettings.honeypotTriggeredUserIds : []), member.id])].slice(-1_000);
+    persist(message.guildId, { honeypotTriggeredUserIds: triggered });
+    await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason });
+    await message.guild.members.unban(member.id, "Duck honeypot first trigger: one return allowed");
+    if (invite?.url) await message.author.send({ content: `You triggered the honeypot in **${message.guild.name}**. You may return once; speaking in that channel again will permanently ban you.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Return to server").setURL(invite.url))] }).catch(() => null);
+    return true;
+  } finally { honeypotProcessing.delete(key); }
+}
+
 async function handleAutomodAndCustomActions(message) {
-  const settings = getPublicGuildSettings(getGuildSettings(message.guildId));
+  const storedSettings = getGuildSettings(message.guildId);
+  const settings = getPublicGuildSettings(storedSettings);
   pruneRuntimeMaps();
+  if (await handleHoneypot(message, settings, storedSettings)) return true;
   if (await handleRateGuard(message, settings)) return true;
   if (settings.automodEnabled) {
     const violation = detectViolation(message, settings);
@@ -170,4 +194,4 @@ async function handleAutomodAndCustomActions(message) {
   return handleCustomActions(message, settings);
 }
 
-export { customActionMatches, detectViolation, handleAutomodAndCustomActions, includesTerm };
+export { customActionMatches, detectViolation, handleAutomodAndCustomActions, handleHoneypot, includesTerm };

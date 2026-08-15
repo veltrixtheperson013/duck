@@ -200,8 +200,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const channel = interaction.options.getChannel("channel", false);
         const quarantineChannel = interaction.options.getChannel("quarantine-channel", false);
-        if (!channel && !quarantineChannel) {
-          await interaction.reply({ content: "Choose a moderation channel, a voice quarantine channel, or both.", ephemeral: true });
+        const honeypotChannel = interaction.options.getChannel("honeypot-channel", false);
+        const honeypotEnabled = interaction.options.getBoolean("honeypot-enabled", false);
+        if (!channel && !quarantineChannel && !honeypotChannel && honeypotEnabled === null) {
+          await interaction.reply({ content: "Choose a moderation, quarantine, or honeypot setting.", ephemeral: true });
           return;
         }
 
@@ -224,6 +226,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const patch = {};
         if (channel) patch.modChannelId = channel.id;
+        if (honeypotChannel) patch.automodHoneypotChannelId = honeypotChannel.id;
+        if (honeypotEnabled !== null) patch.automodHoneypotEnabled = honeypotEnabled;
         if (quarantineChannel) {
           patch.voiceQuarantineChannelId = quarantineChannel.id;
         }
@@ -232,12 +236,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           guildId: interaction.guildId,
           channelId: channel?.id,
           voiceQuarantineChannelId: quarantineChannel?.id,
+          honeypotChannelId: honeypotChannel?.id,
+          honeypotEnabled,
           userId: interaction.user.id,
         });
         await interaction.reply({
           content: [
             channel ? `Duck will now listen in ${channel}.` : null,
             quarantineChannel ? `Voice quarantine will use ${quarantineChannel}.` : null,
+            honeypotChannel ? `Honeypot channel set to ${honeypotChannel}.` : null,
+            honeypotEnabled !== null ? `Honeypot ${honeypotEnabled ? "enabled" : "disabled"}.` : null,
           ].filter(Boolean).join("\n"),
           ephemeral: true,
         });

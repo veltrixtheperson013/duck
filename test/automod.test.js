@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { customActionMatches, detectViolation, includesTerm } from "../src/automod.js";
+import { customActionMatches, detectViolation, handleHoneypot, includesTerm } from "../src/automod.js";
 import { trimWarningStore } from "../src/config.js";
 
 test("AutoMod term matching uses normalized whole words and phrases", () => {
@@ -25,6 +25,16 @@ test("custom actions match only allowlisted server-side conditions", () => {
   assert.equal(customActionMatches({ ...base, userId: "999999999999999999" }, message), false);
   assert.equal(customActionMatches({ ...base, triggerType: "starts_with", triggerValue: "duck" }, message), false);
   assert.equal(customActionMatches({ ...base, triggerType: "unknown" }, message), false);
+});
+
+test("honeypot softbans once with a return invite then permanently bans", async () => {
+  const actions = []; const persisted = []; const member = { id: "223456789012345678", bannable: true, permissions: { has: () => false } };
+  const message = { guildId: "123456789012345678", channelId: "323456789012345678", member, author: { async send(payload) { actions.push(["dm", payload]); } }, channel: { async createInvite() { actions.push(["invite"]); return { url: "https://discord.gg/duck" }; } }, guild: { name: "Test Pond", members: { async ban(id, options) { actions.push(["ban", id, options]); }, async unban(id) { actions.push(["unban", id]); } } } };
+  const settings = { automodHoneypotEnabled: true, automodHoneypotChannelId: message.channelId };
+  assert.equal(await handleHoneypot(message, settings, {}, (...args) => persisted.push(args)), true);
+  assert.equal(actions.some(([name]) => name === "unban"), true); assert.equal(actions.some(([name]) => name === "dm"), true); assert.deepEqual(persisted[0][1].honeypotTriggeredUserIds, [member.id]);
+  actions.length = 0; await handleHoneypot(message, settings, { honeypotTriggeredUserIds: [member.id] }, () => {});
+  assert.deepEqual(actions.map(([name]) => name), ["ban"]); assert.equal(actions[0][2].deleteMessageSeconds, 604_800);
 });
 
 test("persistent warning histories have member, guild, and global retention bounds", () => {

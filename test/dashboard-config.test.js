@@ -115,6 +115,8 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
   });
   assert.equal(basic.settings.automodEnabled, true);
   assert.equal(basic.settings.automodChannelSlowmodes[0].seconds, 30);
+  const honeypot = makeSettingsPatch({}, { automodHoneypotEnabled: true, automodHoneypotChannelId: "123456789012345678" });
+  assert.equal(honeypot.settings.automodHoneypotEnabled, true); assert.equal(honeypot.settings.automodHoneypotChannelId, "123456789012345678");
   assert.throws(() => makeSettingsPatch({}, { automodCustomWords: ["spoiler"] }), /require Duck Plus/);
   assert.throws(() => makeSettingsPatch(plus, { automodCustomWords: [{}] }), /must be text/);
   assert.throws(() => makeSettingsPatch({}, { automodChannelSlowmodes: [{ channelId: 123456789012345678, seconds: 30 }] }), /valid channel/);

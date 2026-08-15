@@ -6712,7 +6712,9 @@ async function registerCommands(client, options = {}) {
         .setDescription("Voice channel used by Administrator-only voice quarantine actions.")
         .addChannelTypes(ChannelType.GuildVoice)
         .setRequired(false),
-    );
+    )
+    .addChannelOption((option) => option.setName("honeypot-channel").setDescription("Trap channel: first message softbans; second permanently bans.").addChannelTypes(ChannelType.GuildText).setRequired(false))
+    .addBooleanOption((option) => option.setName("honeypot-enabled").setDescription("Enable or disable the configured honeypot channel.").setRequired(false));
 
   const toolsCommand = new SlashCommandBuilder()
     .setName("duck-tools")
