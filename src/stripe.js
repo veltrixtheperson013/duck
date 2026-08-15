@@ -129,6 +129,7 @@ function makeStripeSubscriptionPatch(event) {
       provider: "stripe",
       tier: entitled ? "plus" : "free",
       status,
+      startedAt: unixTimeToIso(subscription.created),
       expiresAt: entitled ? unixTimeToIso(getSubscriptionPeriodEnd(subscription, priceId)) : null,
       customerId: typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id ?? null,
       subscriptionId: subscription.id,

@@ -59,11 +59,13 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260819/);
+    assert.match(dashboardText, /styles\.css\?v=20260820/);
     assert.match(dashboardText, /data-back/);
     assert.match(dashboardText, /Back to servers/);
     assert.match(dashboardText, /Controlled chaos/);
     assert.match(dashboardText, /funRoastEnabled/);
+    assert.match(dashboardText, /Server identity/);
+    assert.match(dashboardText, /data-route-progress/);
     const serverDashboard = await fetch(`${origin}/dashboard/servers/123456789012345678`);
     assert.equal(serverDashboard.status, 200);
     assert.match(await serverDashboard.text(), /Server control panel/);
@@ -181,6 +183,7 @@ test("Discord OAuth session can list and update only a present manageable guild"
   const stored = new Map();
   const checkoutInputs = [];
   const portalInputs = [];
+  const profileUpdates = [];
   const stripeClient = {
     checkout: { sessions: { async create(input) { checkoutInputs.push(input); return { url: "https://checkout.stripe.com/c/pay_test" }; } } },
     billingPortal: { sessions: { async create(input) { portalInputs.push(input); return { url: "https://billing.stripe.com/p/session/test" }; } } },
@@ -212,20 +215,32 @@ test("Discord OAuth session can list and update only a present manageable guild"
       const update = await fetch(`${origin}/api/guilds/${guildId}/settings`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" }) });
       assert.equal(update.status, 200);
       assert.equal(stored.get(guildId).aiChatEnabled, false);
+      const invalidSetting = await fetch(`${origin}/api/guilds/${guildId}/settings`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ imaginaryLimit: 999 }) });
+      assert.equal(invalidSetting.status, 400);
       const forbidden = await fetch(`${origin}/api/guilds/${guildId}/settings`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ capabilityMode: "approve" }) });
       assert.equal(forbidden.status, 403);
+      const earlyBranding = await fetch(`${origin}/api/guilds/${guildId}/branding`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ nickname: "Pond Duck" }) });
+      assert.equal(earlyBranding.status, 402);
       const checkout = await fetch(`${origin}/api/guilds/${guildId}/billing/checkout`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ period: "month" }) });
       assert.equal(checkout.status, 200);
       assert.equal(checkoutInputs[0].subscription_data.metadata.duck_guild_id, guildId);
-      stored.set(guildId, { ...stored.get(guildId), subscription: { provider: "stripe", tier: "plus", status: "active", customerId: "cus_test", subscriptionId: "sub_test", expiresAt: "2027-01-01T00:00:00.000Z", cancelAtPeriodEnd: false } });
+      stored.set(guildId, { ...stored.get(guildId), subscription: { provider: "stripe", tier: "plus", status: "active", startedAt: "2025-01-01T00:00:00.000Z", customerId: "cus_test", subscriptionId: "sub_test", expiresAt: "2027-01-01T00:00:00.000Z", cancelAtPeriodEnd: false } });
       const settings = await (await fetch(`${origin}/api/guilds/${guildId}/settings`, { headers: { Cookie: cookie } })).json();
       assert.equal(settings.canManageSubscription, true);
       assert.equal(settings.canCancelSubscription, true);
+      assert.equal(settings.settings.subscription.brandingEligible, true);
+      const png = `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64")}`;
+      const branding = await fetch(`${origin}/api/guilds/${guildId}/branding`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ nickname: "Pond Duck", bio: "Quacking locally.", avatar: png }) });
+      assert.equal(branding.status, 200);
+      assert.match(profileUpdates[0].route, new RegExp(`/guilds/${guildId}/members/%40me$`));
+      assert.equal(profileUpdates[0].options.body.nick, "Pond Duck");
+      const disguised = await fetch(`${origin}/api/guilds/${guildId}/branding`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ avatar: "data:image/png;base64,QUJDRA==" }) });
+      assert.equal(disguised.status, 400);
       const cancel = await fetch(`${origin}/api/guilds/${guildId}/billing/cancel`, { method: "POST", headers: { Cookie: cookie, "X-Duck-CSRF": me.csrf } });
       assert.equal(cancel.status, 200);
       assert.equal(portalInputs[0].flow_data.type, "subscription_cancel");
       assert.equal(portalInputs[0].flow_data.subscription_cancel.subscription, "sub_test");
-    }, { fetchImpl, stripeClient, client: { guilds: { cache: new Map([[guildId, {}]]) } }, getGuildSettings: (id) => stored.get(id) || {}, updateGuildSettings: (id, patch) => stored.set(id, { ...(stored.get(id) || {}), ...patch }) });
+    }, { fetchImpl, stripeClient, client: { rest: { async patch(route, options) { profileUpdates.push({ route, options }); return {}; } }, guilds: { cache: new Map([[guildId, {}]]) } }, getGuildSettings: (id) => stored.get(id) || {}, updateGuildSettings: (id, patch) => stored.set(id, { ...(stored.get(id) || {}), ...patch }) });
   } finally {
     for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value;
   }
@@ -247,10 +262,11 @@ test("Stripe webhook verifies through the SDK and rejects stale delivery order",
       const foreign = { id: "evt_foreign", type: "customer.subscription.created", created, data: { object: { id: "sub_foreign", status: "active", customer: "cus_foreign", metadata: { duck_guild_id: guildId }, cancel_at_period_end: false, items: { data: [{ current_period_end: 1_789_257_600, price: { id: "price_not_duck_plus" } }] } } } };
       assert.deepEqual(await (await postEvent(origin, foreign)).json(), { ok: true, ignored: true });
       assert.equal(stored.has(guildId), false);
-      const newer = { id: "evt_newer", type: "customer.subscription.created", created, data: { object: { id: "sub_new", status: "active", customer: "cus_test", metadata: { duck_guild_id: guildId }, cancel_at_period_end: false, items: { data: [{ current_period_end: 1_789_257_600, price: { id: "price_monthly" } }] } } } };
+      const newer = { id: "evt_newer", type: "customer.subscription.created", created, data: { object: { id: "sub_new", created: created - 100, status: "active", customer: "cus_test", metadata: { duck_guild_id: guildId }, cancel_at_period_end: false, items: { data: [{ current_period_end: 1_789_257_600, price: { id: "price_monthly" } }] } } } };
       assert.equal((await postEvent(origin, newer)).status, 200);
       assert.equal(stored.get(guildId).subscription.tier, "plus");
       assert.equal(stored.get(guildId).subscription.expiresAt, "2026-09-13T00:00:00.000Z");
+      assert.equal(stored.get(guildId).subscription.startedAt, new Date((created - 100) * 1000).toISOString());
       const older = { id: "evt_older", type: "customer.subscription.deleted", created: created - 10, data: { object: { id: "sub_new", status: "canceled", customer: "cus_test", metadata: { duck_guild_id: guildId }, cancel_at_period_end: false, items: { data: [{ current_period_end: 1_789_257_600, price: { id: "price_monthly" } }] } } } };
       assert.deepEqual(await (await postEvent(origin, older)).json(), { ok: true, stale: true });
       assert.equal(stored.get(guildId).subscription.tier, "plus");

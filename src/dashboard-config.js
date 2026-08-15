@@ -83,6 +83,20 @@ function hasPlusEntitlement(settings, now = Date.now()) {
   return !Number.isFinite(expiresAt) || expiresAt > now;
 }
 
+function getBrandingEligibleAt(settings) {
+  const startedAt = new Date(settings?.subscription?.startedAt || "");
+  if (Number.isNaN(startedAt.valueOf())) return null;
+  const targetMonth = startedAt.getUTCMonth() + 3;
+  const finalDay = new Date(Date.UTC(startedAt.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(startedAt.getUTCFullYear(), targetMonth, Math.min(startedAt.getUTCDate(), finalDay), startedAt.getUTCHours(), startedAt.getUTCMinutes(), startedAt.getUTCSeconds(), startedAt.getUTCMilliseconds())).toISOString();
+}
+
+function hasMaturePlusEntitlement(settings, now = Date.now()) {
+  if (!hasPlusEntitlement(settings, now) || settings?.subscription?.provider !== "stripe") return false;
+  const eligibleAt = Date.parse(getBrandingEligibleAt(settings) || "");
+  return Number.isFinite(eligibleAt) && eligibleAt <= now;
+}
+
 function getFunCommandAccess(settings, command, now = Date.now()) {
   const definition = FUN_COMMAND_BY_NAME.get(command);
   if (!definition) return null;
@@ -131,6 +145,8 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
       source: plus && subscription.provider === "owner" ? "owner" : plus ? "stripe" : null,
       expiresAt: plus ? subscription.expiresAt ?? null : null,
       cancelAtPeriodEnd: plus ? Boolean(subscription.cancelAtPeriodEnd) : false,
+      brandingEligible: hasMaturePlusEntitlement(settings, now),
+      brandingEligibleAt: plus ? getBrandingEligibleAt(settings) : null,
     },
   };
 }
@@ -245,6 +261,8 @@ export {
   getDefaultAiModel,
   getPublicGuildSettings,
   getPublicModelCatalog,
+  getBrandingEligibleAt,
+  hasMaturePlusEntitlement,
   hasPlusEntitlement,
   makeSettingsPatch,
 };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getFunCommandAccess, getPublicGuildSettings, getPublicModelCatalog, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
+import { getBrandingEligibleAt, getFunCommandAccess, getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
 
 test("dashboard settings allowlist fields and gate Plus models per guild", () => {
   const free = makeSettingsPatch({}, { aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" });
@@ -29,7 +29,18 @@ test("settings without subscription data normalize to the Free plan", () => {
     source: null,
     expiresAt: null,
     cancelAtPeriodEnd: false,
+    brandingEligible: false,
+    brandingEligibleAt: null,
   });
+});
+
+test("server branding requires three calendar months of paid Plus", () => {
+  const now = Date.parse("2026-05-01T12:00:00.000Z");
+  const paid = { subscription: { provider: "stripe", tier: "plus", status: "active", startedAt: "2026-01-31T12:00:00.000Z" } };
+  assert.equal(getBrandingEligibleAt(paid), "2026-04-30T12:00:00.000Z");
+  assert.equal(hasMaturePlusEntitlement(paid, now), true);
+  assert.equal(hasMaturePlusEntitlement({ subscription: { ...paid.subscription, startedAt: "2026-03-01T00:00:00.000Z" } }, now), false);
+  assert.equal(hasMaturePlusEntitlement({ subscription: { provider: "owner", tier: "plus", status: "active", startedAt: "2020-01-01T00:00:00.000Z" } }, now), false);
 });
 
 test("fun commands keep a Free set and enforce Plus toggles", () => {
