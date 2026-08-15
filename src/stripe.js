@@ -116,6 +116,7 @@ function makeStripeSubscriptionPatch(event) {
   if (!SUBSCRIPTION_EVENTS.has(event?.type)) return null;
   const subscription = event?.data?.object;
   const guildId = String(subscription?.metadata?.duck_guild_id || "");
+  const purchaserId = String(subscription?.metadata?.duck_discord_user_id || "");
   const priceId = getSubscriptionPriceId(subscription);
   if (!/^\d{10,}$/.test(guildId) || !isDuckPlusPrice(priceId)) return null;
   const status = String(subscription.status || "inactive");
@@ -133,6 +134,7 @@ function makeStripeSubscriptionPatch(event) {
       expiresAt: entitled ? unixTimeToIso(getSubscriptionPeriodEnd(subscription, priceId)) : null,
       customerId: typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id ?? null,
       subscriptionId: subscription.id,
+      purchaserId: /^\d{10,}$/.test(purchaserId) ? purchaserId : null,
       priceId,
       cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
       canceledAt: unixTimeToIso(subscription.canceled_at),

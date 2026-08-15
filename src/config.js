@@ -85,7 +85,7 @@ function loadJsonConfig() {
 
 function loadSettings() {
   const settings = loadJsonFile(settingsPath, { guilds: {} });
-  settings.guilds ??= {};
+  if (!settings.guilds || typeof settings.guilds !== "object" || Array.isArray(settings.guilds)) settings.guilds = {};
   return settings;
 }
 
@@ -151,8 +151,8 @@ function flushJsonWrites() {
 
 function loadWarnings() {
   const warnings = loadJsonFile(warningsPath, { guilds: {} });
-  warnings.guilds ??= {};
-  return warnings;
+  if (!warnings.guilds || typeof warnings.guilds !== "object" || Array.isArray(warnings.guilds)) warnings.guilds = {};
+  return trimWarningStore(warnings);
 }
 
 function saveWarnings(warnings) {
@@ -161,16 +161,45 @@ function saveWarnings(warnings) {
 
 function getMemberWarnings(guildId, memberId) {
   const warnings = loadWarnings();
-  return [...(warnings.guilds?.[guildId]?.[memberId] ?? [])];
+  return [...(warnings.guilds?.[guildId]?.[memberId] ?? [])].slice(-100);
 }
 
 function addMemberWarning(guildId, memberId, warning) {
+  if (!/^\d{10,}$/.test(String(guildId)) || !/^\d{10,}$/.test(String(memberId))) throw new TypeError("Warning guild and member IDs must be Discord IDs.");
   const warnings = loadWarnings();
   warnings.guilds[guildId] ??= {};
   warnings.guilds[guildId][memberId] ??= [];
-  warnings.guilds[guildId][memberId].push(warning);
+  warnings.guilds[guildId][memberId].push({
+    id: String(warning?.id || Date.now()).slice(0, 80),
+    createdAt: Number.isFinite(Date.parse(warning?.createdAt || "")) ? new Date(warning.createdAt).toISOString() : new Date().toISOString(),
+    moderatorId: /^\d{10,}$/.test(String(warning?.moderatorId || "")) ? String(warning.moderatorId) : null,
+    moderatorTag: String(warning?.moderatorTag || "Duck").slice(0, 100),
+    reason: String(warning?.reason || "No reason provided").slice(0, 500),
+  });
+  trimWarningStore(warnings);
   saveWarnings(warnings);
   return warnings.guilds[guildId][memberId].length;
+}
+
+function warningHistoryTimestamp(history) {
+  const value = Date.parse(Array.isArray(history) ? history.at(-1)?.createdAt || "" : "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function trimWarningStore(warnings) {
+  const guilds = warnings.guilds;
+  for (const [guildId, members] of Object.entries(guilds)) {
+    if (!/^\d{10,}$/.test(guildId) || !members || typeof members !== "object" || Array.isArray(members)) { delete guilds[guildId]; continue; }
+    for (const [memberId, history] of Object.entries(members)) {
+      if (!/^\d{10,}$/.test(memberId) || !Array.isArray(history) || history.length === 0) { delete members[memberId]; continue; }
+      if (history.length > 100) members[memberId] = history.slice(-100);
+    }
+    const memberEntries = Object.entries(members); if (memberEntries.length > 1_000) for (const [memberId] of memberEntries.sort((a, b) => warningHistoryTimestamp(a[1]) - warningHistoryTimestamp(b[1])).slice(0, memberEntries.length - 1_000)) delete members[memberId];
+    if (!Object.keys(members).length) delete guilds[guildId];
+  }
+  const allMembers = Object.entries(guilds).flatMap(([guildId, members]) => Object.entries(members).map(([memberId, history]) => ({ guildId, memberId, history })));
+  if (allMembers.length > 5_000) for (const entry of allMembers.sort((a, b) => warningHistoryTimestamp(a.history) - warningHistoryTimestamp(b.history)).slice(0, allMembers.length - 5_000)) { delete guilds[entry.guildId][entry.memberId]; if (!Object.keys(guilds[entry.guildId]).length) delete guilds[entry.guildId]; }
+  return warnings;
 }
 
 function clearMemberWarnings(guildId, memberId, count) {
@@ -465,6 +494,7 @@ function loadPendingActions() {
 }
 
 function getGuildSettings(guildId) {
+  if (!/^\d{10,}$/.test(String(guildId))) throw new TypeError("Guild ID must be a Discord ID.");
   const settings = loadSettings();
   settings.guilds[guildId] ??= {};
   return settings.guilds[guildId];
@@ -480,6 +510,8 @@ function getCapabilityModeLabel(mode) {
 }
 
 function updateGuildSettings(guildId, patch) {
+  if (!/^\d{10,}$/.test(String(guildId))) throw new TypeError("Guild ID must be a Discord ID.");
+  if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.getPrototypeOf(patch) !== Object.prototype || Object.keys(patch).some((key) => ["__proto__", "prototype", "constructor"].includes(key))) throw new TypeError("Settings patch must be a safe object.");
   const settings = loadSettings();
   settings.guilds[guildId] = {
     ...(settings.guilds[guildId] ?? {}),
@@ -569,6 +601,7 @@ export {
   getMemberWarnings,
   addMemberWarning,
   clearMemberWarnings,
+  trimWarningStore,
   getPendingActionTtlMs,
   getServerContextCacheTtlMs,
   getAiContextMemberLimit,

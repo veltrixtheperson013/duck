@@ -1,0 +1,91 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "8727fc288e9b5501bbddb185d6723ac5afd95f32830e1a6be2aef628b60573c1"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "87e2ce80cee6d0fa7c6829470344b86705cbb043905faf50edcc66c2bc0cdd77"
+      }
+    ],
+    "completedAt": "2026-08-15T08:25:00Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "scan_duck_20260815_frontend",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.19"
+    },
+    "scope": {
+      "context": "All frontend input is hostile; the server owns authorization, tenancy, entitlements, validation, and sensitive operations.",
+      "excludePaths": [
+        "node_modules/",
+        ".env",
+        "security-reports/"
+      ],
+      "includePaths": [
+        "src/",
+        "public/",
+        "scripts/",
+        "test/",
+        "package.json",
+        "config.example.json",
+        "index.js"
+      ],
+      "summary": "Repository-wide audit emphasizing the public browser-to-backend trust boundary.",
+      "validationMode": "static source validation with independent baseline and focused investigators"
+    },
+    "sealedAt": "2026-08-15T08:25:00Z",
+    "startedAt": "2026-08-15T08:15:00Z",
+    "status": "completed",
+    "target": {
+      "displayName": "Duck",
+      "kind": "git_revision",
+      "remote": "https://github.com/veltrixtheperson013/duck.git",
+      "revision": "c116427097e9261dcde23fe5c1bada00c2ca5b37",
+      "targetId": "c116427097e9261dcde23fe5c1bada00c2ca5b37"
+    },
+    "threatModel": {
+      "assets": [
+        "Discord OAuth sessions and tokens",
+        "per-guild settings and channel metadata",
+        "Discord bot moderation privileges",
+        "Stripe subscription ownership and entitlement",
+        "process memory and persistent JSON state"
+      ],
+      "assumptions": [
+        "Discord and Stripe TLS endpoints are authentic",
+        "Stripe webhook secrets and Discord OAuth credentials remain secret",
+        "Wispbyte forwards traffic to the configured local listener"
+      ],
+      "attackerCapabilities": [
+        "send arbitrary HTTP methods, headers, cookies, URLs, and JSON",
+        "authenticate with a Discord account",
+        "hold Manage Server while being denied private channel access",
+        "send repeated Discord messages",
+        "trigger concurrent checkout flows"
+      ],
+      "securityObjectives": [
+        "make authorization and entitlement decisions only on the server",
+        "prevent cross-guild and private-channel access",
+        "bound attacker-controlled memory, disk, queues, and outbound work",
+        "bind billing state to one canonical subscription",
+        "prevent injection and arbitrary code execution"
+      ],
+      "summary": "Duck exposes a public Node HTTP service backed by Discord OAuth, Discord bot privileges, local per-guild persistence, third-party AI providers, and Stripe. Attackers include unauthenticated internet clients, authenticated Discord users, restricted guild managers, malicious guild members, and reordered but valid third-party events.",
+      "trustBoundaries": [
+        "internet browser to Duck HTTP server",
+        "Duck server to Discord OAuth and REST",
+        "Duck server to Stripe API and signed webhooks",
+        "validated dashboard settings to Discord bot runtime",
+        "guild tenant to guild tenant"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}

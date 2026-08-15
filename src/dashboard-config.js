@@ -208,9 +208,10 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
     }
   }
   if ("automodCustomWords" in input) {
-    if (!hasPlusEntitlement(current, now) && input.automodCustomWords?.length) { const error = new Error("Custom AutoMod words require Duck Plus."); error.code = "plus_required"; throw error; }
     if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
-    const words = [...new Set(input.automodCustomWords.map((value) => String(value).trim().toLocaleLowerCase("en-US")).filter(Boolean))];
+    if (input.automodCustomWords.some((value) => typeof value !== "string")) throw new TypeError("Every custom word must be text.");
+    if (!hasPlusEntitlement(current, now) && input.automodCustomWords.length) { const error = new Error("Custom AutoMod words require Duck Plus."); error.code = "plus_required"; throw error; }
+    const words = [...new Set(input.automodCustomWords.map((value) => value.trim().toLocaleLowerCase("en-US")).filter(Boolean))];
     if (words.some((value) => value.length > 40)) throw new TypeError("Each custom word must be 40 characters or fewer.");
     patch.automodCustomWords = words;
   }
@@ -219,24 +220,30 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
   if ("automodGlobalSlowmodeSeconds" in input) { if (!Number.isInteger(input.automodGlobalSlowmodeSeconds) || input.automodGlobalSlowmodeSeconds < 0 || input.automodGlobalSlowmodeSeconds > 21_600) throw new TypeError("Global rate guard must be 0-21600 seconds."); patch.automodGlobalSlowmodeSeconds = input.automodGlobalSlowmodeSeconds; }
   if ("automodChannelSlowmodes" in input) {
     if (!Array.isArray(input.automodChannelSlowmodes) || input.automodChannelSlowmodes.length > 50) throw new TypeError("Channel rate guards must be a list of up to 50 channels.");
-    patch.automodChannelSlowmodes = input.automodChannelSlowmodes.map((item) => { if (!/^\d{10,}$/.test(String(item?.channelId || "")) || !Number.isInteger(item?.seconds) || item.seconds < 0 || item.seconds > 21_600) throw new TypeError("Each channel rate guard needs a valid channel and 0-21600 seconds."); return { channelId: String(item.channelId), seconds: item.seconds }; });
+    patch.automodChannelSlowmodes = input.automodChannelSlowmodes.map((item) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["channelId", "seconds"].includes(key)) || typeof item.channelId !== "string" || !/^\d{10,}$/.test(item.channelId) || !Number.isInteger(item.seconds) || item.seconds < 0 || item.seconds > 21_600) throw new TypeError("Each channel rate guard needs a valid channel and 0-21600 seconds."); return { channelId: item.channelId, seconds: item.seconds }; });
+    if (new Set(patch.automodChannelSlowmodes.map(({ channelId }) => channelId)).size !== patch.automodChannelSlowmodes.length) throw new TypeError("Channel rate guards cannot contain duplicate channels.");
   }
   if ("customActions" in input) {
     if (!Array.isArray(input.customActions)) throw new TypeError("Custom actions must be a list.");
     const loyalty = getPlusLoyalty(current, now); if (loyalty.customActionLimit !== null && input.customActions.length > loyalty.customActionLimit) throw new TypeError(`This server can have up to ${loyalty.customActionLimit} custom actions.`);
     patch.customActions = input.customActions.map((item, index) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new TypeError(`Custom action ${index + 1} is invalid.`);
-      if (!/^[a-zA-Z0-9_-]{1,36}$/.test(String(item.id || ""))) throw new TypeError(`Custom action ${index + 1} needs a valid ID.`);
-      const name = String(item.name || "").trim(); if (!name || name.length > 40) throw new TypeError(`Custom action ${index + 1} needs a 1-40 character name.`);
+      const actionKeys = new Set(["id", "name", "enabled", "triggerType", "triggerValue", "channelId", "userId", "actionType", "response"]); if (Object.keys(item).some((key) => !actionKeys.has(key))) throw new TypeError(`Custom action ${index + 1} has an unknown field.`);
+      if (typeof item.id !== "string" || !/^[a-zA-Z0-9_-]{1,36}$/.test(item.id)) throw new TypeError(`Custom action ${index + 1} needs a valid ID.`);
+      if (typeof item.name !== "string" || ("enabled" in item && typeof item.enabled !== "boolean")) throw new TypeError(`Custom action ${index + 1} has invalid types.`);
+      const name = item.name.trim(); if (!name || name.length > 40) throw new TypeError(`Custom action ${index + 1} needs a 1-40 character name.`);
       if (!CUSTOM_ACTION_TRIGGERS.has(item.triggerType) || !CUSTOM_ACTION_TYPES.has(item.actionType)) throw new TypeError(`Custom action ${index + 1} has an unsupported trigger or action.`);
       if (["warn", "timeout", "kick", "softban"].includes(item.actionType) && !hasPlusEntitlement(current, now)) { const error = new Error("Automated moderation actions require Duck Plus."); error.code = "plus_required"; throw error; }
-      const triggerValue = String(item.triggerValue || "").trim(); if (item.triggerType !== "message" && (!triggerValue || triggerValue.length > 80)) throw new TypeError(`Custom action ${index + 1} needs a 1-80 character trigger.`);
-      const response = String(item.response || "").trim(); if (["reply", "react"].includes(item.actionType) && (!response || response.length > 500)) throw new TypeError(`Custom action ${index + 1} needs a bounded response.`);
-      const channelId = item.channelId ? String(item.channelId) : null; const userId = item.userId ? String(item.userId) : null;
+      if (typeof item.triggerValue !== "string" || typeof item.response !== "string") throw new TypeError(`Custom action ${index + 1} trigger and response must be text.`);
+      const triggerValue = item.triggerValue.trim(); if (item.triggerType !== "message" && (!triggerValue || triggerValue.length > 80)) throw new TypeError(`Custom action ${index + 1} needs a 1-80 character trigger.`);
+      const response = item.response.trim(); if (["reply", "react"].includes(item.actionType) && (!response || response.length > 500)) throw new TypeError(`Custom action ${index + 1} needs a bounded response.`);
+      if ((item.channelId != null && typeof item.channelId !== "string") || (item.userId != null && typeof item.userId !== "string")) throw new TypeError(`Custom action ${index + 1} channel and user IDs must be text.`);
+      const channelId = item.channelId || null; const userId = item.userId || null;
       if (channelId && !/^\d{10,}$/.test(channelId)) throw new TypeError(`Custom action ${index + 1} has an invalid channel.`);
       if (userId && !/^\d{10,}$/.test(userId)) throw new TypeError(`Custom action ${index + 1} has an invalid user.`);
-      return { id: String(item.id), name, enabled: item.enabled !== false, triggerType: item.triggerType, triggerValue, channelId, userId, actionType: item.actionType, response };
+      return { id: item.id, name, enabled: item.enabled !== false, triggerType: item.triggerType, triggerValue, channelId, userId, actionType: item.actionType, response };
     });
+    if (new Set(patch.customActions.map(({ id }) => id)).size !== patch.customActions.length) throw new TypeError("Custom action IDs must be unique.");
   }
   for (const command of FUN_COMMANDS) {
     if (command.tier === "plus" && input[command.key] === true && !hasPlusEntitlement(current, now)) {
@@ -288,7 +295,8 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
       error.code = "plus_required";
       throw error;
     }
-    const personality = String(input.aiPersonality).trim();
+    if (typeof input.aiPersonality !== "string") throw new TypeError("AI personality must be text.");
+    const personality = input.aiPersonality.trim();
     if (personality.length > 240) throw new TypeError("AI personality must be 240 characters or fewer.");
     patch.aiPersonality = personality;
   }
@@ -297,23 +305,25 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
     patch.capabilityMode = input.capabilityMode;
   }
   if ("commandPrefix" in input) {
-    const prefix = String(input.commandPrefix);
+    if (typeof input.commandPrefix !== "string") throw new TypeError("Prefix must be text.");
+    const prefix = input.commandPrefix;
     if (!/^\S{1,5}$/u.test(prefix) || /[@#`]/u.test(prefix)) throw new TypeError("Prefix must be 1-5 non-space characters and cannot contain @, #, or `.");
     patch.commandPrefix = prefix;
   }
   for (const key of ["modChannelId", "welcomeChannelId"]) {
     if (key in input) {
-      if (input[key] !== null && !/^\d{10,}$/.test(String(input[key]))) throw new TypeError(`${key} must be a Discord channel ID or null.`);
-      patch[key] = input[key] === null ? null : String(input[key]);
+      if (input[key] !== null && (typeof input[key] !== "string" || !/^\d{10,}$/.test(input[key]))) throw new TypeError(`${key} must be a Discord channel ID or null.`);
+      patch[key] = input[key];
     }
   }
   if ("logChannelId" in input) {
-    if (input.logChannelId !== null && !/^\d{10,}$/.test(String(input.logChannelId))) throw new TypeError("logChannelId must be a Discord channel ID or null.");
-    patch.entryChannels = { ...(current.entryChannels || {}), logChannelId: input.logChannelId === null ? null : String(input.logChannelId) };
+    if (input.logChannelId !== null && (typeof input.logChannelId !== "string" || !/^\d{10,}$/.test(input.logChannelId))) throw new TypeError("logChannelId must be a Discord channel ID or null.");
+    patch.entryChannels = { ...(current.entryChannels || {}), logChannelId: input.logChannelId };
   }
   for (const key of ["welcomeMessage", "farewellMessage"]) {
     if (key in input) {
-      const value = String(input[key]).trim();
+      if (typeof input[key] !== "string") throw new TypeError(`${key} must be text.`);
+      const value = input[key].trim();
       if (!value || value.length > 180) throw new TypeError(`${key} must be 1-180 characters.`);
       patch[key] = value;
     }

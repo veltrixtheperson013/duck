@@ -1,0 +1,88 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [
+    "node_modules/",
+    ".env",
+    "security-reports/"
+  ],
+  "explicitExclusions": [
+    {
+      "pattern": ".env",
+      "reason": "Ignored live secrets were excluded from source review and were not printed or modified."
+    },
+    {
+      "pattern": "node_modules/",
+      "reason": "Third-party source was covered through package audit rather than line-by-line product review."
+    },
+    {
+      "pattern": "security-reports/",
+      "reason": "Prior generated scan artifacts are not product source."
+    }
+  ],
+  "includePaths": [
+    "src/",
+    "public/",
+    "scripts/",
+    "test/",
+    "package.json",
+    "config.example.json",
+    "index.js"
+  ],
+  "inventoryStrategy": "repository",
+  "mode": "repository",
+  "scanId": "scan_duck_20260815_frontend",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "surface_http",
+      "label": "Public HTTP parsing, rate limiting, sessions, and OAuth",
+      "receiptRefs": [],
+      "riskArea": "availability and authentication"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface_tenant",
+      "label": "Guild tenancy and channel authorization",
+      "receiptRefs": [],
+      "riskArea": "broken access control"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_settings",
+      "label": "Dashboard JSON validation and persistence",
+      "receiptRefs": [],
+      "riskArea": "injection and tenant integrity"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface_billing",
+      "label": "Stripe checkout, portal, cancellation, and webhooks",
+      "receiptRefs": [],
+      "riskArea": "billing integrity and availability"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_uploads",
+      "label": "Server branding image uploads",
+      "receiptRefs": [],
+      "riskArea": "unrestricted upload"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_browser",
+      "label": "CSP, DOM sinks, redirects, and data exposure",
+      "receiptRefs": [],
+      "riskArea": "XSS and information disclosure"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface_runtime",
+      "label": "Persisted settings, AutoMod, AI tools, and Discord side effects",
+      "receiptRefs": [],
+      "riskArea": "authorization and resource exhaustion"
+    }
+  ]
+}

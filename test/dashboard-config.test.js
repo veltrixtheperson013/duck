@@ -102,6 +102,7 @@ test("Plus profiles can set a bounded custom AI personality", () => {
 });
 
 test("AutoMod settings are bounded and server custom words require Plus", () => {
+  const plus = { subscription: { provider: "stripe", tier: "plus", status: "active" } };
   const basic = makeSettingsPatch({}, {
     automodEnabled: true,
     automodSwearFilter: true,
@@ -115,10 +116,11 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
   assert.equal(basic.settings.automodEnabled, true);
   assert.equal(basic.settings.automodChannelSlowmodes[0].seconds, 30);
   assert.throws(() => makeSettingsPatch({}, { automodCustomWords: ["spoiler"] }), /require Duck Plus/);
+  assert.throws(() => makeSettingsPatch(plus, { automodCustomWords: [{}] }), /must be text/);
+  assert.throws(() => makeSettingsPatch({}, { automodChannelSlowmodes: [{ channelId: 123456789012345678, seconds: 30 }] }), /valid channel/);
   assert.throws(() => makeSettingsPatch({}, { automodGlobalSlowmodeSeconds: 21_601 }), /0-21600/);
   assert.throws(() => makeSettingsPatch({}, { automodViolationsBeforeWarn: 0 }), /1 to 20/);
 
-  const plus = { subscription: { provider: "stripe", tier: "plus", status: "active" } };
   assert.deepEqual(makeSettingsPatch(plus, { automodCustomWords: [" Spoiler ", "spoiler"] }).settings.automodCustomWords, ["spoiler"]);
 });
 
@@ -138,6 +140,9 @@ test("custom actions use safe allowlists and loyalty-based caps", () => {
   assert.throws(() => makeSettingsPatch({}, { customActions: Array.from({ length: 6 }, (_, index) => action(index)) }), /up to 5/);
   assert.throws(() => makeSettingsPatch({}, { customActions: [action(1, "kick")] }), /require Duck Plus/);
   assert.throws(() => makeSettingsPatch({}, { customActions: [{ ...action(1), actionType: "execute" }] }), /unsupported/);
+  assert.throws(() => makeSettingsPatch({}, { customActions: [{ ...action(1), enabled: "true" }] }), /invalid types/);
+  assert.throws(() => makeSettingsPatch({}, { customActions: [{ ...action(1), extra: "client-owned" }] }), /unknown field/);
+  assert.throws(() => makeSettingsPatch({}, { customActions: [action(1), action(1)] }), /unique/);
 
   const now = Date.parse("2026-08-14T00:00:00.000Z");
   const basePlus = { subscription: { provider: "stripe", tier: "plus", status: "active", startedAt: "2026-07-14T00:00:00.000Z" } };

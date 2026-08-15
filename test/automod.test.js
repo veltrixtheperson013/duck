@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { customActionMatches, detectViolation, includesTerm } from "../src/automod.js";
+import { trimWarningStore } from "../src/config.js";
 
 test("AutoMod term matching uses normalized whole words and phrases", () => {
   assert.equal(includesTerm("This is PORN!", ["porn"]), true);
@@ -24,4 +25,20 @@ test("custom actions match only allowlisted server-side conditions", () => {
   assert.equal(customActionMatches({ ...base, userId: "999999999999999999" }, message), false);
   assert.equal(customActionMatches({ ...base, triggerType: "starts_with", triggerValue: "duck" }, message), false);
   assert.equal(customActionMatches({ ...base, triggerType: "unknown" }, message), false);
+});
+
+test("persistent warning histories have member, guild, and global retention bounds", () => {
+  const warnings = { guilds: {} };
+  for (let guildIndex = 0; guildIndex < 6; guildIndex += 1) {
+    const guildId = String(700000000000000000n + BigInt(guildIndex)); warnings.guilds[guildId] = {};
+    for (let memberIndex = 0; memberIndex < 1_001; memberIndex += 1) {
+      const memberId = String(800000000000000000n + BigInt(guildIndex * 2_000 + memberIndex));
+      warnings.guilds[guildId][memberId] = Array.from({ length: memberIndex === 1_000 ? 125 : 1 }, (_, index) => ({ createdAt: new Date(index * 1000 + guildIndex * 10_000).toISOString() }));
+    }
+  }
+  trimWarningStore(warnings);
+  const memberEntries = Object.values(warnings.guilds).flatMap((members) => Object.entries(members));
+  assert.equal(memberEntries.length, 5_000);
+  assert.ok(Object.values(warnings.guilds).every((members) => Object.keys(members).length <= 1_000));
+  assert.ok(memberEntries.every(([, history]) => history.length <= 100));
 });

@@ -1,0 +1,528 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "automationDetails": {
+        "id": "scan_duck_20260815_frontend"
+      },
+      "properties": {
+        "codexSecuritySchemaVersion": "1.0",
+        "codexSecurityTargetKind": "git_revision"
+      },
+      "results": [
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 43,
+                  "startLine": 43
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 113,
+                  "startLine": 112
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/core.js"
+                },
+                "region": {
+                  "endLine": 6659,
+                  "startLine": 6570
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Dashboard channel lists and destination validation use Duck's visibility but omit the requester's effective View Channel permission."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:2fb4678e553343c435466a0f91a18e607ff73b3e93db411d54f98fd0fc1d7bef",
+            "primaryLocationLineHash": "ede9a3d2b6662913:1"
+          },
+          "properties": {
+            "category": "broken-access-control",
+            "confidence": "high",
+            "findingId": "csf_bd4c24f22c46a20d0ca4f5eb",
+            "occurrenceId": "occ_000bae4a5b4de70daa3279c3",
+            "severity": "medium"
+          },
+          "ruleId": "authorization.channel-visibility",
+          "ruleIndex": 1
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 93,
+                  "startLine": 93
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 112,
+                  "startLine": 112
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Settings GET reuses a 30-second cached Discord guild permission snapshot."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:8de71660bf692f4ea060d948e2af421b5c5e59b799fe036b5a06494739510185",
+            "primaryLocationLineHash": "d0fe0008b8aa0e8e:1"
+          },
+          "properties": {
+            "category": "incorrect-authorization",
+            "confidence": "high",
+            "findingId": "csf_81c4b94815ab965a7ccfcd25",
+            "occurrenceId": "occ_08899b47632b50a7f28b5aea",
+            "severity": "low"
+          },
+          "ruleId": "authorization.cached-settings-read",
+          "ruleIndex": 0
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/config.js"
+                },
+                "region": {
+                  "endLine": 173,
+                  "startLine": 162
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/automod.js"
+                },
+                "region": {
+                  "endLine": 150,
+                  "startLine": 81
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "amplification"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/core.js"
+                },
+                "region": {
+                  "endLine": 4007,
+                  "startLine": 3994
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "AutoMod and custom actions append warnings indefinitely and rewrite or display the full history."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:92eb0cd3aa8c4056bdf20c7e95b9a6f75d96840b6f142613680339193a793e14",
+            "primaryLocationLineHash": "d1dfd1c3f659f115:1"
+          },
+          "properties": {
+            "category": "resource-exhaustion",
+            "confidence": "high",
+            "findingId": "csf_7503fdc64bef340f458a98c5",
+            "occurrenceId": "occ_0a467b716f68d9cda3d2e01e",
+            "severity": "medium"
+          },
+          "ruleId": "resource-exhaustion.warning-history",
+          "ruleIndex": 6
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 89,
+                  "startLine": 89
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "state"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 80,
+                  "startLine": 80
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 101,
+                  "startLine": 100
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "The limiter returns immediately after inserting a new key, skipping its own pruning and 10,000-entry cap."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:981ea3bacb8e265a4020f56139bbcad0b361a7490fdeb4be311c9e744305dd30",
+            "primaryLocationLineHash": "cb6009ed1d568ea1:1"
+          },
+          "properties": {
+            "category": "resource-exhaustion",
+            "confidence": "high",
+            "findingId": "csf_f25611c6413cbacb44b9cbd2",
+            "occurrenceId": "occ_1a374959a2fb9fea688836ff",
+            "severity": "medium"
+          },
+          "ruleId": "resource-exhaustion.rate-limit-state",
+          "ruleIndex": 5
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 91,
+                  "startLine": 90
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 106,
+                  "startLine": 106
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 110,
+                  "startLine": 110
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "OAuth and authenticated guild requests can accumulate unbounded pending outbound fetches and JSON response work."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:25df57f4abffa748eff32e1e41a2c4f5e28c2e077129e6af5e7dcba252dfeedc",
+            "primaryLocationLineHash": "e3713b4d5f7d5b0c:1"
+          },
+          "properties": {
+            "category": "resource-exhaustion",
+            "confidence": "high",
+            "findingId": "csf_3b90ae344f97af57efb02798",
+            "occurrenceId": "occ_1e93771fbf1c20597c5bc536",
+            "severity": "medium"
+          },
+          "ruleId": "resource-exhaustion.discord-outbound",
+          "ruleIndex": 3
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 122,
+                  "startLine": 122
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 117,
+                  "startLine": 117
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "state_derivation"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/stripe.js"
+                },
+                "region": {
+                  "endLine": 143,
+                  "startLine": 115
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Concurrent pre-activation checkouts and equal-second webhook delivery are not bound to one canonical subscription identity."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:087f86b3e976a99dceab6de1ccab8d9d6cf27e64580123a786e4db2bf0ee1605",
+            "primaryLocationLineHash": "3f79d034e27e483c:1"
+          },
+          "properties": {
+            "category": "race-condition",
+            "confidence": "medium",
+            "findingId": "csf_41d16ea5007304d9b29f8134",
+            "occurrenceId": "occ_5e31b5a1e866bd69c9db9e3a",
+            "severity": "medium"
+          },
+          "ruleId": "billing.subscription-race",
+          "ruleIndex": 2
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "public/donate.html"
+                },
+                "region": {
+                  "endLine": 9,
+                  "startLine": 9
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/web.js"
+                },
+                "region": {
+                  "endLine": 109,
+                  "startLine": 109
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Donation links expose provider-side resource creation through an unauthenticated safe-method route in the broad web rate bucket."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:78f990126e5074c02e85d32fedce44b506777c577267b740a5c993c95253242e",
+            "primaryLocationLineHash": "ede9e98259882a6b:1"
+          },
+          "properties": {
+            "category": "resource-exhaustion",
+            "confidence": "high",
+            "findingId": "csf_27e79409089f0172514d560d",
+            "occurrenceId": "occ_a70166c790a11487a5f45100",
+            "severity": "low"
+          },
+          "ruleId": "resource-exhaustion.donation-checkout-get",
+          "ruleIndex": 4
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Codex Security",
+          "rules": [
+            {
+              "id": "authorization.cached-settings-read",
+              "name": "authorization.cached-settings-read",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "authorization.cached-settings-read"
+              }
+            },
+            {
+              "id": "authorization.channel-visibility",
+              "name": "authorization.channel-visibility",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "authorization.channel-visibility"
+              }
+            },
+            {
+              "id": "billing.subscription-race",
+              "name": "billing.subscription-race",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "billing.subscription-race"
+              }
+            },
+            {
+              "id": "resource-exhaustion.discord-outbound",
+              "name": "resource-exhaustion.discord-outbound",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "resource-exhaustion.discord-outbound"
+              }
+            },
+            {
+              "id": "resource-exhaustion.donation-checkout-get",
+              "name": "resource-exhaustion.donation-checkout-get",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "resource-exhaustion.donation-checkout-get"
+              }
+            },
+            {
+              "id": "resource-exhaustion.rate-limit-state",
+              "name": "resource-exhaustion.rate-limit-state",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "resource-exhaustion.rate-limit-state"
+              }
+            },
+            {
+              "id": "resource-exhaustion.warning-history",
+              "name": "resource-exhaustion.warning-history",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "resource-exhaustion.warning-history"
+              }
+            }
+          ],
+          "version": "0.1.19"
+        }
+      },
+      "versionControlProvenance": [
+        {
+          "repositoryUri": "https://github.com/veltrixtheperson013/duck.git",
+          "revisionId": "c116427097e9261dcde23fe5c1bada00c2ca5b37"
+        }
+      ]
+    }
+  ],
+  "version": "2.1.0"
+}
