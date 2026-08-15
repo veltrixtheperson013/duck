@@ -300,3 +300,31 @@ footer p { margin: 0; }
 .settings-dialog .form-actions { min-height: 76px; padding: 12px 24px; background: #fff; border-top-color: #dbe3dd; box-shadow: 0 -8px 30px rgba(14,45,32,.045); }.settings-dialog .form-actions .button { min-height: 46px; border-radius: 10px; }
 .dashboard-notice { position: sticky; z-index: 8; top: 10px; }
 @media (max-width: 760px) { .settings-dialog { width: 100%; height: 100dvh; }.settings-layout { grid-template-columns: 1fr; }.settings-tabs { background: #10382b; }.settings-tabs::before { display: none; }.settings-tabs button { color: #c6d9d0; }.settings-tabs button.is-active { color: #173c2f; background: #f3cf70; }.settings-panel { padding: 24px 16px 42px; } }
+
+/* Motion system: subtle feedback and entrances without adding runtime weight. */
+@keyframes duck-rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes duck-pop { 0% { opacity: 0; transform: scale(.94); } 70% { transform: scale(1.015); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes duck-card-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pond-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(245,185,66,.22); } 50% { box-shadow: 0 0 0 9px rgba(245,185,66,0); } }
+.motion-ready .site-header { animation: duck-rise .5s cubic-bezier(.2,.8,.2,1) backwards; }
+.motion-ready main > :first-child { animation: duck-rise .58s cubic-bezier(.2,.8,.2,1) .06s backwards; }
+.motion-ready footer { animation: duck-rise .5s ease-out .12s backwards; }
+.motion-ready .price-card, .motion-ready .donation-panel, .motion-ready .guide-document, .motion-ready .legal-document, .motion-ready .policy-document { animation: duck-rise .55s cubic-bezier(.2,.8,.2,1) backwards; }
+.motion-ready .price-card:nth-child(2) { animation-delay: .09s; }
+.button, .server-card, .price-card, .donation-grid a, .plan-benefits article, .dashboard-stats article { transition: transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s ease, border-color .2s ease; }
+.button:hover:not(:disabled) { transform: translateY(-2px); }
+.button:active:not(:disabled), .donation-grid a:active { transform: translateY(0) scale(.98); }
+.server-card:hover, .price-card:hover, .plan-benefits article:hover, .dashboard-stats article:hover { transform: translateY(-4px); box-shadow: 0 18px 42px rgba(22,64,46,.12); }
+.server-card.is-entering { animation: duck-card-in .42s cubic-bezier(.2,.8,.2,1) var(--card-delay,0ms) backwards; }
+.status > span, .server-badges .is-present { animation: pond-pulse 2.6s ease-in-out infinite; }
+.settings-dialog.is-opening { animation: duck-pop .24s cubic-bezier(.2,.85,.25,1) backwards; }
+.settings-tabs button > span:first-child, .panel-heading > span { transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+.settings-tabs button:hover > span:first-child, .panel-heading:hover > span { transform: rotate(-5deg) scale(1.08); }
+.settings-group .toggle-row:hover, .settings-group .field-row:hover, .settings-group .field-stack:hover { background: rgba(226,241,229,.32); }
+.settings-group .toggle-row, .settings-group .field-row, .settings-group .field-stack { transition: background .18s ease; }
+.price-card [data-plus-unavailable] { position: relative; margin-top: auto; margin-bottom: 0; padding: 14px 16px 14px 43px; color: #fff2bd; background: rgba(7,38,28,.62); border: 1px solid rgba(255,220,116,.32); border-radius: 13px; box-shadow: inset 0 1px rgba(255,255,255,.06); font-size: .82rem; font-weight: 750; line-height: 1.45; }
+.price-card [data-plus-unavailable]::before { position: absolute; top: 13px; left: 15px; display: grid; place-items: center; width: 20px; height: 20px; color: #173c2f; content: "i"; background: #f5cf70; border-radius: 50%; font: 900 .72rem/1 var(--sans); }
+@media (prefers-reduced-motion: reduce) {
+  .motion-ready .site-header, .motion-ready main > :first-child, .motion-ready footer, .motion-ready .price-card, .motion-ready .donation-panel, .motion-ready .guide-document, .motion-ready .legal-document, .motion-ready .policy-document, .server-card.is-entering, .status > span, .server-badges .is-present, .settings-dialog.is-opening { animation: none; }
+  .button, .server-card, .price-card, .donation-grid a, .plan-benefits article, .dashboard-stats article, .settings-tabs button > span:first-child, .panel-heading > span { transition: none; }
+}

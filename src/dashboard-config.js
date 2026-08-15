@@ -71,6 +71,7 @@ function getDefaultAiModel(configuredModel = "") {
 }
 
 function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.now()) {
+  const subscription = settings.subscription ?? {};
   const selected = getAiModelDefinition(settings.aiModel);
   const aiModel = selected && (selected.tier !== "plus" || hasPlusEntitlement(settings, now))
     ? selected.id
@@ -97,10 +98,10 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     logChannelId: /^\d{10,}$/.test(settings.entryChannels?.logChannelId || "") ? settings.entryChannels.logChannelId : null,
     subscription: {
       tier: plus ? "plus" : "free",
-      status: plus ? settings.subscription.status : "inactive",
-      source: plus && settings.subscription.provider === "owner" ? "owner" : plus ? "stripe" : null,
-      expiresAt: plus ? settings.subscription.expiresAt ?? null : null,
-      cancelAtPeriodEnd: plus ? Boolean(settings.subscription.cancelAtPeriodEnd) : false,
+      status: plus ? subscription.status : "inactive",
+      source: plus && subscription.provider === "owner" ? "owner" : plus ? "stripe" : null,
+      expiresAt: plus ? subscription.expiresAt ?? null : null,
+      cancelAtPeriodEnd: plus ? Boolean(subscription.cancelAtPeriodEnd) : false,
     },
   };
 }

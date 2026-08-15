@@ -13,9 +13,9 @@ function guildIcon(guild) {
 function renderGuilds(search = $("[data-server-search]")?.value || "") {
   const term = search.trim().toLowerCase(); const list = $("[data-server-list]"); list.replaceChildren();
   const visible = state.guilds.filter((guild) => guild.name.toLowerCase().includes(term) && (state.serverFilter === "all" || (state.serverFilter === "manageable" && guild.canManage) || (state.serverFilter === "installed" && guild.botPresent)));
-  for (const guild of visible) {
+  for (const [index, guild] of visible.entries()) {
     const card = document.createElement("article"); const details = document.createElement("div"); const heading = document.createElement("h3"); const copy = document.createElement("p"); const badges = document.createElement("div"); const button = document.createElement("button");
-    card.className = `server-card${guild.botPresent ? " has-duck" : ""}`; heading.textContent = guild.name; copy.textContent = guild.botPresent ? (guild.canManage ? "Ready for server-specific configuration" : "Ask an admin for Manage Server permission") : "Invite Duck before configuring this server";
+    card.className = `server-card is-entering${guild.botPresent ? " has-duck" : ""}`; card.style.setProperty("--card-delay", `${Math.min(index, 8) * 45}ms`); heading.textContent = guild.name; copy.textContent = guild.botPresent ? (guild.canManage ? "Ready for server-specific configuration" : "Ask an admin for Manage Server permission") : "Invite Duck before configuring this server";
     badges.className = "server-badges"; const role = document.createElement("span"); role.textContent = guild.owner ? "Owner" : guild.isAdministrator ? "Administrator" : guild.canManage ? "Manager" : "Member"; const presence = document.createElement("span"); presence.className = guild.botPresent ? "is-present" : "is-absent"; presence.textContent = guild.botPresent ? "Duck online" : "Duck absent"; badges.append(role, presence);
     button.className = `button ${guild.botPresent ? "secondary" : "primary"}`; button.textContent = guild.botPresent ? "Configure server" : "Invite Duck"; button.disabled = guild.botPresent && !guild.canManage; button.addEventListener("click", () => guild.botPresent ? openSettings(guild) : location.assign(guild.inviteUrl));
     details.append(heading, copy, badges); card.append(guildIcon(guild), details, button); list.append(card);
@@ -37,7 +37,7 @@ async function openSettings(guild) {
   notice("");
   try {
     const data = await api(`api/guilds/${guild.id}/settings`); state.activeGuild = guild; state.catalog = data.models;
-    const form = $("[data-settings-form]"); const settings = data.settings; const subscription = settings.subscription; const plus = subscription.tier === "plus"; state.activePlus = plus;
+    const form = $("[data-settings-form]"); const settings = data.settings ?? {}; const subscription = settings.subscription ?? { tier: "free", status: "inactive", source: null, expiresAt: null, cancelAtPeriodEnd: false }; const plus = subscription.tier === "plus"; state.activePlus = plus;
     $("[data-dialog-title]").textContent = guild.name;
     for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames"]) form[key].checked = settings[key];
     for (const key of ["capabilityMode", "commandPrefix", "aiChannelMode", "aiContextMode", "aiResponseStyle", "aiPersonality", "welcomeMessage", "farewellMessage"]) form[key].value = settings[key];
@@ -50,7 +50,7 @@ async function openSettings(guild) {
     const billingDate = $("[data-billing-date]"); const formattedDate = formatBillingDate(subscription.expiresAt); billingDate.textContent = formattedDate ? `${subscription.cancelAtPeriodEnd ? "Access ends" : "Renews"} ${formattedDate}` : ""; billingDate.hidden = !formattedDate;
     $("[data-billing-help]").textContent = plus ? (subscription.source === "owner" ? "Complimentary owner access does not renew or require payment." : "Payment details, invoices, and cancellation are always available here.") : !data.plusEnabled ? "Free features remain available while Plus is offline." : "Subscriptions belong to this Discord server, not your entire account.";
     $("[data-upgrade-month]").hidden = plus || !data.billingConfigured; $("[data-upgrade-year]").hidden = plus || !data.billingConfigured; $("[data-manage-billing]").hidden = !data.canManageSubscription; $("[data-cancel-subscription]").hidden = !data.canCancelSubscription;
-    updateDisclaimers(); selectTab("general"); $("[data-settings-dialog]").showModal();
+    updateDisclaimers(); selectTab("general"); const dialog = $("[data-settings-dialog]"); dialog.showModal(); dialog.classList.remove("is-opening"); requestAnimationFrame(() => dialog.classList.add("is-opening"));
   } catch (error) { notice(error.message, true); }
 }
 

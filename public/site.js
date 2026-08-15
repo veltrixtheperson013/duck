@@ -1,5 +1,9 @@
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+if (!reducedMotion) {
+  requestAnimationFrame(() => document.documentElement.classList.add("motion-ready"));
+}
+
 const serverCount = document.querySelector("[data-server-count]");
 if (serverCount) {
   fetch("/api/stats")

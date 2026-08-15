@@ -59,7 +59,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260815/);
+    assert.match(dashboardText, /styles\.css\?v=20260816/);
     assert.equal((await fetch(`${origin}/favicon.svg`)).status, 200);
     assert.match(await (await fetch(`${origin}/pricing`)).text(), /Annual saves \$8\.89/);
     assert.match(await (await fetch(`${origin}/donate`)).text(), /seriously thankful/i);

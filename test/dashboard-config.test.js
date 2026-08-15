@@ -21,6 +21,17 @@ test("expired Plus selections fall back to a free model", () => {
   assert.equal(getPublicModelCatalog().tts.find(({ id }) => id === "deepgram/flux-tts").label, "Deepgram Flux TTS");
 });
 
+test("settings without subscription data normalize to the Free plan", () => {
+  const settings = getPublicGuildSettings({ aiChatEnabled: true });
+  assert.deepEqual(settings.subscription, {
+    tier: "free",
+    status: "inactive",
+    source: null,
+    expiresAt: null,
+    cancelAtPeriodEnd: false,
+  });
+});
+
 test("dashboard exposes and validates advanced per-server controls", () => {
   const input = {
     aiVisionEnabled: false,
