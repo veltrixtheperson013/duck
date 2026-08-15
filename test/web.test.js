@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createDuckWebsiteServer, hasAdministratorPermission, hasManageGuildPermission, makeBotInviteUrl, makeDonationUrl } from "../src/web.js";
+import { createDuckWebsiteServer, hasAdministratorPermission, hasManageGuildPermission, isDuckOwner, makeBotInviteUrl, makeDonationUrl } from "../src/web.js";
 import { isPlusEnabled, isStripeServerConfigured, makePlusCheckoutInput } from "../src/stripe.js";
 
 async function withWebsite(run, options = {}) {
@@ -44,6 +44,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     const css = await fetch(`${origin}/styles.css`);
     assert.equal(css.status, 200);
     assert.match(css.headers.get("content-type"), /^text\/css/);
+    assert.equal(css.headers.get("cache-control"), "no-cache");
 
     const script = await fetch(`${origin}/site.js`);
     assert.equal(script.status, 200);
@@ -57,6 +58,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Cancel subscription/);
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
+    assert.doesNotMatch(dashboardText, /Activate owner Plus/);
+    assert.match(dashboardText, /styles\.css\?v=20260815/);
     assert.equal((await fetch(`${origin}/favicon.svg`)).status, 200);
     assert.match(await (await fetch(`${origin}/pricing`)).text(), /Annual saves \$8\.89/);
     assert.match(await (await fetch(`${origin}/donate`)).text(), /seriously thankful/i);
@@ -98,10 +101,10 @@ test("public pages contain no GitHub references", async () => {
 });
 
 test("Discord sessions cannot read or change another account's server profile", async () => {
-  const environmentKeys = ["CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_SESSION_SECURE", "DUCK_PLUS_ENABLED", "DUCK_OWNER_USER_IDS"];
+  const environmentKeys = ["CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_SESSION_SECURE", "DUCK_PLUS_ENABLED"];
   const previous = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
-  const alphaUser = "900000000000000001"; const betaUser = "900000000000000002"; const alphaGuild = "800000000000000001"; const betaGuild = "800000000000000002";
-  Object.assign(process.env, { CLIENT_ID: "1507850959642955816", DISCORD_CLIENT_SECRET: "test-client-secret", DISCORD_OAUTH_REDIRECT_URI: "http://127.0.0.1/auth/discord/callback", DUCK_SESSION_SECURE: "false", DUCK_PLUS_ENABLED: "false", DUCK_OWNER_USER_IDS: alphaUser });
+  const alphaUser = "1138897388694687834"; const betaUser = "900000000000000002"; const alphaGuild = "800000000000000001"; const betaGuild = "800000000000000002";
+  Object.assign(process.env, { CLIENT_ID: "1507850959642955816", DISCORD_CLIENT_SECRET: "test-client-secret", DISCORD_OAUTH_REDIRECT_URI: "http://127.0.0.1/auth/discord/callback", DUCK_SESSION_SECURE: "false", DUCK_PLUS_ENABLED: "false" });
   const profiles = new Map([[alphaGuild, { welcomeMessage: "Alpha private profile" }], [betaGuild, { welcomeMessage: "Beta private profile" }]]);
   const fetchImpl = async (url, options = {}) => {
     const authorization = String(options.headers?.Authorization || "");
@@ -119,12 +122,11 @@ test("Discord sessions cannot read or change another account's server profile", 
     await withWebsite(async (origin) => {
       const alphaCookie = await signIn(origin, "alpha"); const betaCookie = await signIn(origin, "beta");
       const alphaMe = await (await fetch(`${origin}/api/me`, { headers: { Cookie: alphaCookie } })).json(); const betaMe = await (await fetch(`${origin}/api/me`, { headers: { Cookie: betaCookie } })).json();
-      const alphaOwn = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { headers: { Cookie: alphaCookie } }); assert.equal(alphaOwn.status, 200); assert.equal((await alphaOwn.json()).settings.welcomeMessage, "Alpha private profile");
+      const alphaOwn = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { headers: { Cookie: alphaCookie } }); assert.equal(alphaOwn.status, 200); const alphaSettings = await alphaOwn.json(); assert.equal(alphaSettings.settings.welcomeMessage, "Alpha private profile"); assert.equal(alphaSettings.settings.subscription.source, "owner");
       assert.equal((await fetch(`${origin}/api/guilds/${betaGuild}/settings`, { headers: { Cookie: alphaCookie } })).status, 403);
       assert.equal((await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { headers: { Cookie: betaCookie } })).status, 403);
       const crossWrite = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { method: "PUT", headers: { Cookie: betaCookie, "Content-Type": "application/json", "X-Duck-CSRF": betaMe.csrf }, body: JSON.stringify({ welcomeMessage: "stolen" }) }); assert.equal(crossWrite.status, 403); assert.equal(profiles.get(alphaGuild).welcomeMessage, "Alpha private profile");
-      const ownerPlus = await fetch(`${origin}/api/guilds/${alphaGuild}/billing/owner-plus`, { method: "POST", headers: { Cookie: alphaCookie, "X-Duck-CSRF": alphaMe.csrf } }); assert.equal(ownerPlus.status, 200); assert.equal(profiles.get(alphaGuild).subscription.provider, "owner");
-      const nonOwnerPlus = await fetch(`${origin}/api/guilds/${betaGuild}/billing/owner-plus`, { method: "POST", headers: { Cookie: betaCookie, "X-Duck-CSRF": betaMe.csrf } }); assert.equal(nonOwnerPlus.status, 403);
+      const ownerSave = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { method: "PUT", headers: { Cookie: alphaCookie, "Content-Type": "application/json", "X-Duck-CSRF": alphaMe.csrf }, body: JSON.stringify({ aiPersonality: "A dry-witted pond guardian" }) }); assert.equal(ownerSave.status, 200); assert.equal(profiles.get(alphaGuild).subscription.provider, "owner"); assert.equal(profiles.get(alphaGuild).aiPersonality, "A dry-witted pond guardian");
     }, { fetchImpl, client: { guilds: { cache: new Map([[alphaGuild, {}], [betaGuild, {}]]) }, application: { owner: null } }, getGuildSettings: (id) => profiles.get(id) || {}, updateGuildSettings: (id, patch) => profiles.set(id, { ...(profiles.get(id) || {}), ...patch }) });
   } finally {
     for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value;
@@ -148,6 +150,8 @@ test("Duck Plus defaults off and fails closed", async () => {
 });
 
 test("dashboard security helpers enforce Discord permissions and safe donation links", () => {
+  assert.equal(isDuckOwner("1138897388694687834"), true);
+  assert.equal(isDuckOwner("1138897388694687835"), false);
   assert.equal(hasManageGuildPermission({ permissions: "32" }), true);
   assert.equal(hasAdministratorPermission({ permissions: "32" }), false);
   assert.equal(hasAdministratorPermission({ permissions: "8" }), true);

@@ -46,10 +46,10 @@ async function openSettings(guild) {
     for (const select of $$('[data-channel-select]')) fillChannelSelect(select, data.channels, settings[select.name]);
     form.aiResponseStyle.querySelector('option[value="detailed"]').disabled = !plus; form.aiPersonality.disabled = !plus;
     $("[data-plan-pill]").textContent = plus ? "Plus plan" : "Free plan"; $("[data-plan-pill]").classList.toggle("is-plus", plus); $("[data-billing-title]").textContent = plus ? "Duck Plus" : "Duck Free";
-    $("[data-plus-copy]").textContent = plus ? (subscription.cancelAtPeriodEnd ? "Your subscription is canceled and remains active until the date below." : subscription.source === "owner" ? "Owner Plus is active for this server." : "Your subscription is active. Thank you for supporting Duck!") : data.canClaimOwnerPlus ? "Paid Plus is off, but your complimentary owner access is ready." : !data.plusEnabled ? "Duck Plus is currently unavailable." : data.billingConfigured ? "Unlock premium models, custom personality, larger limits, and priority processing." : "Plus checkout is being configured.";
+    $("[data-plus-copy]").textContent = plus ? (subscription.cancelAtPeriodEnd ? "Your subscription is canceled and remains active until the date below." : subscription.source === "owner" ? "Complimentary owner Plus is active for this server." : "Your subscription is active. Thank you for supporting Duck!") : !data.plusEnabled ? "Duck Plus is currently unavailable." : data.billingConfigured ? "Unlock premium models, custom personality, larger limits, and priority processing." : "Plus checkout is being configured.";
     const billingDate = $("[data-billing-date]"); const formattedDate = formatBillingDate(subscription.expiresAt); billingDate.textContent = formattedDate ? `${subscription.cancelAtPeriodEnd ? "Access ends" : "Renews"} ${formattedDate}` : ""; billingDate.hidden = !formattedDate;
     $("[data-billing-help]").textContent = plus ? (subscription.source === "owner" ? "Complimentary owner access does not renew or require payment." : "Payment details, invoices, and cancellation are always available here.") : !data.plusEnabled ? "Free features remain available while Plus is offline." : "Subscriptions belong to this Discord server, not your entire account.";
-    $("[data-upgrade-month]").hidden = plus || !data.billingConfigured; $("[data-upgrade-year]").hidden = plus || !data.billingConfigured; $("[data-owner-plus]").hidden = !data.canClaimOwnerPlus; $("[data-manage-billing]").hidden = !data.canManageSubscription; $("[data-cancel-subscription]").hidden = !data.canCancelSubscription;
+    $("[data-upgrade-month]").hidden = plus || !data.billingConfigured; $("[data-upgrade-year]").hidden = plus || !data.billingConfigured; $("[data-manage-billing]").hidden = !data.canManageSubscription; $("[data-cancel-subscription]").hidden = !data.canCancelSubscription;
     updateDisclaimers(); selectTab("general"); $("[data-settings-dialog]").showModal();
   } catch (error) { notice(error.message, true); }
 }
@@ -57,7 +57,6 @@ async function openSettings(guild) {
 async function startCheckout(period) { try { const data = await api(`api/guilds/${state.activeGuild.id}/billing/checkout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ period }) }); location.assign(data.url); } catch (error) { notice(error.message, true); } }
 async function manageBilling() { try { const data = await api(`api/guilds/${state.activeGuild.id}/billing/portal`, { method: "POST" }); location.assign(data.url); } catch (error) { notice(error.message, true); } }
 async function cancelSubscription() { try { const data = await api(`api/guilds/${state.activeGuild.id}/billing/cancel`, { method: "POST" }); location.assign(data.url); } catch (error) { notice(error.message, true); } }
-async function activateOwnerPlus() { try { await api(`api/guilds/${state.activeGuild.id}/billing/owner-plus`, { method: "POST" }); await openSettings(state.activeGuild); selectTab("billing"); } catch (error) { notice(error.message, true); } }
 
 async function initialize() {
   try {
@@ -79,5 +78,5 @@ $("[data-settings-form]").addEventListener("submit", async (event) => {
     $("[data-settings-dialog]").close(); notice(`Saved settings for ${state.activeGuild.name}.`);
   } catch (error) { notice(error.message, true); } finally { submit.disabled = false; submit.textContent = "Save changes"; }
 });
-$("[data-upgrade-month]").addEventListener("click", () => startCheckout("month")); $("[data-upgrade-year]").addEventListener("click", () => startCheckout("year")); $("[data-owner-plus]").addEventListener("click", activateOwnerPlus); $("[data-manage-billing]").addEventListener("click", manageBilling); $("[data-cancel-subscription]").addEventListener("click", cancelSubscription);
+$("[data-upgrade-month]").addEventListener("click", () => startCheckout("month")); $("[data-upgrade-year]").addEventListener("click", () => startCheckout("year")); $("[data-manage-billing]").addEventListener("click", manageBilling); $("[data-cancel-subscription]").addEventListener("click", cancelSubscription);
 initialize();
