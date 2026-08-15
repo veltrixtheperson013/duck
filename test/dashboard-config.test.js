@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getPublicGuildSettings, getPublicModelCatalog, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
+import { getFunCommandAccess, getPublicGuildSettings, getPublicModelCatalog, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
 
 test("dashboard settings allowlist fields and gate Plus models per guild", () => {
   const free = makeSettingsPatch({}, { aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" });
@@ -18,7 +18,7 @@ test("expired Plus selections fall back to a free model", () => {
   const settings = getPublicGuildSettings({ aiModel: "tencent/hy3", subscription: { tier: "plus", status: "active", expiresAt: "2000-01-01T00:00:00.000Z" } });
   assert.equal(settings.subscription.tier, "free");
   assert.equal(settings.aiModel, "cohere/north-mini-code:free");
-  assert.equal(getPublicModelCatalog().tts.find(({ id }) => id === "deepgram/flux-tts").label, "Deepgram Flux TTS");
+  assert.equal(getPublicModelCatalog().tts.find(({ id }) => id === "deepgram/flux-tts:free").label, "Deepgram Flux TTS");
 });
 
 test("settings without subscription data normalize to the Free plan", () => {
@@ -30,6 +30,32 @@ test("settings without subscription data normalize to the Free plan", () => {
     expiresAt: null,
     cancelAtPeriodEnd: false,
   });
+});
+
+test("fun commands keep a Free set and enforce Plus toggles", () => {
+  const free = getPublicGuildSettings({});
+  assert.equal(free.funQuackEnabled, true);
+  assert.equal(free.funDuckFactEnabled, true);
+  assert.equal(free.funCoinflipEnabled, true);
+  assert.equal(free.funRoastEnabled, false);
+  assert.equal(getFunCommandAccess(free, "quack").allowed, true);
+  assert.equal(getFunCommandAccess(free, "roast").reason, "plus_required");
+  assert.throws(() => makeSettingsPatch({}, { funRoastEnabled: true }), /requires Duck Plus/);
+
+  const plus = { subscription: { tier: "plus", status: "active" } };
+  const enabled = makeSettingsPatch(plus, { funRoastEnabled: true, funWouldYouRatherEnabled: true });
+  assert.equal(enabled.settings.funRoastEnabled, true);
+  assert.equal(getFunCommandAccess({ ...plus, ...enabled.patch }, "roast").allowed, true);
+  assert.equal(getFunCommandAccess({ ...plus, funCommandsEnabled: false, funRoastEnabled: true }, "roast").reason, "disabled");
+});
+
+test("ElevenLabs TTS is Plus-only and Deepgram is the Free default", () => {
+  assert.equal(getPublicGuildSettings({}).ttsModel, "deepgram/flux-tts:free");
+  assert.equal(getPublicGuildSettings({ ttsModel: "elevenlabs/default" }).ttsModel, "deepgram/flux-tts:free");
+  assert.throws(() => makeSettingsPatch({}, { ttsModel: "elevenlabs/default" }), /requires Duck Plus/);
+  const plus = { subscription: { tier: "plus", status: "active" } };
+  assert.equal(makeSettingsPatch(plus, { ttsModel: "elevenlabs/default" }).settings.ttsModel, "elevenlabs/default");
+  assert.equal(getPublicModelCatalog().tts.find(({ id }) => id === "elevenlabs/default").tier, "plus");
 });
 
 test("dashboard exposes and validates advanced per-server controls", () => {

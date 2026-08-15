@@ -1,6 +1,6 @@
 {
   "name": "duck-discord-ai-moderator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Duck - a local, zero-cost AI-style Discord moderation bot with confirmation-gated tools.",

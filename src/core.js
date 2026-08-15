@@ -9,7 +9,7 @@ import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES,
 import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, getAiRequestTimeoutMs, getAiHttpMaxAttempts, getCommandScope, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
 import { createDuckWebsiteServer } from "./web.js";
-import { getAiModelDefinition, getDefaultAiModel, hasPlusEntitlement } from "./dashboard-config.js";
+import { getAiModelDefinition, getDefaultAiModel, getFunCommandAccess, hasPlusEntitlement } from "./dashboard-config.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
@@ -5299,24 +5299,30 @@ function destroyVoiceSession(guildId) {
 async function synthesizeVoiceAudio(text, guildId = null) {
   const guildSettings = guildId ? getGuildSettings(guildId) : {};
   if (guildSettings.ttsEnabled === false) throw new Error("TTS is disabled for this server.");
-  if (guildSettings.ttsModel === "deepgram/flux-tts") {
-    const apiKey = String(process.env.DEEPGRAM_API_KEY || "").trim();
-    if (!apiKey) throw new Error("Deepgram TTS is not configured. Set DEEPGRAM_API_KEY.");
+  const useElevenLabs = guildSettings.ttsModel === "elevenlabs/default" && hasPlusEntitlement(guildSettings);
+  if (!useElevenLabs) {
+    const apiKey = String(process.env.OPENROUTER_API_KEY || "").trim();
+    if (!apiKey) throw new Error("Flux TTS is not configured. Set OPENROUTER_API_KEY.");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     timeout.unref?.();
     try {
-      const response = await fetch("https://api.deepgram.com/v2/speak?model=flux-cole-en&encoding=mp3&mip_opt_out=true", {
+      const response = await fetch("https://openrouter.ai/api/v1/audio/speech", {
         method: "POST",
-        headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.slice(0, 200) }),
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.wispbyte.app",
+          "X-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
+        },
+        body: JSON.stringify({ model: "deepgram/flux-tts:free", input: text.slice(0, 200), voice: "flux-cole-en", response_format: "mp3" }),
         signal: controller.signal,
       });
       if (!response.ok) {
         const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
-        throw new Error(`Deepgram TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
+        throw new Error(`OpenRouter Flux TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
       }
-      if (!response.body) throw new Error("Deepgram TTS returned an empty audio stream.");
+      if (!response.body) throw new Error("OpenRouter Flux TTS returned an empty audio stream.");
       const reader = response.body.getReader();
       const chunks = [];
       let totalBytes = 0;
@@ -5335,10 +5341,10 @@ async function synthesizeVoiceAudio(text, guildId = null) {
       } finally {
         reader.releaseLock();
       }
-      if (!totalBytes) throw new Error("Deepgram TTS returned no audio data.");
+      if (!totalBytes) throw new Error("OpenRouter Flux TTS returned no audio data.");
       return Buffer.concat(chunks, totalBytes);
     } catch (err) {
-      if (err?.name === "AbortError") throw new Error("Deepgram TTS timed out after 15 seconds.");
+      if (err?.name === "AbortError") throw new Error("OpenRouter Flux TTS timed out after 15 seconds.");
       throw err;
     } finally {
       clearTimeout(timeout);
@@ -5867,6 +5873,19 @@ async function handleExplicitCommand(message, text) {
 
 async function makeUtilityResponse(message, text) {
   const normalized = normalizeText(text);
+  const funCommand = [
+    ["wouldyourather", /^(wouldyourather|would you rather)\b/],
+    ["duckfact", /^(duckfact|duck fact)\b/],
+    ["coinflip", /^coinflip\b/],
+    ["spinwheel", /^spinwheel\b/],
+    ["eightball", /^(eightball|8ball)\b/],
+    ...["quack", "ship", "curse", "roll", "quote", "roast", "compliment", "choose", "rate"].map((command) => [command, new RegExp(`^${command}\\b`)]),
+  ].find(([, pattern]) => pattern.test(normalized))?.[0];
+  if (funCommand) {
+    const access = getFunCommandAccess(getGuildSettings(message.guildId), funCommand);
+    if (access?.reason === "plus_required") return `\`/${funCommand}\` requires Duck Plus for this server.`;
+    if (access && !access.allowed) return `\`/${funCommand}\` is turned off in this server's Fun Commands settings.`;
+  }
 
   if (/^(help|commands|tools|what can you do)\b/.test(normalized)) {
     return [
@@ -6024,11 +6043,60 @@ async function makeUtilityResponse(message, text) {
     return `Rolled **${count}d${sides}**: ${rolls.join(", ")}\nTotal: **${total}**`;
   }
 
-  if (/^eightball\b/.test(normalized)) {
-    const question = text.replace(/^eightball\b/i, "").trim();
+  if (/^(eightball|8ball)\b/.test(normalized)) {
+    const question = text.replace(/^(eightball|8ball)\b/i, "").trim();
     if (!question) return "Usage: `!eightball <question>`";
     const answer = EIGHT_BALL_ANSWERS[Math.floor(Math.random() * EIGHT_BALL_ANSWERS.length)];
     return `**Question:** ${limitDiscordContent(question, 500)}\n**Answer:** ${answer}`;
+  }
+
+  if (/^roast\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^roast\b/i, ""), true);
+    const roasts = [
+      "has the confidence of a production deploy with zero tests.",
+      "could get lost in a one-channel Discord server.",
+      "types 'quick question' and then releases a twelve-part documentary.",
+      "has been buffering since the tutorial.",
+      "brings strong main-character energy to the loading screen.",
+    ];
+    return `${target.displayName} ${roasts[Math.floor(Math.random() * roasts.length)]}`;
+  }
+
+  if (/^compliment\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^compliment\b/i, ""), true);
+    const compliments = [
+      "makes this server noticeably better just by showing up.",
+      "has excellent ideas and suspiciously good timing.",
+      "is the kind of person even the moderation logs speak highly of.",
+      "could probably calm an entire pond with one message.",
+      "has immaculate vibes according to several independent ducks.",
+    ];
+    return `${target.displayName} ${compliments[Math.floor(Math.random() * compliments.length)]}`;
+  }
+
+  if (/^choose\b/.test(normalized)) {
+    const options = parseSpinOptions(text.replace(/^choose\b/i, "").trim());
+    if (options.length < 2) return "Give me at least 2 comma-separated choices, like `duck choose pizza, tacos, sushi`.";
+    return `Duck chooses: **${options[Math.floor(Math.random() * options.length)]}**.`;
+  }
+
+  if (/^rate\b/.test(normalized)) {
+    const subject = limitDiscordContent(text.replace(/^rate\b/i, "").trim(), 200);
+    if (!subject) return "Usage: `duck rate <anything>`";
+    const score = createHash("sha256").update(`${message.guildId}:${subject.toLowerCase()}`).digest()[0] % 11;
+    const verdict = score >= 9 ? "Certified pond excellence." : score >= 7 ? "Strong quack energy." : score >= 4 ? "Respectably waterproof." : "The pond requests revisions.";
+    return `**${subject}** gets **${score}/10**. ${verdict}`;
+  }
+
+  if (/^(wouldyourather|would you rather)\b/.test(normalized)) {
+    const prompts = [
+      "Would you rather fight one horse-sized duck or one hundred duck-sized horses?",
+      "Would you rather have perfect Wi-Fi forever or never need to charge a device again?",
+      "Would you rather speak only in sound effects or have a laugh track follow you everywhere?",
+      "Would you rather moderate a server of chaotic ducks or extremely organized geese?",
+      "Would you rather know every spoiler or never understand another meme?",
+    ];
+    return prompts[Math.floor(Math.random() * prompts.length)];
   }
 
   if (/^remind\b/.test(normalized)) {
@@ -6197,6 +6265,11 @@ function slashCommandContent(interaction) {
     case "roll": return `roll ${interaction.options.getString("dice", false) || "1d6"}`;
     case "coinflip": return "coinflip";
     case "eightball": return `eightball ${interaction.options.getString("question", true)}`;
+    case "roast": return `roast ${userMention("user")}`;
+    case "compliment": return `compliment ${userMention("user")}`;
+    case "choose": return `choose ${interaction.options.getString("choices", true)}`;
+    case "rate": return `rate ${interaction.options.getString("subject", true)}`;
+    case "wouldyourather": return "wouldyourather";
     case "remind": return `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`;
     case "join": return "join";
     case "leave": return "leave";
@@ -6283,6 +6356,8 @@ async function makeSlashDuckResponse(interaction, prompt) {
       "- `/clear`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
       "- `/addrole`, `/removerole`, `/tool`",
       "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
+      "- Fun: `/quack`, `/duckfact`, `/coinflip`",
+      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`",
       "- `/setup`, `/entry-setup`, `/synccommands`, `/duck-tools`",
       "",
       "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
@@ -6685,6 +6760,15 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("coinflip").setDescription("Flip a coin."),
     new SlashCommandBuilder().setName("eightball").setDescription("Ask Duck's Magic 8-Ball a question.")
       .addStringOption((option) => option.setName("question").setDescription("Your question.").setRequired(true)),
+    new SlashCommandBuilder().setName("roast").setDescription("Deliver a friendly, non-toxic roast. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Person to roast; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("compliment").setDescription("Deploy emergency positivity. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Person to compliment; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("choose").setDescription("Ask Duck to pick from your choices. Duck Plus command.")
+      .addStringOption((option) => option.setName("choices").setDescription("Comma-separated choices.").setRequired(true)),
+    new SlashCommandBuilder().setName("rate").setDescription("Receive an extremely scientific rating. Duck Plus command.")
+      .addStringOption((option) => option.setName("subject").setDescription("Anything Duck should rate.").setMaxLength(200).setRequired(true)),
+    new SlashCommandBuilder().setName("wouldyourather").setDescription("Get a conversation starter. Duck Plus command."),
     new SlashCommandBuilder().setName("remind").setDescription("Set a reminder in this channel.")
       .addStringOption((option) => option.setName("time").setDescription("Examples: 30s, 10m, 2h.").setRequired(true))
       .addStringOption((option) => option.setName("text").setDescription("Reminder text.").setRequired(true)),

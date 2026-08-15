@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Sign in with Discord to configure Duck for each server you manage.">
-  <title>Dashboard — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css?v=20260817">
-  <script src="/site.js?v=20260817" defer></script><script src="/dashboard.js?v=20260817" defer></script>
+  <title>Dashboard — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css?v=20260819">
+  <script src="/site.js?v=20260819" defer></script><script src="/dashboard.js?v=20260819" defer></script>
 </head>
 <body>
   <header class="site-header"><a class="brand" href="index.html"><span aria-hidden="true">🦆</span> Duck</a><button class="menu-button" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button><nav class="main-nav" aria-label="Main navigation"><a href="index.html#features">Features</a><a href="guide.html">Guide</a><a href="pricing.html">Pricing</a><a href="donate.html">Donate</a><a href="privacy-policy.html">Privacy</a><a aria-current="page" href="dashboard.html">Dashboard</a></nav></header>
@@ -13,19 +13,33 @@
     <section class="login-card" data-login hidden><span aria-hidden="true">🪪</span><div><h2>Sign in with Discord</h2><p>Duck requests only your basic profile and server list. Your Discord access token stays on this server.</p></div><a class="button primary" href="/auth/discord">Continue with Discord</a></section>
     <div class="dashboard-notice" data-notice role="status" hidden></div>
     <section data-dashboard hidden><div class="dashboard-stats" aria-label="Server summary"><article><span data-stat-total>0</span><small>Discord servers</small></article><article><span data-stat-manage>0</span><small>You can manage</small></article><article><span data-stat-installed>0</span><small>Duck installed</small></article></div><div class="server-toolbar"><div><p class="eyebrow">Server fleet</p><h2>Your servers</h2><p>Duck verifies your Discord permissions again whenever you save.</p></div><div class="server-controls"><div class="filter-tabs" role="group" aria-label="Filter servers"><button type="button" class="is-active" data-server-filter="all">All</button><button type="button" data-server-filter="manageable">Manageable</button><button type="button" data-server-filter="installed">Duck installed</button></div><input type="search" data-server-search placeholder="Find a server…" aria-label="Find a server"></div></div><div class="server-grid" data-server-list></div></section>
-    <dialog class="settings-dialog" data-settings-dialog>
+    <section class="settings-dialog" data-settings-page hidden>
       <div class="dialog-top"><div><p class="eyebrow">Server control panel</p><h2 data-dialog-title>Configure Duck</h2><span class="dialog-status"><i></i> Changes apply only to this server</span></div><button class="icon-button" type="button" data-back aria-label="Back to servers">←</button></div>
       <form data-settings-form>
         <div class="settings-layout">
           <nav class="settings-tabs" aria-label="Settings sections">
-            <button class="is-active" type="button" data-settings-tab="general"><span>⚙️</span><span>General<small>Core behavior</small></span></button>
+            <button class="is-active" type="button" data-settings-tab="overview"><span>🏠</span><span>Overview<small>Server modules</small></span></button>
+            <button type="button" data-settings-tab="general"><span>🛡️</span><span>Safety<small>Moderation</small></span></button>
             <button type="button" data-settings-tab="ai"><span>✨</span><span>AI<small>Models &amp; context</small></span></button>
             <button type="button" data-settings-tab="voice"><span>🔊</span><span>Voice<small>TTS controls</small></span></button>
             <button type="button" data-settings-tab="community"><span>👋</span><span>Community<small>Welcome &amp; logs</small></span></button>
+            <button type="button" data-settings-tab="fun"><span>🎲</span><span>Fun<small>Server commands</small></span></button>
             <button type="button" data-settings-tab="billing"><span>⭐</span><span>Plan<small>Plus &amp; billing</small></span></button>
           </nav>
           <div class="settings-content">
-            <section class="settings-panel is-active" data-settings-panel="general">
+            <section class="settings-panel is-active" data-settings-panel="overview">
+              <div class="workspace-welcome"><div><p class="eyebrow">Server workspace</p><h3>Your Duck, your rules.</h3><p>Every module below has its own server-specific profile. Open one to tune how Duck behaves.</p></div><span aria-hidden="true">🦆</span></div>
+              <div class="module-grid">
+                <button type="button" data-jump-tab="general"><span class="module-card-icon">🛡️</span><div><small>Safety</small><strong>Moderation &amp; permissions</strong><p>Approval mode, command prefix, and staff channel.</p></div><em data-module-status="safety">Protected</em></button>
+                <button type="button" data-jump-tab="ai"><span class="module-card-icon">✨</span><div><small>Artificial intelligence</small><strong>Models &amp; responses</strong><p>Chat, vision, context, and server personality.</p></div><em data-module-status="ai">Enabled</em></button>
+                <button type="button" data-jump-tab="voice"><span class="module-card-icon">🔊</span><div><small>Voice</small><strong>Text-to-speech</strong><p>Voice provider and speaker announcements.</p></div><em data-module-status="voice">Enabled</em></button>
+                <button type="button" data-jump-tab="community"><span class="module-card-icon">👋</span><div><small>Community</small><strong>Welcome &amp; logs</strong><p>Entry messages, farewells, and staff activity.</p></div><em data-module-status="community">Ready</em></button>
+                <button type="button" data-jump-tab="fun"><span class="module-card-icon">🎲</span><div><small>Fun</small><strong>Controlled chaos</strong><p>Free classics and Plus command packs.</p></div><em data-module-status="fun">Enabled</em></button>
+                <button type="button" data-jump-tab="billing"><span class="module-card-icon">⭐</span><div><small>Plan</small><strong>Duck Free</strong><p>Review features, billing, and Plus status.</p></div><em data-module-status="plan">Free</em></button>
+              </div>
+              <aside class="overview-safety"><span>🔒</span><div><strong>Server-isolated configuration</strong><p>Only Discord members with Manage Server can view or change this profile. Duck rechecks access when settings are saved.</p></div></aside>
+            </section>
+            <section class="settings-panel" data-settings-panel="general" hidden>
               <div class="panel-heading"><span>⚙️</span><div><p class="eyebrow">General</p><h3>Core server behavior</h3><p>Choose where Duck listens and how carefully it handles consequential actions.</p></div></div>
               <div class="settings-group"><label class="field-row"><span><strong>Moderation channel</strong><small>Duck watches this channel for natural-language moderation requests.</small></span><select name="modChannelId" data-channel-select><option value="">Not configured</option></select></label><label class="field-row"><span><strong>Command prefix</strong><small>One to five characters. Administrator-only.</small></span><input name="commandPrefix" maxlength="5" required></label><label class="field-row"><span><strong>Action approval</strong><small>Administrator-only. Agent mode must be confirmed inside Discord.</small></span><select name="capabilityMode"><option value="ask">Ask before actions</option><option value="approve">Approve low-risk actions</option><option value="agent" disabled>Agent mode — enable in Discord</option></select></label></div>
               <aside class="safety-callout"><span>🛡️</span><div><strong>Permission-aware by design</strong><p>Dashboard access never bypasses Discord role hierarchy or server permissions.</p></div></aside>
@@ -42,16 +56,40 @@
               <div class="panel-heading"><span>👋</span><div><p class="eyebrow">Community</p><h3>Welcome, farewell, and logs</h3><p>Personalize routine server messages without editing the host configuration.</p></div></div>
               <div class="settings-group"><label class="field-row"><span><strong>Welcome channel</strong><small>Where join and leave messages are posted.</small></span><select name="welcomeChannelId" data-channel-select><option value="">Not configured</option></select></label><label class="field-stack"><span><strong>Welcome message</strong><small>Supports {user}, {username}, and {server}.</small></span><textarea name="welcomeMessage" maxlength="180" rows="3" required></textarea></label><label class="field-stack"><span><strong>Farewell message</strong><small>Supports {user}, {username}, and {server}.</small></span><textarea name="farewellMessage" maxlength="180" rows="3" required></textarea></label><label class="field-row"><span><strong>Moderation log channel</strong><small>Record Duck activity in a staff-visible text channel.</small></span><select name="logChannelId" data-channel-select><option value="">Not configured</option></select></label></div>
             </section>
+            <section class="settings-panel" data-settings-panel="fun" hidden>
+              <div class="panel-heading"><span>🎲</span><div><p class="eyebrow">Fun commands</p><h3>Controlled chaos</h3><p>Choose which playful commands are available in this server. Every command is checked again inside Discord.</p></div></div>
+              <div class="feature-module"><div class="module-copy"><span class="module-icon">🦆</span><div><strong>Fun command module</strong><small>Turn every fun command off at once without affecting moderation or utilities.</small></div></div><label class="switch-control"><input type="checkbox" name="funCommandsEnabled"><span></span></label></div>
+              <div class="command-tier-heading"><div><span class="plan-pill">Free</span><h4>Pond classics</h4><p>Available to every server.</p></div></div>
+              <div class="command-toggle-grid">
+                <label class="command-toggle"><span>🦆</span><div><strong>/quack</strong><small>Expertly calibrated quacking.</small></div><input type="checkbox" name="funQuackEnabled"></label>
+                <label class="command-toggle"><span>📚</span><div><strong>/duckfact</strong><small>Highly questionable duck knowledge.</small></div><input type="checkbox" name="funDuckFactEnabled"></label>
+                <label class="command-toggle"><span>🪙</span><div><strong>/coinflip</strong><small>Settle arguments with pond physics.</small></div><input type="checkbox" name="funCoinflipEnabled"></label>
+              </div>
+              <div class="command-tier-heading plus-tier"><div><span class="plan-pill is-plus">Plus</span><h4>Premium mischief</h4><p>Plus servers can enable each command independently.</p></div></div>
+              <div class="command-toggle-grid plus-command-grid">
+                <label class="command-toggle"><span>💞</span><div><strong>/ship</strong><small>Deterministic compatibility science.</small></div><input type="checkbox" name="funShipEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🔮</span><div><strong>/curse</strong><small>Mostly harmless curses and blessings.</small></div><input type="checkbox" name="funCurseEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🎡</span><div><strong>/spinwheel</strong><small>Pick from custom choices.</small></div><input type="checkbox" name="funSpinwheelEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🎲</span><div><strong>/roll</strong><small>Roll up to twenty dice.</small></div><input type="checkbox" name="funRollEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🎱</span><div><strong>/eightball</strong><small>Ask the pond for guidance.</small></div><input type="checkbox" name="funEightballEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>📖</span><div><strong>/quote</strong><small>A server-specific quote book.</small></div><input type="checkbox" name="funQuoteEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🔥</span><div><strong>/roast</strong><small>Friendly, non-toxic roasts.</small></div><input type="checkbox" name="funRoastEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>💚</span><div><strong>/compliment</strong><small>Deploy emergency encouragement.</small></div><input type="checkbox" name="funComplimentEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>👉</span><div><strong>/choose</strong><small>Make Duck choose for you.</small></div><input type="checkbox" name="funChooseEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>📈</span><div><strong>/rate</strong><small>Extremely scientific ratings.</small></div><input type="checkbox" name="funRateEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🤔</span><div><strong>/wouldyourather</strong><small>Instant conversation starters.</small></div><input type="checkbox" name="funWouldYouRatherEnabled" data-plus-fun></label>
+              </div>
+            </section>
             <section class="settings-panel" data-settings-panel="billing" hidden>
               <div class="panel-heading"><span>⭐</span><div><p class="eyebrow">Plan and billing</p><h3>Your server’s plan</h3><p>Plan benefits belong to this Discord server, not your entire account.</p></div></div>
               <div class="plan-overview"><div><span class="plan-pill" data-plan-pill>Free plan</span><h4 data-billing-title>Duck Free</h4><p data-plus-copy>Duck Plus is currently unavailable.</p><small data-billing-date hidden></small></div><div class="plus-actions"><button class="button secondary compact" type="button" data-upgrade-month hidden>Monthly — $4.99</button><button class="button primary compact" type="button" data-upgrade-year hidden>Annual — $50.99</button><button class="button secondary compact" type="button" data-manage-billing hidden>Manage billing</button><button class="button danger compact" type="button" data-cancel-subscription hidden>Cancel subscription</button></div></div>
-              <div class="plan-benefits"><article><span>🎭</span><div><strong>Custom personality</strong><small>Give Duck a unique server-specific voice and character.</small></div></article><article><span>🧠</span><div><strong>Premium models</strong><small>Privacy-routed model choices and detailed responses.</small></div></article><article><span>⚡</span><div><strong>Priority processing</strong><small>Twice the queue room and larger AI budgets.</small></div></article><article><span>🔊</span><div><strong>More voice</strong><small>Double the server TTS quota and longer messages.</small></div></article><article><span>🛰️</span><div><strong>Broader context</strong><small>Advanced context, response, and vision controls.</small></div></article><article><span>💚</span><div><strong>Support development</strong><small>Help keep Duck online and fund new pond machinery.</small></div></article></div><p class="billing-help" data-billing-help>Free features remain available while Plus is offline.</p>
+              <div class="plan-benefits"><article><span>🎭</span><div><strong>Custom personality</strong><small>Give Duck a unique server-specific voice and character.</small></div></article><article><span>🧠</span><div><strong>Premium models</strong><small>Privacy-routed model choices and detailed responses.</small></div></article><article><span>⚡</span><div><strong>Priority processing</strong><small>Twice the queue room and larger AI budgets.</small></div></article><article><span>🔊</span><div><strong>More voice</strong><small>Double the server TTS quota and longer messages.</small></div></article><article><span>🎲</span><div><strong>Premium fun library</strong><small>Enable roasts, compliments, ratings, choices, and more.</small></div></article><article><span>🛰️</span><div><strong>Broader context</strong><small>Advanced context, response, and vision controls.</small></div></article><article><span>💚</span><div><strong>Support development</strong><small>Help keep Duck online and fund new pond machinery.</small></div></article></div><p class="billing-help" data-billing-help>Free features remain available while Plus is offline.</p>
             </section>
           </div>
         </div>
         <div class="form-actions"><span data-save-state>Changes apply only when you save.</span><button class="button secondary" type="button" data-cancel>Back to servers</button><button class="button primary" type="submit">Save changes</button></div>
       </form>
-    </dialog>
+    </section>
   </main>
   <footer><a class="brand" href="index.html"><span aria-hidden="true">🦆</span> Duck</a><p>Built for healthier Discord communities.</p><div class="footer-links"><a href="pricing.html">Pricing</a><a href="donate.html">Donate</a><a href="privacy-policy.html">Privacy</a><a href="refunds.html">Refunds</a><a href="terms-of-service.html">Terms</a></div></footer>
 </body>

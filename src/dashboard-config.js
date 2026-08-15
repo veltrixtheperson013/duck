@@ -35,16 +35,16 @@ const AI_MODELS = Object.freeze([
 
 const TTS_MODELS = Object.freeze([
   {
-    id: "elevenlabs/default",
-    label: "ElevenLabs (host default)",
-    tier: "free",
-    disclaimer: "Uses the voice configured by Duck's host.",
-  },
-  {
-    id: "deepgram/flux-tts",
+    id: "deepgram/flux-tts:free",
     label: "Deepgram Flux TTS",
     tier: "free",
-    disclaimer: "Duck requests model-improvement opt-out. Provider policies can still change.",
+    disclaimer: "Free speech generation routed through OpenRouter using Deepgram's Flux Cole voice.",
+  },
+  {
+    id: "elevenlabs/default",
+    label: "ElevenLabs",
+    tier: "plus",
+    disclaimer: "Duck Plus voice using the host-configured ElevenLabs voice and model.",
   },
 ]);
 
@@ -54,6 +54,23 @@ const CAPABILITY_MODES = new Set(["ask", "approve", "agent"]);
 const AI_CONTEXT_MODES = new Set(["current", "focused", "server"]);
 const AI_RESPONSE_STYLES = new Set(["concise", "balanced", "detailed"]);
 const AI_CHANNEL_MODES = new Set(["mentions", "moderation"]);
+const FUN_COMMANDS = Object.freeze([
+  { command: "quack", key: "funQuackEnabled", label: "Quack", tier: "free" },
+  { command: "duckfact", key: "funDuckFactEnabled", label: "Duck facts", tier: "free" },
+  { command: "coinflip", key: "funCoinflipEnabled", label: "Coin flip", tier: "free" },
+  { command: "ship", key: "funShipEnabled", label: "Compatibility", tier: "plus" },
+  { command: "curse", key: "funCurseEnabled", label: "Curses and blessings", tier: "plus" },
+  { command: "spinwheel", key: "funSpinwheelEnabled", label: "Spin wheel", tier: "plus" },
+  { command: "roll", key: "funRollEnabled", label: "Dice roller", tier: "plus" },
+  { command: "eightball", key: "funEightballEnabled", label: "Magic 8-Ball", tier: "plus" },
+  { command: "quote", key: "funQuoteEnabled", label: "Quote book", tier: "plus" },
+  { command: "roast", key: "funRoastEnabled", label: "Friendly roasts", tier: "plus" },
+  { command: "compliment", key: "funComplimentEnabled", label: "Compliments", tier: "plus" },
+  { command: "choose", key: "funChooseEnabled", label: "Decision maker", tier: "plus" },
+  { command: "rate", key: "funRateEnabled", label: "Extremely scientific ratings", tier: "plus" },
+  { command: "wouldyourather", key: "funWouldYouRatherEnabled", label: "Would you rather", tier: "plus" },
+]);
+const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
 
 function getAiModelDefinition(id) {
   return AI_MODELS.find((model) => model.id === id) ?? null;
@@ -66,6 +83,15 @@ function hasPlusEntitlement(settings, now = Date.now()) {
   return !Number.isFinite(expiresAt) || expiresAt > now;
 }
 
+function getFunCommandAccess(settings, command, now = Date.now()) {
+  const definition = FUN_COMMAND_BY_NAME.get(command);
+  if (!definition) return null;
+  if (settings?.funCommandsEnabled === false) return { allowed: false, reason: "disabled", definition };
+  if (definition.tier === "plus" && !hasPlusEntitlement(settings, now)) return { allowed: false, reason: "plus_required", definition };
+  const enabled = definition.tier === "free" ? settings?.[definition.key] !== false : settings?.[definition.key] === true;
+  return { allowed: enabled, reason: enabled ? null : "disabled", definition };
+}
+
 function getDefaultAiModel(configuredModel = "") {
   return AI_MODEL_IDS.has(configuredModel) ? configuredModel : AI_MODELS[0].id;
 }
@@ -76,8 +102,9 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
   const aiModel = selected && (selected.tier !== "plus" || hasPlusEntitlement(settings, now))
     ? selected.id
     : getDefaultAiModel(configuredModel && getAiModelDefinition(configuredModel)?.tier !== "plus" ? configuredModel : "");
-  const ttsModel = TTS_MODEL_IDS.has(settings.ttsModel) ? settings.ttsModel : TTS_MODELS[0].id;
   const plus = hasPlusEntitlement(settings, now);
+  const selectedTts = TTS_MODELS.find(({ id }) => id === settings.ttsModel);
+  const ttsModel = selectedTts && (selectedTts.tier !== "plus" || plus) ? selectedTts.id : TTS_MODELS.find(({ tier }) => tier === "free").id;
   return {
     aiChatEnabled: settings.aiChatEnabled !== false,
     aiModel,
@@ -96,6 +123,8 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     welcomeMessage: typeof settings.welcomeMessage === "string" ? settings.welcomeMessage : "Welcome {user} to {server}.",
     farewellMessage: typeof settings.farewellMessage === "string" ? settings.farewellMessage : "{username} has left the server.",
     logChannelId: /^\d{10,}$/.test(settings.entryChannels?.logChannelId || "") ? settings.entryChannels.logChannelId : null,
+    funCommandsEnabled: settings.funCommandsEnabled !== false,
+    ...Object.fromEntries(FUN_COMMANDS.map((command) => [command.key, command.tier === "free" ? settings[command.key] !== false : plus && settings[command.key] === true])),
     subscription: {
       tier: plus ? "plus" : "free",
       status: plus ? subscription.status : "inactive",
@@ -108,13 +137,20 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId"]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames"]) {
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
+    }
+  }
+  for (const command of FUN_COMMANDS) {
+    if (command.tier === "plus" && input[command.key] === true && !hasPlusEntitlement(current, now)) {
+      const error = new Error(`${command.label} requires Duck Plus.`);
+      error.code = "plus_required";
+      throw error;
     }
   }
   if ("aiModel" in input) {
@@ -128,7 +164,13 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
     patch.aiModel = model.id;
   }
   if ("ttsModel" in input) {
-    if (!TTS_MODEL_IDS.has(input.ttsModel)) throw new TypeError("Unsupported TTS model.");
+    const model = TTS_MODELS.find(({ id }) => id === input.ttsModel);
+    if (!model || !TTS_MODEL_IDS.has(input.ttsModel)) throw new TypeError("Unsupported TTS model.");
+    if (model.tier === "plus" && !hasPlusEntitlement(current, now)) {
+      const error = new Error("ElevenLabs TTS requires Duck Plus.");
+      error.code = "plus_required";
+      throw error;
+    }
     patch.ttsModel = input.ttsModel;
   }
   if ("aiContextMode" in input) {
@@ -197,6 +239,8 @@ function getPublicModelCatalog() {
 export {
   AI_MODELS,
   TTS_MODELS,
+  FUN_COMMANDS,
+  getFunCommandAccess,
   getAiModelDefinition,
   getDefaultAiModel,
   getPublicGuildSettings,

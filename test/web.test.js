@@ -59,9 +59,11 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260817/);
+    assert.match(dashboardText, /styles\.css\?v=20260819/);
     assert.match(dashboardText, /data-back/);
     assert.match(dashboardText, /Back to servers/);
+    assert.match(dashboardText, /Controlled chaos/);
+    assert.match(dashboardText, /funRoastEnabled/);
     const serverDashboard = await fetch(`${origin}/dashboard/servers/123456789012345678`);
     assert.equal(serverDashboard.status, 200);
     assert.match(await serverDashboard.text(), /Server control panel/);
@@ -132,7 +134,8 @@ test("Discord sessions cannot read or change another account's server profile", 
       assert.equal((await fetch(`${origin}/api/guilds/${betaGuild}/settings`, { headers: { Cookie: alphaCookie } })).status, 403);
       assert.equal((await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { headers: { Cookie: betaCookie } })).status, 403);
       const crossWrite = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { method: "PUT", headers: { Cookie: betaCookie, "Content-Type": "application/json", "X-Duck-CSRF": betaMe.csrf }, body: JSON.stringify({ welcomeMessage: "stolen" }) }); assert.equal(crossWrite.status, 403); assert.equal(profiles.get(alphaGuild).welcomeMessage, "Alpha private profile");
-      const ownerSave = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { method: "PUT", headers: { Cookie: alphaCookie, "Content-Type": "application/json", "X-Duck-CSRF": alphaMe.csrf }, body: JSON.stringify({ aiPersonality: "A dry-witted pond guardian" }) }); assert.equal(ownerSave.status, 200); assert.equal(profiles.get(alphaGuild).subscription.provider, "owner"); assert.equal(profiles.get(alphaGuild).aiPersonality, "A dry-witted pond guardian");
+      const freeFunUpgrade = await fetch(`${origin}/api/guilds/${betaGuild}/settings`, { method: "PUT", headers: { Cookie: betaCookie, "Content-Type": "application/json", "X-Duck-CSRF": betaMe.csrf }, body: JSON.stringify({ funRoastEnabled: true }) }); assert.equal(freeFunUpgrade.status, 402);
+      const ownerSave = await fetch(`${origin}/api/guilds/${alphaGuild}/settings`, { method: "PUT", headers: { Cookie: alphaCookie, "Content-Type": "application/json", "X-Duck-CSRF": alphaMe.csrf }, body: JSON.stringify({ aiPersonality: "A dry-witted pond guardian", funRoastEnabled: true }) }); assert.equal(ownerSave.status, 200); assert.equal(profiles.get(alphaGuild).subscription.provider, "owner"); assert.equal(profiles.get(alphaGuild).aiPersonality, "A dry-witted pond guardian"); assert.equal(profiles.get(alphaGuild).funRoastEnabled, true);
     }, { fetchImpl, client: { guilds: { cache: new Map([[alphaGuild, {}], [betaGuild, {}]]) }, application: { owner: null } }, getGuildSettings: (id) => profiles.get(id) || {}, updateGuildSettings: (id, patch) => profiles.set(id, { ...(profiles.get(id) || {}), ...patch }) });
   } finally {
     for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value;
