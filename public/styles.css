@@ -212,6 +212,43 @@ footer p { margin: 0; }
   .duck-card { transition: none; }
 }
 
+/* Full-screen server workspace: a dedicated route-like view, not a floating modal. */
+.settings-page-loading, .settings-page-open { overflow: hidden; background: #eef3ef; }
+.settings-page-loading > .site-header, .settings-page-loading > footer, .settings-page-open > .site-header, .settings-page-open > footer { display: none; }
+.settings-page-loading .dashboard-shell > :not(.settings-dialog), .settings-page-open .dashboard-shell > :not(.settings-dialog) { display: none; }
+.settings-page-loading .dashboard-shell, .settings-page-open .dashboard-shell { width: 100%; max-width: none; min-height: 100dvh; padding: 0; }
+.settings-page-open .settings-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; background: #f4f7f4; border: 0; border-radius: 0; box-shadow: none; }
+.settings-page-open .settings-dialog.is-opening { animation: none; }
+.settings-page-open .settings-dialog::backdrop { background: #f4f7f4; backdrop-filter: none; }
+.settings-page-open .settings-dialog .dialog-top { min-height: 86px; padding: 15px clamp(20px,3vw,44px); background: #fff; border-bottom: 1px solid #dbe5de; box-shadow: 0 2px 16px rgba(15,54,37,.045); }
+.settings-page-open .dialog-top::before { align-self: center; width: 38px; height: 38px; margin-right: 14px; content: "🦆"; font-size: 1.65rem; }
+.settings-page-open .dialog-top > div { margin-right: auto; }
+.settings-page-open .dialog-top .eyebrow { margin-bottom: 0; }
+.settings-page-open .dialog-top h2 { font-size: 1.35rem; }
+.settings-page-open .dialog-status { margin-top: 1px; font-size: .7rem; }
+.settings-page-open .icon-button { align-self: center; width: 42px; height: 42px; font-size: 1.15rem; }
+.settings-page-open .icon-button:hover { transform: translateX(-2px); }
+.settings-page-open .settings-dialog > form[data-settings-form] { height: calc(100dvh - 86px); }
+.settings-page-open .settings-layout { grid-template-columns: 270px minmax(0,1fr); background: #f4f7f4; }
+.settings-page-open .settings-tabs { padding: 28px 18px; background: linear-gradient(180deg,#10382b,#08271e); }
+.settings-page-open .settings-tabs button { min-height: 54px; padding: 11px 14px; }
+.settings-page-open .settings-content { background: radial-gradient(circle at 88% 3%,rgba(209,235,215,.75),transparent 28rem),#f4f7f4; }
+.settings-page-open .settings-panel { width: min(100%,980px); max-width: none; padding: 38px clamp(28px,5vw,72px) 70px; }
+.settings-page-open .settings-group { border-color: #dce5df; box-shadow: 0 8px 28px rgba(18,57,40,.045); }
+.settings-page-open .settings-dialog .form-actions { min-height: 68px; padding: 10px clamp(20px,3vw,44px); }
+.settings-page-open .form-actions > span.is-error { color: #a2362a; font-weight: 800; }
+.settings-panel.is-active { animation-duration: .12s; }
+.server-card.is-entering { animation-duration: .22s; }
+.button, .server-card, .price-card, .donation-grid a, .plan-benefits article, .dashboard-stats article { transition-duration: .14s; }
+@media (max-width: 760px) {
+  .settings-page-open .settings-dialog .dialog-top { min-height: 78px; }
+  .settings-page-open .dialog-top::before, .settings-page-open .dialog-status { display: none; }
+  .settings-page-open .settings-dialog > form[data-settings-form] { height: calc(100dvh - 78px); }
+  .settings-page-open .settings-layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0,1fr); }
+  .settings-page-open .settings-tabs { padding: 7px; }
+  .settings-page-open .settings-panel { padding: 24px 16px 44px; }
+}
+
 .dashboard-shell { padding: 72px 0 120px; }
 .dashboard-heading { display: flex; justify-content: space-between; align-items: center; gap: 30px; margin-bottom: 38px; }
 .dashboard-heading h1 { margin-bottom: 10px; font-size: clamp(3rem, 6vw, 5.3rem); }

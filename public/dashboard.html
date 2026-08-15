@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Sign in with Discord to configure Duck for each server you manage.">
-  <title>Dashboard — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css?v=20260816">
-  <script src="/site.js?v=20260816" defer></script><script src="/dashboard.js?v=20260816" defer></script>
+  <title>Dashboard — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css?v=20260817">
+  <script src="/site.js?v=20260817" defer></script><script src="/dashboard.js?v=20260817" defer></script>
 </head>
 <body>
   <header class="site-header"><a class="brand" href="index.html"><span aria-hidden="true">🦆</span> Duck</a><button class="menu-button" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button><nav class="main-nav" aria-label="Main navigation"><a href="index.html#features">Features</a><a href="guide.html">Guide</a><a href="pricing.html">Pricing</a><a href="donate.html">Donate</a><a href="privacy-policy.html">Privacy</a><a aria-current="page" href="dashboard.html">Dashboard</a></nav></header>
@@ -14,7 +14,7 @@
     <div class="dashboard-notice" data-notice role="status" hidden></div>
     <section data-dashboard hidden><div class="dashboard-stats" aria-label="Server summary"><article><span data-stat-total>0</span><small>Discord servers</small></article><article><span data-stat-manage>0</span><small>You can manage</small></article><article><span data-stat-installed>0</span><small>Duck installed</small></article></div><div class="server-toolbar"><div><p class="eyebrow">Server fleet</p><h2>Your servers</h2><p>Duck verifies your Discord permissions again whenever you save.</p></div><div class="server-controls"><div class="filter-tabs" role="group" aria-label="Filter servers"><button type="button" class="is-active" data-server-filter="all">All</button><button type="button" data-server-filter="manageable">Manageable</button><button type="button" data-server-filter="installed">Duck installed</button></div><input type="search" data-server-search placeholder="Find a server…" aria-label="Find a server"></div></div><div class="server-grid" data-server-list></div></section>
     <dialog class="settings-dialog" data-settings-dialog>
-      <form method="dialog" class="dialog-top"><div><p class="eyebrow">Server control panel</p><h2 data-dialog-title>Configure Duck</h2><span class="dialog-status"><i></i> Changes apply only to this server</span></div><button class="icon-button" value="cancel" aria-label="Close">×</button></form>
+      <div class="dialog-top"><div><p class="eyebrow">Server control panel</p><h2 data-dialog-title>Configure Duck</h2><span class="dialog-status"><i></i> Changes apply only to this server</span></div><button class="icon-button" type="button" data-back aria-label="Back to servers">←</button></div>
       <form data-settings-form>
         <div class="settings-layout">
           <nav class="settings-tabs" aria-label="Settings sections">
@@ -49,7 +49,7 @@
             </section>
           </div>
         </div>
-        <div class="form-actions"><span data-save-state>Unsaved changes are kept until you close this window.</span><button class="button secondary" type="button" data-cancel>Close</button><button class="button primary" type="submit">Save changes</button></div>
+        <div class="form-actions"><span data-save-state>Changes apply only when you save.</span><button class="button secondary" type="button" data-cancel>Back to servers</button><button class="button primary" type="submit">Save changes</button></div>
       </form>
     </dialog>
   </main>
