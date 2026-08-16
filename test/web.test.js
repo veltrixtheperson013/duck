@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createDuckWebsiteServer, hasAdministratorPermission, hasManageGuildPermission, isDuckOwner, makeBotInviteUrl, makeDonationUrl, setBoundedMapEntry } from "../src/web.js";
 import { isPlusEnabled, isStripeServerConfigured, makePlusCheckoutInput } from "../src/stripe.js";
+import { getSafeGuildSettings, isDiscordGuildId } from "../src/core.js";
 
 async function withWebsite(run, options = {}) {
   const server = createDuckWebsiteServer(options);
@@ -218,6 +219,14 @@ test("cached guild refreshes skip fresh Discord reads until forced and 429s back
       assert.equal(fourth.status, 503); assert.match((await fourth.json()).error, /rate limiting/i);
     }, { fetchImpl });
   } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
+});
+
+test("malformed guild IDs are treated as missing settings instead of crashing", () => {
+  assert.equal(isDiscordGuildId("123456789012345678"), true);
+  assert.equal(isDiscordGuildId("not-a-guild-id"), false);
+  assert.equal(isDiscordGuildId(undefined), false);
+  assert.deepEqual(getSafeGuildSettings("not-a-guild-id"), {});
+  assert.doesNotThrow(() => getSafeGuildSettings("123456789012345678"));
 });
 
 test("Duck Plus defaults off and fails closed", async () => {

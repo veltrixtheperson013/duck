@@ -48,12 +48,23 @@ function getAiScheduler() {
   return aiScheduler;
 }
 
+function isDiscordGuildId(value) {
+  return typeof value === "string" || typeof value === "number"
+    ? /^\d{10,}$/.test(String(value))
+    : false;
+}
+
+function getSafeGuildSettings(guildId) {
+  return isDiscordGuildId(guildId) ? getGuildSettings(guildId) : {};
+}
+
 async function scheduleAiRequest(message, kind, task) {
   const scheduler = getAiScheduler();
-  const plus = hasPlusEntitlement(getGuildSettings(message.guildId));
+  const guildId = isDiscordGuildId(message?.guildId) ? message.guildId : "invalid";
+  const plus = hasPlusEntitlement(getSafeGuildSettings(message?.guildId));
   let scheduled;
   try {
-    scheduled = scheduler.schedule(message.guildId, task, { priority: plus });
+    scheduled = scheduler.schedule(guildId, task, { priority: plus });
   } catch (err) {
     if (err instanceof QueueCapacityError) {
       throw new AiServiceError(err.message, { providerName: getConfiguredAiProvider(), queueFull: true });
@@ -62,19 +73,19 @@ async function scheduleAiRequest(message, kind, task) {
   }
   logDebug("ai.queue.scheduled", {
     kind,
-    guildId: message.guildId,
-    messageId: message.id,
+    guildId: message?.guildId,
+    messageId: message?.id,
     position: scheduled.position,
-    ...scheduler.snapshot(message.guildId),
+    ...scheduler.snapshot(guildId),
   });
   try {
     return await scheduled.promise;
   } finally {
     logDebug("ai.queue.finished", {
       kind,
-      guildId: message.guildId,
-      messageId: message.id,
-      ...scheduler.snapshot(message.guildId),
+      guildId: message?.guildId,
+      messageId: message?.id,
+      ...scheduler.snapshot(guildId),
     });
   }
 }
@@ -1919,8 +1930,12 @@ function getExplicitContextChannelIds(message) {
 }
 
 async function collectRecentMessages(message) {
+  if (!message || !message.guild || !isDiscordGuildId(message.guildId)) {
+    return { recentMessages: [], channelMessages: [] };
+  }
+
   const startedAt = Date.now();
-  const contextMode = getGuildSettings(message.guildId).aiContextMode || "server";
+  const contextMode = getSafeGuildSettings(message.guildId).aiContextMode || "server";
   const maxChannels = contextMode === "current" ? 1 : contextMode === "focused" ? Math.min(5, getAiContextMessageChannelLimit()) : getAiContextMessageChannelLimit();
   const perChannel = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MESSAGES_PER_CHANNEL) || 10, 50));
   const maxTotal = Math.max(1, Math.min(Number(process.env.AI_CONTEXT_MAX_MESSAGES) || 500, 500));
@@ -2107,7 +2122,8 @@ function measureContextChars(context) {
 }
 
 function compactServerContext(context) {
-  const maxChars = hasPlusEntitlement(getGuildSettings(context.guildId))
+  const guildSettings = getSafeGuildSettings(context?.guildId);
+  const maxChars = hasPlusEntitlement(guildSettings)
     ? Math.min(getAiContextMaxChars() * 2, 200_000)
     : getAiContextMaxChars();
   const compacted = {
@@ -2201,6 +2217,28 @@ async function buildCurrentMessageContext(message) {
 }
 
 async function collectServerContext(message) {
+  if (!message || !message.guild || !isDiscordGuildId(message.guildId)) {
+    logDebug("context.skipped.invalid-guild", {
+      guildId: message?.guildId,
+      channelId: message?.channelId,
+      messageId: message?.id,
+    });
+    return {
+      guild: null,
+      currentChannel: null,
+      requester: null,
+      mentionedMembers: [],
+      memberCandidates: [],
+      mentionedChannels: [],
+      mentionedRoles: [],
+      availableChannels: [],
+      availableRoles: [],
+      recentMessages: [],
+      channelMessages: [],
+      currentMessage: await buildCurrentMessageContext(message),
+    };
+  }
+
   const startedAt = Date.now();
   const cacheTtl = getServerContextCacheTtlMs();
   const requesterScope = message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ? "admin" : "public";
@@ -3283,7 +3321,8 @@ function hasConfiguredAi() {
 
 async function makeChatMessages(message, options = {}) {
   const context = options.providedContext ?? await collectServerContext(message);
-  const personality = String(getGuildSettings(message.guildId).aiPersonality || "").trim().slice(0, 240);
+  const guildSettings = getSafeGuildSettings(message?.guildId);
+  const personality = String(guildSettings.aiPersonality || "").trim().slice(0, 240);
   const payload = {
     request: message.content,
     currentChannelId: message.channelId,
@@ -3327,7 +3366,7 @@ async function chatWithOpenAiCompatible(message, config) {
   const startedAt = Date.now();
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const context = await collectServerContext(message);
-  const guildSettings = getGuildSettings(message.guildId);
+  const guildSettings = getSafeGuildSettings(message?.guildId);
   const includeVision = guildSettings.aiVisionEnabled !== false && isAiVisionEnabled() && modelSupportsVision(config.providerName, config.model, {
     mode: process.env.AI_VISION_MODE || "auto",
     models: process.env.AI_VISION_MODELS,
@@ -7067,6 +7106,8 @@ export {
   compactServerContext,
   buildCurrentMessageContext,
   collectServerContext,
+  isDiscordGuildId,
+  getSafeGuildSettings,
   resolveMemberForPlan,
   makeValidatedBulkPlan,
   validateAiPlan,

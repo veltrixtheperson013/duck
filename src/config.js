@@ -494,13 +494,17 @@ function loadPendingActions() {
 }
 
 function getGuildSettings(guildId) {
-  if (!/^\d{10,}$/.test(String(guildId))) throw new TypeError("Guild ID must be a Discord ID.");
+  if (!/^\d{10,}$/.test(String(guildId))) {
+    logWarn("guild-settings.invalid-id", { guildId: guildId == null ? null : String(guildId) });
+    return {};
+  }
   const settings = loadSettings();
   settings.guilds[guildId] ??= {};
   return settings.guilds[guildId];
 }
 
 function getGuildCapabilityMode(guildId) {
+  if (!/^\d{10,}$/.test(String(guildId))) return CAPABILITY_MODES.ask;
   const mode = getGuildSettings(guildId).capabilityMode;
   return Object.values(CAPABILITY_MODES).includes(mode) ? mode : CAPABILITY_MODES.ask;
 }
