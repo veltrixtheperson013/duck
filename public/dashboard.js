@@ -1,4 +1,5 @@
-const state = { me: null, guilds: [], catalog: null, activeGuild: null, activePlus: false, isAdministrator: false, loyalty: null, channels: [], customActions: [], slowmodes: [], branding: { avatar: undefined, banner: undefined }, serverFilter: "all", loading: 0 };
+const state = { me: null, guilds: [], catalog: null, activeGuild: null, activePlus: false, isAdministrator: false, loyalty: null, channels: [], customActions: [], slowmodes: [], branding: { avatar: undefined, banner: undefined }, serverFilter: "all", loading: 0, guildRefreshAttempts: 0, guildRefreshNextAt: 0, guildRefreshPending: false };
+const guildRefreshScheduleMs = [10_000, 30_000, 60_000, 120_000];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const requestedGuildId = location.pathname.match(/^\/dashboard\/servers\/(\d{10,})\/?$/)?.[1] ?? new URLSearchParams(location.search).get("guild");
@@ -51,6 +52,43 @@ document.addEventListener("click", () => closeCustomSelects());
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeCustomSelects(); });
 
 function normalizeCatalog(catalog, settings) { const normalize = (items, selected, label) => Array.isArray(items) && items.length ? items : selected ? [{ id: selected, label, tier: "free", disclaimer: "Provider details are temporarily unavailable." }] : []; return { ai: normalize(catalog?.ai, settings.aiModel, "Current AI model"), tts: normalize(catalog?.tts, settings.ttsModel, "Current TTS model") }; }
+function updateGuildRefreshButton() {
+  const button = $("[data-refresh-guilds]"); if (!button) return;
+  const remaining = Math.max(0, state.guildRefreshNextAt - Date.now());
+  button.disabled = remaining > 0 || state.guildRefreshPending;
+  button.textContent = remaining > 0 ? `Refresh servers (${Math.ceil(remaining / 1000)}s)` : state.guildRefreshPending ? "Refreshing…" : "Refresh servers";
+}
+async function refreshGuilds(force = false) {
+  const now = Date.now();
+  if (state.guildRefreshPending) return null;
+  if (!force && state.guildRefreshNextAt > now) { updateGuildRefreshButton(); return null; }
+  state.guildRefreshPending = true;
+  if (force) {
+    state.guildRefreshAttempts = Math.min((state.guildRefreshAttempts || 0) + 1, guildRefreshScheduleMs.length - 1);
+  }
+  state.guildRefreshNextAt = force ? now + guildRefreshScheduleMs[Math.min(state.guildRefreshAttempts, guildRefreshScheduleMs.length - 1)] : state.guildRefreshNextAt;
+  updateGuildRefreshButton();
+  try {
+    const data = await api(`api/guilds${force ? "?refresh=1" : ""}`);
+    state.guilds = Array.isArray(data.guilds) ? data.guilds : [];
+    state.guildRefreshAttempts = 0;
+    state.guildRefreshNextAt = 0;
+    renderGuilds();
+    updateGuildRefreshButton();
+    return data;
+  } catch (error) {
+    const runIndex = Math.min((state.guildRefreshAttempts || 0), guildRefreshScheduleMs.length - 1);
+    const retryDelay = guildRefreshScheduleMs[runIndex] || guildRefreshScheduleMs[guildRefreshScheduleMs.length - 1];
+    state.guildRefreshAttempts = Math.min((state.guildRefreshAttempts || 0) + 1, guildRefreshScheduleMs.length - 1);
+    state.guildRefreshNextAt = Date.now() + retryDelay;
+    updateGuildRefreshButton();
+    notice(error.message, true);
+    throw error;
+  } finally {
+    state.guildRefreshPending = false;
+    updateGuildRefreshButton();
+  }
+}
 function fillModelSelect(select, models = [], selected, plus) { select.replaceChildren(...models.map((model) => { const option = document.createElement("option"); option.value = model.id; option.textContent = `${model.label}${model.tier === "plus" ? " — Plus" : ""}`; option.disabled = model.tier === "plus" && !plus && model.id !== selected; option.selected = model.id === selected; return option; })); }
 function fillChannelSelect(select, channels = [], selected) { const empty = document.createElement("option"); empty.value = ""; empty.textContent = "Not configured"; const options = channels.map((channel) => { const option = document.createElement("option"); option.value = channel.id; option.textContent = `# ${channel.name}`; return option; }); select.replaceChildren(empty, ...options); select.value = selected || ""; }
 function addSlowmodeRow(value = { channelId: "", seconds: 5 }) { const row = $("[data-slowmode-template]").content.firstElementChild.cloneNode(true); const channel = row.querySelector("[data-rule-channel]"); fillChannelSelect(channel, state.channels, value.channelId); channel.options[0].textContent = "Choose channel"; row.querySelector("[data-rule-seconds]").value = value.seconds; row.querySelector(".rule-remove").addEventListener("click", () => row.remove()); $("[data-slowmode-list]").append(row); enhanceSelect(channel); }
@@ -146,6 +184,7 @@ async function initialize() {
 }
 
 $("[data-server-search]").addEventListener("input", (event) => renderGuilds(event.target.value));
+$('[data-refresh-guilds]')?.addEventListener("click", () => refreshGuilds(true));
 for (const button of $$("[data-server-filter]")) button.addEventListener("click", () => { state.serverFilter = button.dataset.serverFilter; $$("[data-server-filter]").forEach((item) => item.classList.toggle("is-active", item === button)); renderGuilds(); });
 for (const button of $$("[data-settings-tab]")) button.addEventListener("click", () => selectTab(button.dataset.settingsTab));
 for (const button of $$('[data-cancel], [data-back]')) button.addEventListener("click", () => location.assign("/dashboard")); $("[data-settings-form]").aiModel.addEventListener("change", updateDisclaimers); $("[data-settings-form]").ttsModel.addEventListener("change", updateDisclaimers);

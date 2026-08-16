@@ -187,6 +187,39 @@ test("temporary Discord failures retry once and return traceable upstream errors
   } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });
 
+test("cached guild refreshes skip fresh Discord reads until forced and 429s back off", async () => {
+  const environmentKeys = ["CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_SESSION_SECURE"];
+  const previous = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { CLIENT_ID: "1507850959642955816", DISCORD_CLIENT_SECRET: "test-client-secret", DISCORD_OAUTH_REDIRECT_URI: "http://127.0.0.1/auth/discord/callback", DUCK_SESSION_SECURE: "false" });
+  let guildRequests = 0; let shouldRateLimit = false; let firstGuilds = [{ id: "800000000000000001", name: "Alpha Pond", permissions: "32", owner: false }];
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/oauth2/token")) return Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
+    if (String(url).endsWith("/users/@me")) return Response.json({ id: "999999999999999999", username: "duck-user", avatar: null });
+    if (String(url).endsWith("/users/@me/guilds")) {
+      guildRequests += 1;
+      if (shouldRateLimit) return Response.json({ retry_after: 1 }, { status: 429 });
+      return Response.json(firstGuilds);
+    }
+    return new Response("not found", { status: 404 });
+  };
+  try {
+    await withWebsite(async (origin) => {
+      const begin = await fetch(`${origin}/auth/discord`, { redirect: "manual" }); const oauthUrl = new URL(begin.headers.get("location")); const stateCookie = begin.headers.get("set-cookie").match(/duck_oauth_state=([^;]+)/)[1];
+      const callback = await fetch(`${origin}/auth/discord/callback?code=valid&state=${encodeURIComponent(oauthUrl.searchParams.get("state"))}`, { redirect: "manual", headers: { Cookie: `duck_oauth_state=${stateCookie}` } }); const cookie = callback.headers.get("set-cookie").match(/duck_session=([^;]+)/)[1];
+      const first = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } });
+      assert.equal(first.status, 200); assert.equal(guildRequests, 1);
+      const second = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } });
+      assert.equal(second.status, 200); assert.equal(guildRequests, 1);
+      shouldRateLimit = true;
+      const third = await fetch(`${origin}/api/guilds?refresh=1`, { headers: { Cookie: `duck_session=${cookie}` } });
+      assert.equal(third.status, 503); assert.match((await third.json()).error, /rate limiting/i);
+      assert.equal(guildRequests, 2);
+      const fourth = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } });
+      assert.equal(fourth.status, 503); assert.match((await fourth.json()).error, /rate limiting/i);
+    }, { fetchImpl });
+  } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
+});
+
 test("Duck Plus defaults off and fails closed", async () => {
   const previous = process.env.DUCK_PLUS_ENABLED;
   delete process.env.DUCK_PLUS_ENABLED;
