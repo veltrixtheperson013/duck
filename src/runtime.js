@@ -129,13 +129,14 @@ async function fetchWithTimeoutAndRetry(url, options = {}, policy = {}) {
   const timeoutMs = Math.max(1_000, Number(policy.timeoutMs) || 30_000);
   const attempts = Math.max(1, Math.min(Number(policy.attempts) || 2, 5));
   let lastError = null;
+  const fetchImpl = typeof policy.fetchImpl === "function" ? policy.fetchImpl : fetch;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms.`)), timeoutMs);
     timeout.unref?.();
     try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
+      const response = await fetchImpl(url, { ...options, signal: controller.signal });
       if (!isRetryableStatus(response.status) || attempt === attempts) return response;
       await response.body?.cancel?.().catch(() => {});
       const retryAfter = parseRetryAfterMs(response);

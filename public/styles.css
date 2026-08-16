@@ -205,6 +205,15 @@ footer p { margin: 0; }
   .guide-finish { align-items: flex-start; }
 }
 
+.experimental-pill { display: inline-flex; margin-left: 8px; padding: 4px 8px; color: #684b00; background: linear-gradient(135deg,#ffeaa4,#f5cf70); border: 1px solid #dfbd55; border-radius: 999px; font: 850 .6rem var(--sans); letter-spacing: .06em; text-transform: uppercase; vertical-align: middle; }
+.ai-scan-group { overflow: hidden; border-color: #c9ded2; box-shadow: 0 14px 34px rgba(13,76,53,.07); }
+.channel-check-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; max-height: 240px; overflow: auto; padding: 4px; scrollbar-width: thin; }
+.channel-check-grid label { display: flex; gap: 9px; align-items: center; min-width: 0; padding: 10px 12px; color: #345247; background: #f3f8f4; border: 1px solid #d9e6dd; border-radius: 11px; cursor: pointer; transition: border-color .15s ease,background .15s ease,transform .15s ease; }
+.channel-check-grid label:hover { background: #eaf5ed; border-color: #83b69e; transform: translateY(-1px); }
+.channel-check-grid input { width: 17px !important; height: 17px; accent-color: var(--green); }
+.channel-check-grid span { overflow: hidden; font: 750 .75rem var(--sans); text-overflow: ellipsis; white-space: nowrap; }
+.advisory-only { margin: 4px 18px 18px; color: #254f3e; background: linear-gradient(135deg,#eaf7ef,#f8fcf9); border-color: #bcdcc9; }
+@media (max-width: 620px) { .channel-check-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .button { transition: none; }

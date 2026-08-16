@@ -6,6 +6,7 @@ import { TOOL_DEFINITIONS, TOOL_REQUIREMENTS, DUCK_COLORS } from "./constants.js
 import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyCommandContent, getEntryChannelConfig, updateEntryChannelConfig, loadPendingActions, getGuildSettings, updateGuildSettings, getStatusConfig, requireConfig } from "./config.js";
 import { claimDiscordEvent, normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, planLocalModerationTool, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, requesterActionBlockReason, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
 import { handleAutomodAndCustomActions } from "./automod.js";
+import { queueAiScan } from "./ai-scan.js";
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
@@ -392,6 +393,7 @@ client.on(Events.MessageCreate, async (message) => {
     rememberMessage(message);
     if (!message.guild || message.author.bot) return;
     if (await handleAutomodAndCustomActions(message)) return;
+    queueAiScan(message)?.catch((err) => logWarn("ai-scan.failed", { guildId: message.guildId, channelId: message.channelId, error: err?.message || String(err) }));
     queueVoiceMessage(message);
 
     const guildSettings = getGuildSettings(message.guildId);

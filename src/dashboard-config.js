@@ -54,10 +54,14 @@ const CAPABILITY_MODES = new Set(["ask", "approve", "agent"]);
 const AI_CONTEXT_MODES = new Set(["current", "focused", "server"]);
 const AI_RESPONSE_STYLES = new Set(["concise", "balanced", "detailed"]);
 const AI_CHANNEL_MODES = new Set(["mentions", "moderation"]);
+const AI_SCAN_SENSITIVITIES = new Set(["low", "balanced", "high"]);
 const FUN_COMMANDS = Object.freeze([
   { command: "quack", key: "funQuackEnabled", label: "Quack", tier: "free" },
   { command: "duckfact", key: "funDuckFactEnabled", label: "Duck facts", tier: "free" },
   { command: "coinflip", key: "funCoinflipEnabled", label: "Coin flip", tier: "free" },
+  { command: "truth", key: "funTruthEnabled", label: "Truth", tier: "free" },
+  { command: "dare", key: "funDareEnabled", label: "Dare", tier: "free" },
+  { command: "truthordare", key: "funTruthOrDareEnabled", label: "Truth or dare", tier: "free" },
   { command: "ship", key: "funShipEnabled", label: "Compatibility", tier: "plus" },
   { command: "curse", key: "funCurseEnabled", label: "Curses and blessings", tier: "plus" },
   { command: "spinwheel", key: "funSpinwheelEnabled", label: "Spin wheel", tier: "plus" },
@@ -69,6 +73,9 @@ const FUN_COMMANDS = Object.freeze([
   { command: "choose", key: "funChooseEnabled", label: "Decision maker", tier: "plus" },
   { command: "rate", key: "funRateEnabled", label: "Extremely scientific ratings", tier: "plus" },
   { command: "wouldyourather", key: "funWouldYouRatherEnabled", label: "Would you rather", tier: "plus" },
+  { command: "neverhaveiever", key: "funNeverHaveIEverEnabled", label: "Never have I ever", tier: "plus" },
+  { command: "hotseat", key: "funHotseatEnabled", label: "Hot seat", tier: "plus" },
+  { command: "vibecheck", key: "funVibeCheckEnabled", label: "Vibe check", tier: "plus" },
 ]);
 const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
 const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with"]);
@@ -178,12 +185,19 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     automodHoneypotChannelId: /^\d{10,}$/.test(settings.automodHoneypotChannelId || "") ? settings.automodHoneypotChannelId : null,
     automodSwearFilter: settings.automodSwearFilter === true,
     automodNsfwFilter: settings.automodNsfwFilter === true,
+    automodInviteFilter: settings.automodInviteFilter === true,
+    automodCapsFilter: settings.automodCapsFilter === true,
+    automodMentionLimit: Number.isInteger(settings.automodMentionLimit) ? settings.automodMentionLimit : 0,
     automodCustomWords: plus && Array.isArray(settings.automodCustomWords) ? settings.automodCustomWords : [],
     automodViolationsBeforeWarn: Number.isInteger(settings.automodViolationsBeforeWarn) ? settings.automodViolationsBeforeWarn : 3,
     automodWarningsBeforeAction: Number.isInteger(settings.automodWarningsBeforeAction) ? settings.automodWarningsBeforeAction : 3,
     automodEscalation: ["kick", "softban"].includes(settings.automodEscalation) ? settings.automodEscalation : "kick",
     automodGlobalSlowmodeSeconds: Number.isInteger(settings.automodGlobalSlowmodeSeconds) ? settings.automodGlobalSlowmodeSeconds : 0,
     automodChannelSlowmodes: Array.isArray(settings.automodChannelSlowmodes) ? settings.automodChannelSlowmodes : [],
+    aiScanEnabled: settings.aiScanEnabled === true,
+    aiScanChannelIds: Array.isArray(settings.aiScanChannelIds) ? settings.aiScanChannelIds.filter((id) => /^\d{10,}$/.test(id)).slice(0, 25) : [],
+    aiScanFlagChannelId: /^\d{10,}$/.test(settings.aiScanFlagChannelId || "") ? settings.aiScanFlagChannelId : null,
+    aiScanSensitivity: AI_SCAN_SENSITIVITIES.has(settings.aiScanSensitivity) ? settings.aiScanSensitivity : "balanced",
     customActions,
     loyalty,
     subscription: {
@@ -200,16 +214,20 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanSensitivity", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodMentionLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
     }
   }
   if ("automodHoneypotChannelId" in input) { if (input.automodHoneypotChannelId !== null && (typeof input.automodHoneypotChannelId !== "string" || !/^\d{10,}$/.test(input.automodHoneypotChannelId))) throw new TypeError("Honeypot channel must be a valid Discord channel or null."); patch.automodHoneypotChannelId = input.automodHoneypotChannelId; }
+  if ("automodMentionLimit" in input) { if (!Number.isInteger(input.automodMentionLimit) || input.automodMentionLimit < 0 || input.automodMentionLimit > 20) throw new TypeError("Mention limit must be an integer from 0 to 20."); patch.automodMentionLimit = input.automodMentionLimit; }
+  if ("aiScanChannelIds" in input) { if (!Array.isArray(input.aiScanChannelIds) || input.aiScanChannelIds.length > 25 || input.aiScanChannelIds.some((id) => typeof id !== "string" || !/^\d{10,}$/.test(id))) throw new TypeError("AI scan channels must be a list of up to 25 Discord channels."); patch.aiScanChannelIds = [...new Set(input.aiScanChannelIds)]; }
+  if ("aiScanFlagChannelId" in input) { if (input.aiScanFlagChannelId !== null && (typeof input.aiScanFlagChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanFlagChannelId))) throw new TypeError("AI review channel must be a Discord channel or null."); patch.aiScanFlagChannelId = input.aiScanFlagChannelId; }
+  if ("aiScanSensitivity" in input) { if (!AI_SCAN_SENSITIVITIES.has(input.aiScanSensitivity)) throw new TypeError("Unsupported AI scan sensitivity."); patch.aiScanSensitivity = input.aiScanSensitivity; }
   if ("automodCustomWords" in input) {
     if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
     if (input.automodCustomWords.some((value) => typeof value !== "string")) throw new TypeError("Every custom word must be text.");

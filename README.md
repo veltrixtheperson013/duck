@@ -69,7 +69,7 @@ Prefix and AI forms are `duck voice quarantine @user 30m reason` and `duck voice
 - **Approve for me (Recommended):** read-only low-risk actions run immediately; medium, high, and critical actions still wait for confirmation.
 - **Agent mode:** every validated action runs immediately. Enabling this mode requires a second Administrator confirmation. Requester permissions, role hierarchy, exact-target validation, and Duck's Discord permissions still apply.
 
-Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/remind`, `/join`, `/tts`, and `/leave`.
+Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/truth`, `/dare`, `/truthordare`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/remind`, `/join`, `/tts`, and `/leave`.
 
 Bulk syntax separates commands with semicolons or new lines:
 

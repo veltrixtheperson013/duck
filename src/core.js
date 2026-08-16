@@ -3339,7 +3339,7 @@ async function makeChatMessages(message, options = {}) {
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
-        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, eightball, roll, choose, rate, compliment, roast, wouldyourather, ship, curse, and spinwheel. Duck validates the server's plan and command toggle before running it.",
+        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, and spinwheel. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
@@ -3835,7 +3835,7 @@ async function resolveAiFunCall(message, content) {
   const source = String(content || "");
   const match = source.match(/\{\{fun::([a-z]+)(?:::(.{0,300}?))?\}\}/i);
   if (!match) return content;
-  const supported = new Set(["quack", "duckfact", "coinflip", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "ship", "curse", "spinwheel"]);
+  const supported = new Set(["quack", "duckfact", "coinflip", "truth", "dare", "truthordare", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "neverhaveiever", "hotseat", "vibecheck", "ship", "curse", "spinwheel"]);
   const command = match[1].toLocaleLowerCase("en-US");
   const clean = source.replace(match[0], "").trim();
   if (!supported.has(command)) return clean;
@@ -5956,7 +5956,11 @@ async function makeUtilityResponse(message, text) {
     ["coinflip", /^coinflip\b/],
     ["spinwheel", /^spinwheel\b/],
     ["eightball", /^(eightball|8ball)\b/],
+    ["truthordare", /^(truthordare|truth or dare|tod)\b/],
+    ["neverhaveiever", /^(neverhaveiever|never have i ever|nhie)\b/],
+    ["vibecheck", /^(vibecheck|vibe check)\b/],
     ...["quack", "ship", "curse", "roll", "quote", "roast", "compliment", "choose", "rate"].map((command) => [command, new RegExp(`^${command}\\b`)]),
+    ...["truth", "dare", "hotseat"].map((command) => [command, new RegExp(`^${command}\\b`)]),
   ].find(([, pattern]) => pattern.test(normalized))?.[0];
   if (funCommand) {
     const access = getFunCommandAccess(getGuildSettings(message.guildId), funCommand);
@@ -6176,6 +6180,37 @@ async function makeUtilityResponse(message, text) {
     return prompts[Math.floor(Math.random() * prompts.length)];
   }
 
+  const truths = [
+    "What is the funniest thing you believed as a kid?",
+    "What is a harmless opinion you would defend way too passionately?",
+    "What is the most embarrassing song in your favorites?",
+    "What is the weirdest food combination you genuinely enjoy?",
+    "What is one skill you pretend to be better at than you are?",
+  ];
+  const dares = [
+    "Write your next message like a dramatic movie trailer.",
+    "Give someone in this channel a sincere but oddly specific compliment.",
+    "Use a duck emoji in each of your next three messages.",
+    "Describe your day using only five words.",
+    "Change your nickname to Pond Inspector for ten minutes, if you can.",
+  ];
+  if (/^(truthordare|truth or dare|tod)\b/.test(normalized)) { const truth = Math.random() < 0.5; const pool = truth ? truths : dares; return `**${truth ? "Truth" : "Dare"}:** ${pool[Math.floor(Math.random() * pool.length)]}`; }
+  if (/^truth\b/.test(normalized)) return `**Truth:** ${truths[Math.floor(Math.random() * truths.length)]}`;
+  if (/^dare\b/.test(normalized)) return `**Dare:** ${dares[Math.floor(Math.random() * dares.length)]}`;
+  if (/^(neverhaveiever|never have i ever|nhie)\b/.test(normalized)) {
+    const prompts = ["Never have I ever sent a message to the wrong chat.", "Never have I ever pretended to understand a meme.", "Never have I ever stayed up all night for a game.", "Never have I ever blamed lag for a completely fair loss.", "Never have I ever muted myself and kept talking."];
+    return prompts[Math.floor(Math.random() * prompts.length)];
+  }
+  if (/^hotseat\b/.test(normalized)) {
+    const prompts = ["What tiny thing instantly improves your day?", "Which fictional world would you visit for one week?", "What is your most useless talent?", "What would your personal warning label say?", "Which three snacks survive the apocalypse with you?"];
+    return `Hot-seat question: ${prompts[Math.floor(Math.random() * prompts.length)]}`;
+  }
+  if (/^(vibecheck|vibe check)\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^(vibecheck|vibe check)\b/i, ""), true);
+    const score = createHash("sha256").update(`${message.guildId}:${target.id}:vibe`).digest()[0] % 101;
+    return `${target.displayName}'s vibe is **${score}% pond-certified**. ${score > 79 ? "Immaculate quack energy." : score > 39 ? "Calm waters, respectable ripples." : "The pond recommends one snack and a reboot."}`;
+  }
+
   if (/^remind\b/.test(normalized)) {
     const match = text.match(/^remind\s+(\S+)\s+([\s\S]+)/i);
     if (!match) return "Usage: `duck remind 10m check the logs`";
@@ -6341,12 +6376,18 @@ function slashCommandContent(interaction) {
     case "spinwheel": return `spinwheel ${interaction.options.getString("choices", true)}`;
     case "roll": return `roll ${interaction.options.getString("dice", false) || "1d6"}`;
     case "coinflip": return "coinflip";
+    case "truth": return "truth";
+    case "dare": return "dare";
+    case "truthordare": return "truthordare";
     case "eightball": return `eightball ${interaction.options.getString("question", true)}`;
     case "roast": return `roast ${userMention("user")}`;
     case "compliment": return `compliment ${userMention("user")}`;
     case "choose": return `choose ${interaction.options.getString("choices", true)}`;
     case "rate": return `rate ${interaction.options.getString("subject", true)}`;
     case "wouldyourather": return "wouldyourather";
+    case "neverhaveiever": return "neverhaveiever";
+    case "hotseat": return "hotseat";
+    case "vibecheck": return `vibecheck ${userMention("user")}`;
     case "remind": return `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`;
     case "join": return "join";
     case "leave": return "leave";
@@ -6433,8 +6474,8 @@ async function makeSlashDuckResponse(interaction, prompt) {
       "- `/clear`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
       "- `/addrole`, `/removerole`, `/tool`",
       "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
-      "- Fun: `/quack`, `/duckfact`, `/coinflip`",
-      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`",
+      "- Fun: `/quack`, `/duckfact`, `/coinflip`, `/truth`, `/dare`, `/truthordare`",
+      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`, `/neverhaveiever`, `/hotseat`, `/vibecheck`",
       "- `/setup`, `/entry-setup`, `/synccommands`, `/duck-tools`",
       "",
       "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
@@ -6837,6 +6878,9 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("roll").setDescription("Roll dice using notation such as 2d20.")
       .addStringOption((option) => option.setName("dice").setDescription("Dice notation; defaults to 1d6.").setRequired(false)),
     new SlashCommandBuilder().setName("coinflip").setDescription("Flip a coin."),
+    new SlashCommandBuilder().setName("truth").setDescription("Get a safe truth question."),
+    new SlashCommandBuilder().setName("dare").setDescription("Get a safe, harmless dare."),
+    new SlashCommandBuilder().setName("truthordare").setDescription("Let Duck choose truth or dare."),
     new SlashCommandBuilder().setName("eightball").setDescription("Ask Duck's Magic 8-Ball a question.")
       .addStringOption((option) => option.setName("question").setDescription("Your question.").setRequired(true)),
     new SlashCommandBuilder().setName("roast").setDescription("Deliver a friendly, non-toxic roast. Duck Plus command.")
@@ -6848,6 +6892,10 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("rate").setDescription("Receive an extremely scientific rating. Duck Plus command.")
       .addStringOption((option) => option.setName("subject").setDescription("Anything Duck should rate.").setMaxLength(200).setRequired(true)),
     new SlashCommandBuilder().setName("wouldyourather").setDescription("Get a conversation starter. Duck Plus command."),
+    new SlashCommandBuilder().setName("neverhaveiever").setDescription("Get a Never Have I Ever prompt. Duck Plus command."),
+    new SlashCommandBuilder().setName("hotseat").setDescription("Get a hot-seat question. Duck Plus command."),
+    new SlashCommandBuilder().setName("vibecheck").setDescription("Measure a member's pond vibes. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Person to check; defaults to you.").setRequired(false)),
     new SlashCommandBuilder().setName("remind").setDescription("Set a reminder in this channel.")
       .addStringOption((option) => option.setName("time").setDescription("Examples: 30s, 10m, 2h.").setRequired(true))
       .addStringOption((option) => option.setName("text").setDescription("Reminder text.").setRequired(true)),

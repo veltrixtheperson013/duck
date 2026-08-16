@@ -4,6 +4,7 @@ import { getPublicGuildSettings } from "./dashboard-config.js";
 
 const SWEAR_WORDS = ["fuck", "shit", "bitch", "cunt", "nigger", "nigga", "faggot", "retard"];
 const SEXUAL_TERMS = ["porn", "hentai", "nudes", "nude", "onlyfans", "sex tape", "rule34", "r34", "xxx"];
+const DISCORD_INVITE_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/[a-z0-9-]+/i;
 const violationCounts = new Map();
 const messageCooldowns = new Map();
 const actionCooldowns = new Map();
@@ -75,6 +76,14 @@ function detectViolation(message, settings) {
   const attachmentNames = [...(message.attachments?.values?.() || [])].map((item) => item.name || "").join(" ");
   if (settings.automodSwearFilter && includesTerm(message.content, SWEAR_WORDS)) return "Blocked language";
   if (settings.automodNsfwFilter && includesTerm(`${message.content} ${attachmentNames}`, SEXUAL_TERMS)) return "Sexual or NSFW content";
+  if (settings.automodInviteFilter && DISCORD_INVITE_PATTERN.test(message.content || "")) return "Discord invite link";
+  const mentionLimit = Number(settings.automodMentionLimit) || 0;
+  if (mentionLimit > 0 && (message.mentions?.users?.size || 0) > mentionLimit) return `Too many user mentions (limit ${mentionLimit})`;
+  if (settings.automodCapsFilter) {
+    const letters = String(message.content || "").match(/\p{L}/gu) || [];
+    const uppercase = String(message.content || "").match(/\p{Lu}/gu) || [];
+    if (letters.length >= 12 && uppercase.length / letters.length >= 0.8) return "Excessive capital letters";
+  }
   if (Array.isArray(settings.automodCustomWords) && settings.automodCustomWords.length && includesTerm(message.content, settings.automodCustomWords)) return "Custom blocked phrase";
   return null;
 }

@@ -17,6 +17,13 @@ test("AutoMod checks enabled text and attachment-name filters", () => {
   assert.equal(detectViolation(base, { automodSwearFilter: false, automodNsfwFilter: false }), null);
 });
 
+test("AutoMod detects invite links, mention spam, and excessive caps locally", () => {
+  const base = { attachments: new Map(), mentions: { users: new Map() } };
+  assert.equal(detectViolation({ ...base, content: "join https://discord.gg/example" }, { automodInviteFilter: true }), "Discord invite link");
+  assert.match(detectViolation({ ...base, content: "hello", mentions: { users: new Map([["1", {}], ["2", {}], ["3", {}]]) } }, { automodMentionLimit: 2 }), /Too many/);
+  assert.equal(detectViolation({ ...base, content: "THIS MESSAGE IS VERY LOUD" }, { automodCapsFilter: true }), "Excessive capital letters");
+});
+
 test("custom actions match only allowlisted server-side conditions", () => {
   const message = { content: "Hello Duck!", channelId: "123456789012345678", author: { id: "223456789012345678" } };
   const base = { enabled: true, channelId: null, userId: null, triggerType: "contains", triggerValue: "hello duck" };
