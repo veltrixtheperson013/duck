@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionsBitField } from "discord.js";
 import { addMemberWarning, getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings } from "./dashboard-config.js";
+import { recordAuditEvent } from "./community.js";
 
 const SWEAR_WORDS = ["fuck", "shit", "bitch", "cunt", "nigger", "nigga", "faggot", "retard"];
 const SEXUAL_TERMS = ["porn", "hentai", "nudes", "nude", "onlyfans", "sex tape", "rule34", "r34", "xxx"];
@@ -102,6 +103,7 @@ async function escalateViolation(message, settings, reason) {
   violationCounts.delete(key);
   const warning = { id: `${Date.now()}_automod`, createdAt: new Date().toISOString(), moderatorId: message.client.user.id, moderatorTag: message.client.user.tag, reason: `AutoMod: ${reason}` };
   const warningTotal = addMemberWarning(message.guildId, message.author.id, warning);
+  await recordAuditEvent(message.guild, { userId: message.client.user.id, targetId: message.author.id, action: "AutoMod warning", reason, source: "automod" });
   await member.send(`You were automatically warned in ${message.guild.name}: ${reason}`).catch(() => null);
   const warningThreshold = Math.max(1, Number(settings.automodWarningsBeforeAction) || 3);
   if (warningTotal < warningThreshold) {
@@ -112,9 +114,10 @@ async function escalateViolation(message, settings, reason) {
   if (settings.automodEscalation === "softban" && member.bannable) {
     await message.guild.members.ban(member.id, { deleteMessageSeconds: 86_400, reason: auditReason });
     await message.guild.members.unban(member.id, "Duck AutoMod softban completed");
+    await recordAuditEvent(message.guild, { userId: message.client.user.id, targetId: member.id, action: "AutoMod softban", reason: auditReason, source: "automod" });
     return;
   }
-  if (member.kickable) await member.kick(auditReason);
+  if (member.kickable) { await member.kick(auditReason); await recordAuditEvent(message.guild, { userId: message.client.user.id, targetId: member.id, action: "AutoMod kick", reason: auditReason, source: "automod" }); }
 }
 
 function customActionMatches(action, message) {
@@ -175,12 +178,13 @@ async function handleHoneypot(message, settings, storedSettings = {}, persist = 
   try {
     const previous = Array.isArray(storedSettings.honeypotTriggeredUserIds) && storedSettings.honeypotTriggeredUserIds.includes(member.id);
     const reason = previous ? "Duck honeypot: repeated entry after softban" : "Duck honeypot: message in protected trap channel";
-    if (previous) { await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason }); return true; }
+    if (previous) { await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason }); await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot permanent ban", reason, source: "automod" }); return true; }
     const invite = await message.channel.createInvite({ maxAge: 86_400, maxUses: 1, unique: true, reason: "Duck honeypot one-time return invitation" }).catch(() => null);
     const triggered = [...new Set([...(Array.isArray(storedSettings.honeypotTriggeredUserIds) ? storedSettings.honeypotTriggeredUserIds : []), member.id])].slice(-1_000);
     persist(message.guildId, { honeypotTriggeredUserIds: triggered });
     await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason });
     await message.guild.members.unban(member.id, "Duck honeypot first trigger: one return allowed");
+    await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot softban", reason, source: "automod" });
     if (invite?.url) await message.author.send({ content: `You triggered the honeypot in **${message.guild.name}**. You may return once; speaking in that channel again will permanently ban you.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Return to server").setURL(invite.url))] }).catch(() => null);
     return true;
   } finally { honeypotProcessing.delete(key); }

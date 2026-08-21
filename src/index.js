@@ -7,6 +7,7 @@ import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyComm
 import { claimDiscordEvent, normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, planLocalModerationTool, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, requesterActionBlockReason, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
 import { handleAutomodAndCustomActions } from "./automod.js";
 import { queueAiScan } from "./ai-scan.js";
+import { handleAiActionSelection, handleCommunityButton, recordMessageActivity } from "./community.js";
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
@@ -334,6 +335,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      const communityResult = await handleCommunityButton(interaction);
+      if (communityResult !== false) return;
       const [kind, actionId] = interaction.customId.split(":");
       if (kind === "duck_confirm") {
         await approveAction(interaction, actionId, client);
@@ -350,9 +353,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: "That Duck button is no longer available.", ephemeral: true });
       }
     }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("duck_ai_pick:")) {
+      await handleAiActionSelection(interaction);
+    }
   } catch (err) {
-    console.error("Interaction failed:", err);
-    if (!interaction.replied && !interaction.deferred) {
+    logError("interaction.failed", err, { guildId: interaction.guildId, userId: interaction.user?.id, customId: interaction.customId, commandName: interaction.commandName });
+    if (interaction.deferred && !interaction.replied) {
+      await interaction.editReply({ content: "Duck hit an error while handling that action.", components: [] }).catch(() => {});
+    } else if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: "Duck hit an error while handling that.", ephemeral: true }).catch(() => {});
     }
   }
@@ -392,6 +400,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!claimDiscordEvent(`message:${message.id}`)) return;
     rememberMessage(message);
     if (!message.guild || message.author.bot) return;
+    recordMessageActivity(message);
     if (await handleAutomodAndCustomActions(message)) return;
     queueAiScan(message)?.catch((err) => logWarn("ai-scan.failed", { guildId: message.guildId, channelId: message.channelId, error: err?.message || String(err) }));
     queueVoiceMessage(message);

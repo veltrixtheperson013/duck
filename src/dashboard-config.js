@@ -197,7 +197,19 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     aiScanEnabled: settings.aiScanEnabled === true,
     aiScanChannelIds: Array.isArray(settings.aiScanChannelIds) ? settings.aiScanChannelIds.filter((id) => /^\d{10,}$/.test(id)).slice(0, 25) : [],
     aiScanFlagChannelId: /^\d{10,}$/.test(settings.aiScanFlagChannelId || "") ? settings.aiScanFlagChannelId : null,
+    aiScanRulesChannelId: /^\d{10,}$/.test(settings.aiScanRulesChannelId || "") ? settings.aiScanRulesChannelId : null,
     aiScanSensitivity: AI_SCAN_SENSITIVITIES.has(settings.aiScanSensitivity) ? settings.aiScanSensitivity : "balanced",
+    reactionRolesEnabled: settings.reactionRolesEnabled === true,
+    reactionRoleChannelId: /^\d{10,}$/.test(settings.reactionRoleChannelId || "") ? settings.reactionRoleChannelId : null,
+    reactionRoleTitle: typeof settings.reactionRoleTitle === "string" ? settings.reactionRoleTitle : "Choose your roles",
+    reactionRoleOptions: Array.isArray(settings.reactionRoleOptions) ? settings.reactionRoleOptions.slice(0, 10) : [],
+    ticketsEnabled: settings.ticketsEnabled === true,
+    ticketPanelChannelId: /^\d{10,}$/.test(settings.ticketPanelChannelId || "") ? settings.ticketPanelChannelId : null,
+    ticketCategoryId: /^\d{10,}$/.test(settings.ticketCategoryId || "") ? settings.ticketCategoryId : null,
+    ticketSupportRoleId: /^\d{10,}$/.test(settings.ticketSupportRoleId || "") ? settings.ticketSupportRoleId : null,
+    ticketAdminRoleId: /^\d{10,}$/.test(settings.ticketAdminRoleId || "") ? settings.ticketAdminRoleId : null,
+    ticketPanelTitle: typeof settings.ticketPanelTitle === "string" ? settings.ticketPanelTitle : "Duck Support",
+    ticketOptions: Array.isArray(settings.ticketOptions) ? settings.ticketOptions.slice(0, 5) : [],
     customActions,
     loyalty,
     subscription: {
@@ -214,10 +226,10 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanSensitivity", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodMentionLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodMentionLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "reactionRolesEnabled", "ticketsEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
@@ -227,7 +239,18 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
   if ("automodMentionLimit" in input) { if (!Number.isInteger(input.automodMentionLimit) || input.automodMentionLimit < 0 || input.automodMentionLimit > 20) throw new TypeError("Mention limit must be an integer from 0 to 20."); patch.automodMentionLimit = input.automodMentionLimit; }
   if ("aiScanChannelIds" in input) { if (!Array.isArray(input.aiScanChannelIds) || input.aiScanChannelIds.length > 25 || input.aiScanChannelIds.some((id) => typeof id !== "string" || !/^\d{10,}$/.test(id))) throw new TypeError("AI scan channels must be a list of up to 25 Discord channels."); patch.aiScanChannelIds = [...new Set(input.aiScanChannelIds)]; }
   if ("aiScanFlagChannelId" in input) { if (input.aiScanFlagChannelId !== null && (typeof input.aiScanFlagChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanFlagChannelId))) throw new TypeError("AI review channel must be a Discord channel or null."); patch.aiScanFlagChannelId = input.aiScanFlagChannelId; }
+  if ("aiScanRulesChannelId" in input) { if (input.aiScanRulesChannelId !== null && (typeof input.aiScanRulesChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanRulesChannelId))) throw new TypeError("AI rules channel must be a Discord channel or null."); patch.aiScanRulesChannelId = input.aiScanRulesChannelId; }
   if ("aiScanSensitivity" in input) { if (!AI_SCAN_SENSITIVITIES.has(input.aiScanSensitivity)) throw new TypeError("Unsupported AI scan sensitivity."); patch.aiScanSensitivity = input.aiScanSensitivity; }
+  for (const key of ["reactionRoleChannelId", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId"]) if (key in input) { if (input[key] !== null && (typeof input[key] !== "string" || !/^\d{10,}$/.test(input[key]))) throw new TypeError(`${key} must be a Discord ID or null.`); patch[key] = input[key]; }
+  for (const [key, max, fallback] of [["reactionRoleTitle", 100, "Choose your roles"], ["ticketPanelTitle", 100, "Duck Support"]]) if (key in input) { if (typeof input[key] !== "string") throw new TypeError(`${key} must be text.`); patch[key] = input[key].trim().slice(0, max) || fallback; }
+  if ("reactionRoleOptions" in input) {
+    if (!Array.isArray(input.reactionRoleOptions) || input.reactionRoleOptions.length > 10) throw new TypeError("Reaction roles must contain up to 10 options.");
+    patch.reactionRoleOptions = input.reactionRoleOptions.map((item, index) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["roleId", "label", "emoji"].includes(key)) || !/^\d{10,}$/.test(item.roleId || "") || typeof item.label !== "string" || typeof item.emoji !== "string") throw new TypeError(`Reaction role ${index + 1} is invalid.`); const label = item.label.trim(); const emoji = item.emoji.trim(); if (!label || label.length > 80 || emoji.length > 32) throw new TypeError(`Reaction role ${index + 1} has invalid text.`); return { roleId: item.roleId, label, emoji }; });
+  }
+  if ("ticketOptions" in input) {
+    if (!Array.isArray(input.ticketOptions) || input.ticketOptions.length > 5) throw new TypeError("Tickets must contain up to 5 options.");
+    patch.ticketOptions = input.ticketOptions.map((item, index) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["id", "label", "description", "emoji"].includes(key)) || !/^[a-z0-9_-]{1,24}$/.test(item.id || "") || typeof item.label !== "string" || typeof item.description !== "string" || typeof item.emoji !== "string") throw new TypeError(`Ticket option ${index + 1} is invalid.`); const label = item.label.trim(); const description = item.description.trim(); const emoji = item.emoji.trim(); if (!label || label.length > 80 || description.length > 200 || emoji.length > 32) throw new TypeError(`Ticket option ${index + 1} has invalid text.`); return { id: item.id, label, description, emoji }; });
+  }
   if ("automodCustomWords" in input) {
     if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
     if (input.automodCustomWords.some((value) => typeof value !== "string")) throw new TypeError("Every custom word must be text.");

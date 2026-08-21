@@ -126,6 +126,29 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
   assert.deepEqual(makeSettingsPatch(plus, { automodCustomWords: [" Spoiler ", "spoiler"] }).settings.automodCustomWords, ["spoiler"]);
 });
 
+test("community modules and rule-aware scanning use bounded server-owned configuration", () => {
+  const input = {
+    aiScanRulesChannelId: "123456789012345678",
+    reactionRolesEnabled: true,
+    reactionRoleChannelId: "223456789012345678",
+    reactionRoleTitle: "Pick a color",
+    reactionRoleOptions: [{ roleId: "323456789012345678", label: "Green", emoji: "💚" }],
+    ticketsEnabled: true,
+    ticketPanelChannelId: "423456789012345678",
+    ticketCategoryId: "523456789012345678",
+    ticketSupportRoleId: "623456789012345678",
+    ticketAdminRoleId: "723456789012345678",
+    ticketPanelTitle: "Support pond",
+    ticketOptions: [{ id: "support", label: "Support", description: "Ask for help", emoji: "🎫" }],
+  };
+  const { patch, settings } = makeSettingsPatch({}, input);
+  assert.deepEqual(patch.reactionRoleOptions, input.reactionRoleOptions);
+  assert.deepEqual(settings.ticketOptions, input.ticketOptions);
+  assert.equal(settings.aiScanRulesChannelId, input.aiScanRulesChannelId);
+  assert.throws(() => makeSettingsPatch({}, { reactionRoleOptions: [{ roleId: "bad", label: "Admin", emoji: "x" }] }), /invalid/i);
+  assert.throws(() => makeSettingsPatch({}, { ticketOptions: Array.from({ length: 6 }, (_, index) => ({ id: `x${index}`, label: "x", description: "", emoji: "" })) }), /up to 5/i);
+});
+
 test("custom actions use safe allowlists and loyalty-based caps", () => {
   const action = (index, actionType = "reply") => ({
     id: `rule_${index}`,

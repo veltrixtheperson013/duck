@@ -1,13 +1,15 @@
-import { EmbedBuilder } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
 import { getGuildSettings } from "./config.js";
 import { getPublicGuildSettings } from "./dashboard-config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, readBoundedJson, readBoundedText } from "./runtime.js";
+import { recordAiFlag } from "./community.js";
 
 const AI_SCAN_MODEL = "openai/gpt-oss-20b:free";
 const CATEGORIES = new Set(["harassment", "hate", "sexual", "violence", "self_harm", "scam", "spam", "other"]);
 const thresholds = { low: 0.9, balanced: 0.75, high: 0.6 };
 const scheduler = new FairGuildScheduler({ globalConcurrency: 2, guildConcurrency: 1, maxQueuedPerGuild: 10, maxQueuedGlobal: 50 });
 const recentScans = new Map();
+const rulesCache = new Map();
 
 function parseScanResult(value) {
   const raw = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
@@ -31,7 +33,8 @@ function shouldQueueScan(message, settings, now = Date.now()) {
   return true;
 }
 
-async function requestSuggestion(content, fetchImpl = fetch) {
+async function requestSuggestion(content, rules = "No server-specific rules were supplied.", fetchImpl = fetch) {
+  if (typeof rules === "function") { fetchImpl = rules; rules = "No server-specific rules were supplied."; }
   const response = await fetchWithTimeoutAndRetry("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -45,7 +48,7 @@ async function requestSuggestion(content, fetchImpl = fetch) {
       temperature: 0,
       max_tokens: 160,
       messages: [
-        { role: "system", content: "You are an advisory-only Discord safety classifier. Never recommend or perform an action. Flag only credible harassment, hate, sexual content, violence, self-harm risk, scams, or spam. Consider context uncertainty and avoid flagging quoted discussion. Return only JSON: {\"flag\":boolean,\"category\":\"harassment|hate|sexual|violence|self_harm|scam|spam|other\",\"confidence\":0.0,\"reason\":\"short neutral explanation\"}." },
+        { role: "system", content: `You are an advisory-only Discord safety classifier. Never recommend or perform an action. Compare the message against the supplied server rules as well as credible harassment, hate, sexual content, violence, self-harm risk, scams, or spam. Consider context uncertainty and avoid flagging quoted discussion. Server rules:\n${String(rules).slice(0, 5_000)}\nReturn only JSON: {"flag":boolean,"category":"harassment|hate|sexual|violence|self_harm|scam|spam|other","confidence":0.0,"reason":"short neutral explanation naming the relevant rule when possible"}.` },
         { role: "user", content: String(content).slice(0, 1_500) },
       ],
     }),
@@ -55,8 +58,21 @@ async function requestSuggestion(content, fetchImpl = fetch) {
   return parseScanResult(body?.choices?.[0]?.message?.content);
 }
 
+async function getServerRules(message, settings, now = Date.now()) {
+  if (!settings.aiScanRulesChannelId) return "No server-specific rules were supplied.";
+  const cached = rulesCache.get(message.guildId);
+  if (cached?.channelId === settings.aiScanRulesChannelId && cached.expiresAt > now) return cached.text;
+  const channel = message.guild.channels.cache.get(settings.aiScanRulesChannelId) ?? await message.guild.channels.fetch(settings.aiScanRulesChannelId).catch(() => null);
+  if (!channel?.messages?.fetch) return "The configured rules channel could not be read.";
+  const messages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  const text = messages ? [...messages.values()].reverse().flatMap((item) => [String(item.content || "").trim(), ...(item.embeds || []).flatMap((embed) => [embed.title, embed.description, ...(embed.fields || []).flatMap((field) => [field.name, field.value])])]).filter(Boolean).join("\n").slice(0, 5_000) : "The configured rules channel could not be read.";
+  rulesCache.set(message.guildId, { channelId: settings.aiScanRulesChannelId, text, expiresAt: now + 5 * 60_000 });
+  if (rulesCache.size > 1_000) rulesCache.delete(rulesCache.keys().next().value);
+  return text;
+}
+
 async function scanMessage(message, settings) {
-  const result = await requestSuggestion(message.content);
+  const result = await requestSuggestion(message.content, await getServerRules(message, settings));
   if (!result || result.confidence < thresholds[settings.aiScanSensitivity]) return null;
   const channel = message.guild.channels.cache.get(settings.aiScanFlagChannelId)
     ?? await message.guild.channels.fetch(settings.aiScanFlagChannelId).catch(() => null);
@@ -76,7 +92,13 @@ async function scanMessage(message, settings) {
     .setURL(message.url)
     .setFooter({ text: `Advisory only · ${AI_SCAN_MODEL}` })
     .setTimestamp();
-  return channel.send({ embeds: [embed], components: [], allowedMentions: { parse: [] } });
+  const actions = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`duck_ai_action:${message.channelId}:${message.id}:${message.author.id}`).setLabel("Take Action").setEmoji("🛡️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setLabel("Go To Message").setEmoji("↗️").setStyle(ButtonStyle.Link).setURL(message.url),
+  );
+  const sent = await channel.send({ embeds: [embed], components: [actions], allowedMentions: { parse: [] } });
+  recordAiFlag(message.guildId);
+  return sent;
 }
 
 function queueAiScan(message) {
@@ -86,4 +108,4 @@ function queueAiScan(message) {
   catch (error) { if (error instanceof QueueCapacityError) return null; throw error; }
 }
 
-export { AI_SCAN_MODEL, parseScanResult, queueAiScan, requestSuggestion, shouldQueueScan };
+export { AI_SCAN_MODEL, getServerRules, parseScanResult, queueAiScan, requestSuggestion, shouldQueueScan };
