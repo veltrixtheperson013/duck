@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -8,6 +9,7 @@ import {
   StringSelectMenuBuilder,
 } from "discord.js";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
+import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
 
 const activity = new Map();
 const ticketLocks = new Set();
@@ -92,11 +94,11 @@ function getGuildInsights(guild) {
 }
 
 async function publishReactionRolePanel(guild, actorId) {
-  const settings = getGuildSettings(guild.id);
+  const settings = getPublicGuildSettings(getGuildSettings(guild.id));
   if (!settings.reactionRolesEnabled) throw Object.assign(new Error("Enable reaction roles first."), { status: 409 });
   const channel = guild.channels.cache.get(settings.reactionRoleChannelId);
   if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("Choose a valid reaction-role channel."), { status: 400 });
-  const options = Array.isArray(settings.reactionRoleOptions) ? settings.reactionRoleOptions.slice(0, 10) : [];
+  const options = settings.reactionRoleOptions;
   if (!options.length) throw Object.assign(new Error("Add at least one reaction role."), { status: 400 });
   const rows = [];
   for (let index = 0; index < options.length; index += 5) {
@@ -109,33 +111,41 @@ async function publishReactionRolePanel(guild, actorId) {
 }
 
 async function publishTicketPanel(guild, actorId) {
-  const settings = getGuildSettings(guild.id);
+  const settings = getPublicGuildSettings(getGuildSettings(guild.id));
   if (!settings.ticketsEnabled) throw Object.assign(new Error("Enable tickets first."), { status: 409 });
   const channel = guild.channels.cache.get(settings.ticketPanelChannelId);
   if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("Choose a valid ticket panel channel."), { status: 400 });
-  const options = Array.isArray(settings.ticketOptions) ? settings.ticketOptions.slice(0, 5) : [];
+  const options = settings.ticketOptions;
   if (!options.length) throw Object.assign(new Error("Add at least one ticket option."), { status: 400 });
-  const row = new ActionRowBuilder().addComponents(...options.map((option) => withSafeEmoji(new ButtonBuilder().setCustomId(`duck_ticket:${option.id}`).setLabel(option.label).setStyle(ButtonStyle.Primary), option.emoji, "🎫")));
+  const rows = [];
+  for (let index = 0; index < options.length; index += 5) rows.push(new ActionRowBuilder().addComponents(...options.slice(index, index + 5).map((option) => withSafeEmoji(new ButtonBuilder().setCustomId(`duck_ticket:${option.id}`).setLabel(option.label).setStyle(ButtonStyle.Primary), option.emoji, "🎫"))));
   const embed = new EmbedBuilder().setColor(0xf2c85b).setTitle(settings.ticketPanelTitle || "Duck Support").setDescription("Choose the kind of ticket you need. A private channel will be created for you and the support team.");
-  const message = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
+  const message = await channel.send({ embeds: [embed], components: rows, allowedMentions: { parse: [] } });
   await recordAuditEvent(guild, { userId: actorId, action: "Published ticket panel", reason: `Panel posted in #${channel.name}`, source: "dashboard" });
   return message;
 }
 
 async function handleReactionRole(interaction, roleId) {
-  const settings = getGuildSettings(interaction.guildId);
+  const raw = getGuildSettings(interaction.guildId);
+  const settings = getPublicGuildSettings(raw);
   if (!settings.reactionRolesEnabled || !settings.reactionRoleOptions?.some((option) => option.roleId === roleId)) return interaction.reply({ content: "That reaction role is no longer configured.", ephemeral: true });
   const role = interaction.guild.roles.cache.get(roleId);
   const member = interaction.member;
   if (!isSafeSelfAssignableRole(role)) return interaction.reply({ content: "Duck cannot safely manage that role.", ephemeral: true });
   const removing = member.roles.cache.has(roleId);
+  if (!removing) {
+    const configuredIds = settings.reactionRoleOptions.map((option) => option.roleId);
+    const selectedIds = configuredIds.filter((id) => member.roles.cache.has(id));
+    if (settings.reactionRoleLimit > 0 && selectedIds.length >= settings.reactionRoleLimit) return interaction.reply({ content: `This panel allows up to ${settings.reactionRoleLimit} role${settings.reactionRoleLimit === 1 ? "" : "s"}. Remove one first.`, ephemeral: true });
+    if (settings.reactionRoleMode === "exclusive" && selectedIds.length) await member.roles.remove(selectedIds, "Exclusive Duck reaction-role selection");
+  }
   await (removing ? member.roles.remove(role, "Self-service reaction role") : member.roles.add(role, "Self-service reaction role"));
   await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: removing ? "Removed self role" : "Added self role", reason: role.name, source: "discord" });
   return interaction.reply({ content: `${removing ? "Removed" : "Added"} **${role.name}**.`, ephemeral: true });
 }
 
 async function handleTicketOpen(interaction, optionId) {
-  const settings = getGuildSettings(interaction.guildId);
+  const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
   const option = settings.ticketOptions?.find((item) => item.id === optionId);
   if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That ticket option is no longer available.", ephemeral: true });
   const existing = interaction.guild.channels.cache.find((channel) => !channel.name.startsWith("closed-") && channel.topic?.match(/duck-ticket-owner:(\d{10,})/)?.[1] === interaction.user.id);
@@ -169,13 +179,26 @@ async function handleTicketOpen(interaction, optionId) {
 async function handleTicketClose(interaction) {
   const ownerId = interaction.channel?.topic?.match(/duck-ticket-owner:(\d{10,})/)?.[1];
   if (!ownerId) return interaction.reply({ content: "This is not a Duck ticket channel.", ephemeral: true });
-  const settings = getGuildSettings(interaction.guildId);
+  const raw = getGuildSettings(interaction.guildId);
+  const settings = getPublicGuildSettings(raw);
   const staff = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels) || [settings.ticketSupportRoleId, settings.ticketAdminRoleId].some((id) => id && interaction.member.roles.cache.has(id));
   if (interaction.user.id !== ownerId && !staff) return interaction.reply({ content: "Only the ticket owner or support staff can close this ticket.", ephemeral: true });
   await interaction.deferReply();
   await interaction.channel.permissionOverwrites.edit(ownerId, { ViewChannel: false, SendMessages: false }, { reason: `Ticket closed by ${interaction.user.tag}` });
   await interaction.channel.setName(`closed-${interaction.channel.name}`.slice(0, 100), `Ticket closed by ${interaction.user.tag}`).catch(() => null);
   await interaction.channel.setTopic(`duck-ticket-closed:${ownerId};closed-by:${interaction.user.id}`).catch(() => null);
+  if (settings.ticketTranscriptsEnabled && hasPlusEntitlement(raw)) {
+    const logChannelId = raw.entryChannels?.logChannelId;
+    const logChannel = logChannelId ? interaction.guild.channels.cache.get(logChannelId) : null;
+    if (logChannel?.isTextBased?.() && typeof logChannel.send === "function") {
+      const messages = await interaction.channel.messages.fetch({ limit: 100 }).catch(() => null);
+      if (messages) {
+        const transcript = [...messages.values()].reverse().map((message) => `[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id}): ${String(message.cleanContent || message.content || "").replace(/[\r\n]+/g, " ").slice(0, 1_500)}${message.attachments.size ? ` [${message.attachments.size} attachment(s)]` : ""}`).join("\n").slice(0, 240_000);
+        const file = new AttachmentBuilder(Buffer.from(transcript || "No cached ticket messages were available.", "utf8"), { name: `ticket-${interaction.channel.id}.txt`, description: "Duck Plus ticket transcript" });
+        await logChannel.send({ content: `Transcript for closed ticket <#${interaction.channel.id}>`, files: [file], allowedMentions: { parse: [] } }).catch(() => null);
+      }
+    }
+  }
   await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: ownerId, action: "Closed ticket", reason: `#${interaction.channel.name}`, source: "discord" });
   return interaction.editReply({ content: "Ticket closed. Staff can review or delete this channel when ready." });
 }

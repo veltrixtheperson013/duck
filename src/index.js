@@ -5,9 +5,11 @@ import { pendingActions, pendingByChannel } from "./state.js";
 import { TOOL_DEFINITIONS, TOOL_REQUIREMENTS, DUCK_COLORS } from "./constants.js";
 import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyCommandContent, getEntryChannelConfig, updateEntryChannelConfig, loadPendingActions, getGuildSettings, updateGuildSettings, getStatusConfig, requireConfig } from "./config.js";
 import { claimDiscordEvent, normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, planLocalModerationTool, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, requesterActionBlockReason, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
-import { handleAutomodAndCustomActions } from "./automod.js";
+import { handleAutomodAndCustomActions, publishHoneypotCounter } from "./automod.js";
 import { queueAiScan } from "./ai-scan.js";
 import { handleAiActionSelection, handleCommunityButton, recordMessageActivity } from "./community.js";
+import { applyAutoroles, awardMessageXp, flushLevelProfiles, handleCommunityReaction, handleCommunitySlashCommand, handleSuggestionDecision, startCommunityStudio } from "./community-studio.js";
+import { applyRandomJoinColor, handleColorCommand, handleColorSelect } from "./color-roles.js";
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
@@ -20,9 +22,9 @@ requireConfig();
 loadPendingActions();
 startKeepAliveServer();
 startCacheMaintenance();
-process.once("beforeExit", flushJsonWrites);
-process.once("SIGINT", () => flushRuntimeStateAndExit("SIGINT"));
-process.once("SIGTERM", () => flushRuntimeStateAndExit("SIGTERM"));
+process.once("beforeExit", () => { flushLevelProfiles(); flushJsonWrites(); });
+process.once("SIGINT", () => { flushLevelProfiles(); flushRuntimeStateAndExit("SIGINT"); });
+process.once("SIGTERM", () => { flushLevelProfiles(); flushRuntimeStateAndExit("SIGTERM"); });
 process.on("unhandledRejection", (reason) => {
   logError("process.unhandled-rejection", reason instanceof Error ? reason : new Error(String(reason)));
 });
@@ -101,6 +103,7 @@ client.once(Events.ClientReady, async () => {
 
   logInfo("pending-actions.ready", { count: pendingActions.size });
   startInviteCleanupLoop();
+  startCommunityStudio(client);
   restoreVoiceQuarantineTimers();
   try {
     await registerCommands(client);
@@ -121,6 +124,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!claimDiscordEvent(`interaction:${interaction.id}`)) return;
     if (interaction.isChatInputCommand()) {
+      const colorResult = await handleColorCommand(interaction);
+      if (colorResult !== false) return;
+      const studioResult = await handleCommunitySlashCommand(interaction);
+      if (studioResult !== false) return;
       if (interaction.commandName === "duck") {
         const prompt = interaction.options.getString("prompt", false) || "commands";
         const response = await makeSlashDuckResponse(interaction, prompt);
@@ -251,6 +258,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ].filter(Boolean).join("\n"),
           ephemeral: true,
         });
+        if ((honeypotChannel || honeypotEnabled === true) && (honeypotEnabled ?? getGuildSettings(interaction.guildId).automodHoneypotEnabled)) await publishHoneypotCounter(interaction.guild).catch((err) => logWarn("honeypot.counter-publish-failed", { guildId: interaction.guildId, error: err?.message || String(err) }));
         return;
       }
 
@@ -335,6 +343,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      const suggestionResult = await handleSuggestionDecision(interaction);
+      if (suggestionResult !== false) return;
       const communityResult = await handleCommunityButton(interaction);
       if (communityResult !== false) return;
       const [kind, actionId] = interaction.customId.split(":");
@@ -353,8 +363,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: "That Duck button is no longer available.", ephemeral: true });
       }
     }
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("duck_ai_pick:")) {
-      await handleAiActionSelection(interaction);
+    if (interaction.isStringSelectMenu()) {
+      const colorResult = await handleColorSelect(interaction);
+      if (colorResult !== false) return;
+      if (interaction.customId.startsWith("duck_ai_pick:")) await handleAiActionSelection(interaction);
     }
   } catch (err) {
     logError("interaction.failed", err, { guildId: interaction.guildId, userId: interaction.user?.id, customId: interaction.customId, commandName: interaction.commandName });
@@ -369,6 +381,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
     await handleMemberJoin(member);
+    await applyAutoroles(member);
+    await applyRandomJoinColor(member);
   } catch (err) {
     logError("member-join.failed", err, { guildId: member.guild.id, memberId: member.id });
   }
@@ -394,6 +408,14 @@ client.on(Events.MessageBulkDelete, (messages) => {
   removeCachedMessages(messages);
 });
 
+client.on(Events.MessageReactionAdd, (reaction, user) => {
+  handleCommunityReaction(reaction, user).catch((err) => logWarn("community.starboard-add-failed", { guildId: reaction.message?.guildId, error: err?.message || String(err) }));
+});
+
+client.on(Events.MessageReactionRemove, (reaction, user) => {
+  handleCommunityReaction(reaction, user).catch((err) => logWarn("community.starboard-remove-failed", { guildId: reaction.message?.guildId, error: err?.message || String(err) }));
+});
+
 client.on(Events.MessageCreate, async (message) => {
   const messageStartedAt = Date.now();
   try {
@@ -402,6 +424,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!message.guild || message.author.bot) return;
     recordMessageActivity(message);
     if (await handleAutomodAndCustomActions(message)) return;
+    await awardMessageXp(message);
     queueAiScan(message)?.catch((err) => logWarn("ai-scan.failed", { guildId: message.guildId, channelId: message.channelId, error: err?.message || String(err) }));
     queueVoiceMessage(message);
 

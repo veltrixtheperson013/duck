@@ -10,6 +10,7 @@ const violationCounts = new Map();
 const messageCooldowns = new Map();
 const actionCooldowns = new Map();
 const honeypotProcessing = new Set();
+const honeypotCounterLocks = new Map();
 
 function normalizedText(value) {
   return String(value || "").normalize("NFKC").toLocaleLowerCase("en-US").replace(/[\u200b-\u200d\ufeff]/g, "");
@@ -168,6 +169,68 @@ async function handleCustomActions(message, settings, now = Date.now()) {
   return false;
 }
 
+function normalizedHoneypotStats(value = {}) {
+  return {
+    total: Math.min(1_000_000_000, Math.max(0, Number(value.total) || 0)),
+    firstTraps: Math.min(1_000_000_000, Math.max(0, Number(value.firstTraps) || 0)),
+    permanentBans: Math.min(1_000_000_000, Math.max(0, Number(value.permanentBans) || 0)),
+    lastTriggeredAt: typeof value.lastTriggeredAt === "string" ? value.lastTriggeredAt : null,
+    lastUserId: /^\d{10,}$/.test(value.lastUserId || "") ? value.lastUserId : null,
+  };
+}
+
+function honeypotCounterEmbed(guild, stats) {
+  const lastAt = Date.parse(stats.lastTriggeredAt || "");
+  return new EmbedBuilder()
+    .setColor(0xd95d54)
+    .setAuthor({ name: "Duck Sentry", iconURL: guild.client.user.displayAvatarURL() })
+    .setTitle("🍯 Honeypot watch")
+    .setDescription("This channel is an active moderation trap. Sending a message triggers automatic removal. Staff with Ban Members are exempt.")
+    .addFields(
+      { name: "Caught", value: `**${stats.total.toLocaleString()}**`, inline: true },
+      { name: "Returned once", value: `**${stats.firstTraps.toLocaleString()}**`, inline: true },
+      { name: "Repeat bans", value: `**${stats.permanentBans.toLocaleString()}**`, inline: true },
+      { name: "Last activity", value: Number.isFinite(lastAt) ? `<t:${Math.floor(lastAt / 1_000)}:R>` : "No traps triggered yet", inline: false },
+    )
+    .setFooter({ text: `${guild.name} • persistent counter • Duck verifies permissions live` })
+    .setTimestamp();
+}
+
+async function publishHoneypotCounter(guild, statsOverride = null, persist = updateGuildSettings) {
+  const stored = getGuildSettings(guild.id);
+  const settings = getPublicGuildSettings(stored);
+  if (!settings.automodHoneypotEnabled || !settings.automodHoneypotChannelId) throw Object.assign(new Error("Enable the honeypot and choose its channel first."), { status: 409 });
+  const channel = guild.channels.cache.get(settings.automodHoneypotChannelId);
+  if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("The honeypot channel is unavailable."), { status: 400 });
+  const stats = normalizedHoneypotStats(statsOverride || stored.honeypotStats);
+  const existingId = /^\d{10,}$/.test(stored.honeypotCounterMessageId || "") ? stored.honeypotCounterMessageId : null;
+  const existing = existingId && channel.messages?.fetch ? await channel.messages.fetch(existingId).catch(() => null) : null;
+  const payload = { embeds: [honeypotCounterEmbed(guild, stats)], allowedMentions: { parse: [] } };
+  const counter = existing ? await existing.edit(payload) : await channel.send(payload);
+  if (counter.id !== existingId) persist(guild.id, { honeypotCounterMessageId: counter.id });
+  return counter;
+}
+
+async function incrementHoneypotCounter(message, outcome, storedSettings, persist = updateGuildSettings) {
+  const guildId = message.guildId;
+  const previousTask = honeypotCounterLocks.get(guildId) || Promise.resolve();
+  const task = previousTask.catch(() => null).then(async () => {
+    const fresh = getGuildSettings(guildId);
+    const base = fresh.honeypotStats || storedSettings.honeypotStats;
+    const stats = normalizedHoneypotStats(base);
+    stats.total += 1;
+    if (outcome === "permanent") stats.permanentBans += 1;
+    else stats.firstTraps += 1;
+    stats.lastTriggeredAt = new Date().toISOString();
+    stats.lastUserId = message.author.id;
+    persist(guildId, { honeypotStats: stats });
+    if (/^\d{10,}$/.test(message.guild?.id || "")) await publishHoneypotCounter(message.guild, stats, persist).catch(() => null);
+    return stats;
+  });
+  honeypotCounterLocks.set(guildId, task);
+  try { return await task; } finally { if (honeypotCounterLocks.get(guildId) === task) honeypotCounterLocks.delete(guildId); }
+}
+
 async function handleHoneypot(message, settings, storedSettings = {}, persist = updateGuildSettings) {
   if (!settings.automodHoneypotEnabled || settings.automodHoneypotChannelId !== message.channelId) return false;
   const member = message.member;
@@ -178,12 +241,14 @@ async function handleHoneypot(message, settings, storedSettings = {}, persist = 
   try {
     const previous = Array.isArray(storedSettings.honeypotTriggeredUserIds) && storedSettings.honeypotTriggeredUserIds.includes(member.id);
     const reason = previous ? "Duck honeypot: repeated entry after softban" : "Duck honeypot: message in protected trap channel";
-    if (previous) { await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason }); await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot permanent ban", reason, source: "automod" }); return true; }
+    if (previous) { await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason }); await incrementHoneypotCounter(message, "permanent", storedSettings, persist); await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot permanent ban", reason, source: "automod" }); return true; }
     const invite = await message.channel.createInvite({ maxAge: 86_400, maxUses: 1, unique: true, reason: "Duck honeypot one-time return invitation" }).catch(() => null);
-    const triggered = [...new Set([...(Array.isArray(storedSettings.honeypotTriggeredUserIds) ? storedSettings.honeypotTriggeredUserIds : []), member.id])].slice(-1_000);
+    const latestTriggered = getGuildSettings(message.guildId).honeypotTriggeredUserIds;
+    const triggered = [...new Set([...(Array.isArray(latestTriggered) ? latestTriggered : Array.isArray(storedSettings.honeypotTriggeredUserIds) ? storedSettings.honeypotTriggeredUserIds : []), member.id])].slice(-1_000);
     persist(message.guildId, { honeypotTriggeredUserIds: triggered });
     await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason });
     await message.guild.members.unban(member.id, "Duck honeypot first trigger: one return allowed");
+    await incrementHoneypotCounter(message, "first", { ...storedSettings, honeypotTriggeredUserIds: triggered }, persist);
     await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot softban", reason, source: "automod" });
     if (invite?.url) await message.author.send({ content: `You triggered the honeypot in **${message.guild.name}**. You may return once; speaking in that channel again will permanently ban you.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Return to server").setURL(invite.url))] }).catch(() => null);
     return true;
@@ -207,4 +272,4 @@ async function handleAutomodAndCustomActions(message) {
   return handleCustomActions(message, settings);
 }
 
-export { customActionMatches, detectViolation, handleAutomodAndCustomActions, handleHoneypot, includesTerm };
+export { customActionMatches, detectViolation, handleAutomodAndCustomActions, handleHoneypot, honeypotCounterEmbed, includesTerm, normalizedHoneypotStats, publishHoneypotCounter };

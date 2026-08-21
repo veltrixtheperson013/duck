@@ -46,6 +46,11 @@ The fixed one-time support amounts on `/donate` also use hosted Stripe Checkout 
 - Voice DAVE encryption defaults on with `@discordjs/voice` 0.19.2. Voice sessions are isolated per guild, protected from cross-channel hijacking, and have per-user/per-guild TTS budgets.
 - OpenRouter vision is model-aware. `tencent/hy3` is always treated as text-only in automatic mode.
 - Pending actions re-check the original requester's current membership, permissions, target-channel access, and role hierarchy immediately before execution.
+- Community Studio adds automatic join roles, spam-resistant Pond Levels, `/rank`, `/leaderboard`, `/suggest`, staff-reviewed proposals, Starboard highlights, and Plus scheduled posts.
+- Reaction-role panels support 10 Free or 25 Plus options; Plus also adds exclusive/limited selection modes. Ticket panels support 5 Free or 10 Plus request types, with bounded close transcripts for Plus.
+- Free TTS uses OpenRouter Flux with bounded audio reads, deadlines, content-type checks, and one retry for empty or transient responses. Plus ElevenLabs uses the same fail-loud retry behavior.
+- The honeypot maintains a persistent Discord counter embed for total catches, first softbans, and permanent repeat bans.
+- Color Dock provides safe exclusive name colors through select menus, `/color`, and `/colors`; it can create permissionless roles, require an access role, and gives Plus servers larger palettes and random join colors.
 
 ## Commands
 
@@ -69,7 +74,7 @@ Prefix and AI forms are `duck voice quarantine @user 30m reason` and `duck voice
 - **Approve for me (Recommended):** read-only low-risk actions run immediately; medium, high, and critical actions still wait for confirmation.
 - **Agent mode:** every validated action runs immediately. Enabling this mode requires a second Administrator confirmation. Requester permissions, role hierarchy, exact-target validation, and Duck's Discord permissions still apply.
 
-Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/truth`, `/dare`, `/truthordare`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/remind`, `/join`, `/tts`, and `/leave`.
+Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/truth`, `/dare`, `/truthordare`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/remind`, `/suggest`, `/rank`, `/leaderboard`, `/join`, `/tts`, and `/leave`.
 
 Bulk syntax separates commands with semicolons or new lines:
 

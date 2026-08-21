@@ -5380,52 +5380,52 @@ async function synthesizeVoiceAudio(text, guildId = null) {
   if (!useElevenLabs) {
     const apiKey = String(process.env.OPENROUTER_API_KEY || "").trim();
     if (!apiKey) throw new Error("Flux TTS is not configured. Set OPENROUTER_API_KEY.");
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
-    timeout.unref?.();
-    try {
-      const response = await fetch("https://openrouter.ai/api/v1/audio/speech", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.wispbyte.app",
-          "X-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
-        },
-        body: JSON.stringify({ model: "deepgram/flux-tts:free", input: text.slice(0, 200), voice: "flux-cole-en", response_format: "mp3" }),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
-        throw new Error(`OpenRouter Flux TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
-      }
-      if (!response.body) throw new Error("OpenRouter Flux TTS returned an empty audio stream.");
-      const reader = response.body.getReader();
-      const chunks = [];
-      let totalBytes = 0;
+    let finalError;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      timeout.unref?.();
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = Buffer.from(value);
-          totalBytes += chunk.length;
-          if (totalBytes > 2 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 2 MB memory limit.");
-          chunks.push(chunk);
+        const response = await fetch("https://openrouter.ai/api/v1/audio/speech", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: "audio/mpeg",
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://duck.wispbyte.app",
+            "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "Duck Discord Bot",
+          },
+          body: JSON.stringify({ model: "deepgram/flux-tts:free", input: text.slice(0, 200), voice: "flux-cole-en", response_format: "mp3" }),
+          signal: controller.signal,
+        });
+        const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+        if (!response.ok || contentType.includes("json") || contentType.startsWith("text/")) {
+          const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+          const error = new Error(`OpenRouter Flux TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
+          error.retryable = response.status === 429 || response.status >= 500;
+          throw error;
         }
+        if (!response.body) { const error = new Error("OpenRouter Flux TTS returned an empty audio stream."); error.retryable = true; throw error; }
+        const reader = response.body.getReader(); const chunks = []; let totalBytes = 0;
+        try {
+          while (true) {
+            const { done, value } = await reader.read(); if (done) break;
+            const chunk = Buffer.from(value); totalBytes += chunk.length;
+            if (totalBytes > 4 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 4 MB memory limit.");
+            chunks.push(chunk);
+          }
+        } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+        finally { reader.releaseLock(); }
+        if (!totalBytes) { const error = new Error("OpenRouter Flux TTS returned no audio data."); error.retryable = true; throw error; }
+        logDebug("voice.tts-provider-response", { provider: "openrouter", model: "deepgram/flux-tts:free", attempt, bytes: totalBytes, contentType: contentType || null, generationId: response.headers.get("x-generation-id") || null });
+        return Buffer.concat(chunks, totalBytes);
       } catch (err) {
-        await reader.cancel().catch(() => {});
-        throw err;
-      } finally {
-        reader.releaseLock();
-      }
-      if (!totalBytes) throw new Error("OpenRouter Flux TTS returned no audio data.");
-      return Buffer.concat(chunks, totalBytes);
-    } catch (err) {
-      if (err?.name === "AbortError") throw new Error("OpenRouter Flux TTS timed out after 15 seconds.");
-      throw err;
-    } finally {
-      clearTimeout(timeout);
+        finalError = err?.name === "AbortError" ? Object.assign(new Error("OpenRouter Flux TTS timed out after 25 seconds."), { retryable: true }) : err;
+        if (attempt >= 2 || finalError?.retryable === false) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      } finally { clearTimeout(timeout); }
     }
+    throw finalError || new Error("OpenRouter Flux TTS failed without an audio response.");
   }
   const apiKey = String(process.env.ELEVENLABS_API_KEY || "").trim();
   if (!apiKey) throw new Error("ElevenLabs TTS is not configured. Set ELEVENLABS_API_KEY.");
@@ -5433,67 +5433,49 @@ async function synthesizeVoiceAudio(text, guildId = null) {
   const voiceId = String(process.env.ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB").trim();
   const modelId = String(process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5").trim();
   const outputFormat = String(process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_22050_32").trim();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  timeout.unref?.();
-
-  let response;
-  try {
-    response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=${encodeURIComponent(outputFormat)}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "xi-api-key": apiKey,
+  let finalError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    timeout.unref?.();
+    try {
+      const response = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=${encodeURIComponent(outputFormat)}`,
+        {
+          method: "POST",
+          headers: { Accept: "audio/mpeg", "Content-Type": "application/json", "xi-api-key": apiKey },
+          body: JSON.stringify({ text: text.slice(0, 200), model_id: modelId, apply_text_normalization: "auto" }),
+          signal: controller.signal,
         },
-        body: JSON.stringify({
-          text: text.slice(0, 200),
-          model_id: modelId,
-          apply_text_normalization: "auto",
-        }),
-        signal: controller.signal,
-      },
-    );
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err?.name === "AbortError") throw new Error("ElevenLabs TTS timed out after 15 seconds.");
-    throw new Error(`ElevenLabs TTS request failed: ${err?.message || String(err)}`);
+      );
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+      if (!response.ok || contentType.includes("json") || contentType.startsWith("text/")) {
+        const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+        const error = new Error(`ElevenLabs TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
+        error.retryable = response.status === 429 || response.status >= 500;
+        throw error;
+      }
+      if (!response.body) { const error = new Error("ElevenLabs TTS returned an empty audio stream."); error.retryable = true; throw error; }
+      const reader = response.body.getReader(); const chunks = []; let totalBytes = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          const chunk = Buffer.from(value); totalBytes += chunk.length;
+          if (totalBytes > 4 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 4 MB memory limit.");
+          chunks.push(chunk);
+        }
+      } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+      finally { reader.releaseLock(); }
+      if (!totalBytes) { const error = new Error("ElevenLabs TTS returned no audio data."); error.retryable = true; throw error; }
+      logDebug("voice.tts-provider-response", { provider: "elevenlabs", model: modelId, attempt, bytes: totalBytes, contentType: contentType || null, requestId: response.headers.get("request-id") || null });
+      return Buffer.concat(chunks, totalBytes);
+    } catch (err) {
+      finalError = err?.name === "AbortError" ? Object.assign(new Error("ElevenLabs TTS timed out after 20 seconds."), { retryable: true }) : err;
+      if (attempt >= 2 || finalError?.retryable === false) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } finally { clearTimeout(timeout); }
   }
-
-  if (!response.ok) {
-    clearTimeout(timeout);
-    const details = (await readBoundedText(response, 64 * 1024).catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
-    throw new Error(`ElevenLabs TTS returned HTTP ${response.status}${details ? `: ${details}` : "."}`);
-  }
-  if (!response.body) {
-    clearTimeout(timeout);
-    throw new Error("ElevenLabs TTS returned an empty audio stream.");
-  }
-
-  const reader = response.body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = Buffer.from(value);
-      totalBytes += chunk.length;
-      if (totalBytes > 2 * 1024 * 1024) throw new Error("TTS audio exceeded Duck's 2 MB memory limit.");
-      chunks.push(chunk);
-    }
-  } catch (err) {
-    await reader.cancel().catch(() => {});
-    if (err?.name === "AbortError") throw new Error("ElevenLabs TTS timed out after 15 seconds.");
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-    reader.releaseLock();
-  }
-
-  if (!totalBytes) throw new Error("ElevenLabs TTS returned no audio data.");
-  return Buffer.concat(chunks, totalBytes);
+  throw finalError || new Error("ElevenLabs TTS failed without an audio response.");
 }
 
 async function playNextVoiceItem(guildId) {
@@ -6428,7 +6410,7 @@ function slashCommandContent(interaction) {
 }
 
 function validateSlashCommandDispatchers(commandBodies) {
-  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capibility", "synccommands"]);
+  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capibility", "synccommands", "suggest", "rank", "leaderboard", "color", "colors"]);
   const setupCommand = commandBodies.find((command) => command.name === "setup");
   const setupOptions = new Map((setupCommand?.options || []).map((option) => [option.name, option]));
   if (!setupOptions.has("channel") || !setupOptions.has("quarantine-channel")) {
@@ -6907,6 +6889,15 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("leave").setDescription("Disconnect Duck from voice."),
     new SlashCommandBuilder().setName("tts").setDescription("Queue a short TTS message while connected to Duck's voice channel.")
       .addStringOption((option) => option.setName("message").setDescription("Text to read aloud.").setMaxLength(200).setRequired(true)),
+    new SlashCommandBuilder().setName("suggest").setDescription("Send an idea to this server's suggestion pond.")
+      .addStringOption((option) => option.setName("idea").setDescription("Your suggestion.").setMinLength(2).setMaxLength(1000).setRequired(true))
+      .addBooleanOption((option) => option.setName("anonymous").setDescription("Hide your identity publicly when the server has Plus.").setRequired(false)),
+    new SlashCommandBuilder().setName("rank").setDescription("Show a member's Pond Level and XP.")
+      .addUserOption((option) => option.setName("member").setDescription("Member to inspect; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("leaderboard").setDescription("Show this server's Pond Level leaderboard."),
+    new SlashCommandBuilder().setName("color").setDescription("Choose a configured Color Dock role.")
+      .addStringOption((option) => option.setName("choice").setDescription("Color label, hex code, random, or remove.").setMinLength(1).setMaxLength(80).setRequired(true)),
+    new SlashCommandBuilder().setName("colors").setDescription("View this server's Color Dock palette."),
   ];
 
   const moderationCommands = [

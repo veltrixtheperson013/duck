@@ -10,6 +10,8 @@ import { logError } from "./logging.js";
 import { readBoundedJson } from "./runtime.js";
 import { getPublicBaseUrl, getStripeClient, isPlusEnabled, isStripeServerConfigured, makeDonationCheckoutInput, makePlusCheckoutInput, makeStripeSubscriptionPatch } from "./stripe.js";
 import { getGuildInsights, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAuditEvent } from "./community.js";
+import { publishHoneypotCounter } from "./automod.js";
+import { publishColorDock } from "./color-roles.js";
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 const pages = new Map([
@@ -228,16 +230,22 @@ function createDuckWebsiteServer(options = {}) {
         const channelIds = new Set(getGuildTextChannels(client, settingsMatch[1], access.member, access.isAdministrator).map(({ id }) => id));
         const categoryIds = new Set(getGuildCategories(client, settingsMatch[1]).map(({ id }) => id));
         const roleIds = new Set(getGuildAssignableRoles(client, settingsMatch[1]).map(({ id }) => id));
-        for (const key of ["modChannelId", "welcomeChannelId", "automodHoneypotChannelId", "aiScanFlagChannelId", "aiScanRulesChannelId", "reactionRoleChannelId", "ticketPanelChannelId"]) if (result.patch[key] != null && !channelIds.has(result.patch[key])) return json(res, 400, { error: `${key} must be visible to both you and Duck in this server.` });
+        for (const key of ["modChannelId", "welcomeChannelId", "automodHoneypotChannelId", "aiScanFlagChannelId", "aiScanRulesChannelId", "reactionRoleChannelId", "ticketPanelChannelId", "levelAnnouncementChannelId", "suggestionChannelId", "starboardChannelId", "colorRoleChannelId"]) if (result.patch[key] != null && !channelIds.has(result.patch[key])) return json(res, 400, { error: `${key} must be visible to both you and Duck in this server.` });
         for (const id of result.patch.aiScanChannelIds || []) if (!channelIds.has(id)) return json(res, 400, { error: "Every AI scan channel must be visible to both you and Duck in this server." });
         if (result.patch.ticketCategoryId && !categoryIds.has(result.patch.ticketCategoryId)) return json(res, 400, { error: "Ticket category must belong to this server." });
         for (const id of [result.patch.ticketSupportRoleId, result.patch.ticketAdminRoleId].filter(Boolean)) if (!roleIds.has(id)) return json(res, 400, { error: "Ticket roles must be safely assignable roles in this server." });
         for (const option of result.patch.reactionRoleOptions || []) if (!roleIds.has(option.roleId)) return json(res, 400, { error: "Every reaction role must be safely assignable by Duck." });
+        for (const id of result.patch.autoroleRoleIds || []) if (!roleIds.has(id)) return json(res, 400, { error: "Every automatic role must be safely assignable by Duck." });
+        for (const reward of result.patch.levelRewards || []) if (!roleIds.has(reward.roleId)) return json(res, 400, { error: "Every level reward must be safely assignable by Duck." });
+        if (result.patch.colorRoleRequiredRoleId && !roleIds.has(result.patch.colorRoleRequiredRoleId)) return json(res, 400, { error: "The Color Dock access role must be safely manageable by Duck." });
+        for (const color of result.patch.colorRoleOptions || []) if (color.roleId && !roleIds.has(color.roleId)) return json(res, 400, { error: "Every existing Color Dock role must be safely manageable by Duck." });
+        for (const id of result.patch.levelIgnoredChannelIds || []) if (!channelIds.has(id)) return json(res, 400, { error: "Every ignored XP channel must belong to this server." });
+        for (const post of result.patch.scheduledPosts || []) if (!channelIds.has(post.channelId)) return json(res, 400, { error: "Every scheduled post channel must belong to this server." });
         if (result.patch.entryChannels?.logChannelId != null && !channelIds.has(result.patch.entryChannels.logChannelId)) return json(res, 400, { error: "logChannelId must be visible to both you and Duck in this server." });
         for (const item of result.patch.automodChannelSlowmodes || []) if (!channelIds.has(item.channelId)) return json(res, 400, { error: "Every channel rate guard must be visible to both you and Duck in this server." });
         for (const item of result.patch.customActions || []) if (item.channelId && !channelIds.has(item.channelId)) return json(res, 400, { error: "Every custom-action channel must be visible to both you and Duck in this server." });
         const changesAdminPolicy = ("capabilityMode" in result.patch && result.patch.capabilityMode !== (current.capabilityMode || "ask")) || ("commandPrefix" in result.patch && result.patch.commandPrefix !== (current.commandPrefix || "!"));
-        const changesAutomation = Object.keys(input).some((key) => key.startsWith("automod") || key.startsWith("aiScan") || key.startsWith("reactionRole") || key.startsWith("ticket") || key === "customActions");
+        const changesAutomation = Object.keys(input).some((key) => key.startsWith("automod") || key.startsWith("aiScan") || key.startsWith("reactionRole") || key.startsWith("ticket") || key.startsWith("autorole") || key.startsWith("level") || key.startsWith("suggestion") || key.startsWith("starboard") || key.startsWith("colorRole") || key === "scheduledPosts" || key === "customActions");
         if ((changesAdminPolicy || changesAutomation) && !access.isAdministrator) return json(res, 403, { error: "Administrator permission is required to change approval policy or server modules." });
         if (result.patch.capabilityMode === "agent" && result.patch.capabilityMode !== current.capabilityMode) return json(res, 400, { error: "Agent mode must be enabled through Discord's Administrator confirmation flow." });
         const ownerSubscription = current.subscription?.provider === "owner" ? { subscription: { ...current.subscription, updatedAt: new Date().toISOString() } } : {};
@@ -245,13 +253,14 @@ function createDuckWebsiteServer(options = {}) {
         await recordAuditEvent(access.botGuild, { userId: access.session.user.id, action: "Updated dashboard settings", reason: `Changed ${Object.keys(input).slice(0, 12).join(", ") || "server settings"}`, source: "dashboard" });
         return json(res, 200, { ok: true, settings: result.settings });
       }
-      const modulePublishMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/(reaction-roles|tickets)\/publish$/);
+      const modulePublishMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/(reaction-roles|tickets|color-roles|honeypot-counter)\/publish$/);
       if (modulePublishMatch && method === "POST") {
         const access = await guildAccess(req, modulePublishMatch[1], true);
         if (access.error) return json(res, access.status, { error: access.error });
         if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." });
         if (!access.isAdministrator) return json(res, 403, { error: "Administrator permission is required to publish server panels." });
-        const message = modulePublishMatch[2] === "reaction-roles" ? await publishReactionRolePanel(access.botGuild, access.session.user.id) : await publishTicketPanel(access.botGuild, access.session.user.id);
+        const publishers = { "reaction-roles": publishReactionRolePanel, tickets: publishTicketPanel, "color-roles": publishColorDock, "honeypot-counter": (guild) => publishHoneypotCounter(guild) };
+        const message = await publishers[modulePublishMatch[2]](access.botGuild, access.session.user.id);
         return json(res, 200, { ok: true, messageId: message.id, url: message.url });
       }
       const brandingMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/branding$/);

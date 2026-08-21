@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { customActionMatches, detectViolation, handleHoneypot, includesTerm } from "../src/automod.js";
+import { customActionMatches, detectViolation, handleHoneypot, includesTerm, normalizedHoneypotStats } from "../src/automod.js";
 import { trimWarningStore } from "../src/config.js";
 
 test("AutoMod term matching uses normalized whole words and phrases", () => {
@@ -42,6 +42,10 @@ test("honeypot softbans once with a return invite then permanently bans", async 
   assert.equal(actions.some(([name]) => name === "unban"), true); assert.equal(actions.some(([name]) => name === "dm"), true); assert.deepEqual(persisted[0][1].honeypotTriggeredUserIds, [member.id]);
   actions.length = 0; await handleHoneypot(message, settings, { honeypotTriggeredUserIds: [member.id] }, () => {});
   assert.deepEqual(actions.map(([name]) => name), ["ban"]); assert.equal(actions[0][2].deleteMessageSeconds, 604_800);
+});
+
+test("honeypot counters normalize malformed persisted values", () => {
+  assert.deepEqual(normalizedHoneypotStats({ total: "4", firstTraps: -2, permanentBans: 2, lastTriggeredAt: "2026-08-21T00:00:00.000Z", lastUserId: "223456789012345678" }), { total: 4, firstTraps: 0, permanentBans: 2, lastTriggeredAt: "2026-08-21T00:00:00.000Z", lastUserId: "223456789012345678" });
 });
 
 test("persistent warning histories have member, guild, and global retention bounds", () => {

@@ -183,6 +183,12 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     automodEnabled: settings.automodEnabled === true,
     automodHoneypotEnabled: settings.automodHoneypotEnabled === true,
     automodHoneypotChannelId: /^\d{10,}$/.test(settings.automodHoneypotChannelId || "") ? settings.automodHoneypotChannelId : null,
+    honeypotStats: {
+      total: Math.min(1_000_000_000, Math.max(0, Number(settings.honeypotStats?.total) || 0)),
+      firstTraps: Math.min(1_000_000_000, Math.max(0, Number(settings.honeypotStats?.firstTraps) || 0)),
+      permanentBans: Math.min(1_000_000_000, Math.max(0, Number(settings.honeypotStats?.permanentBans) || 0)),
+      lastTriggeredAt: typeof settings.honeypotStats?.lastTriggeredAt === "string" ? settings.honeypotStats.lastTriggeredAt : null,
+    },
     automodSwearFilter: settings.automodSwearFilter === true,
     automodNsfwFilter: settings.automodNsfwFilter === true,
     automodInviteFilter: settings.automodInviteFilter === true,
@@ -202,14 +208,42 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     reactionRolesEnabled: settings.reactionRolesEnabled === true,
     reactionRoleChannelId: /^\d{10,}$/.test(settings.reactionRoleChannelId || "") ? settings.reactionRoleChannelId : null,
     reactionRoleTitle: typeof settings.reactionRoleTitle === "string" ? settings.reactionRoleTitle : "Choose your roles",
-    reactionRoleOptions: Array.isArray(settings.reactionRoleOptions) ? settings.reactionRoleOptions.slice(0, 10) : [],
+    reactionRoleMode: plus && settings.reactionRoleMode === "exclusive" ? "exclusive" : "normal",
+    reactionRoleLimit: plus && Number.isInteger(settings.reactionRoleLimit) ? settings.reactionRoleLimit : 0,
+    reactionRoleOptions: Array.isArray(settings.reactionRoleOptions) ? settings.reactionRoleOptions.slice(0, plus ? 25 : 10) : [],
     ticketsEnabled: settings.ticketsEnabled === true,
     ticketPanelChannelId: /^\d{10,}$/.test(settings.ticketPanelChannelId || "") ? settings.ticketPanelChannelId : null,
     ticketCategoryId: /^\d{10,}$/.test(settings.ticketCategoryId || "") ? settings.ticketCategoryId : null,
     ticketSupportRoleId: /^\d{10,}$/.test(settings.ticketSupportRoleId || "") ? settings.ticketSupportRoleId : null,
     ticketAdminRoleId: /^\d{10,}$/.test(settings.ticketAdminRoleId || "") ? settings.ticketAdminRoleId : null,
     ticketPanelTitle: typeof settings.ticketPanelTitle === "string" ? settings.ticketPanelTitle : "Duck Support",
-    ticketOptions: Array.isArray(settings.ticketOptions) ? settings.ticketOptions.slice(0, 5) : [],
+    ticketOptions: Array.isArray(settings.ticketOptions) ? settings.ticketOptions.slice(0, plus ? 10 : 5) : [],
+    ticketTranscriptsEnabled: plus && settings.ticketTranscriptsEnabled === true,
+    autorolesEnabled: settings.autorolesEnabled === true,
+    autoroleRoleIds: Array.isArray(settings.autoroleRoleIds) ? settings.autoroleRoleIds.filter((id) => /^\d{10,}$/.test(id)).slice(0, plus ? 5 : 1) : [],
+    levelsEnabled: settings.levelsEnabled === true,
+    levelAnnouncementChannelId: /^\d{10,}$/.test(settings.levelAnnouncementChannelId || "") ? settings.levelAnnouncementChannelId : null,
+    levelIgnoredChannelIds: Array.isArray(settings.levelIgnoredChannelIds) ? settings.levelIgnoredChannelIds.filter((id) => /^\d{10,}$/.test(id)).slice(0, 25) : [],
+    levelRewards: plus && Array.isArray(settings.levelRewards) ? settings.levelRewards.slice(0, 10) : [],
+    suggestionsEnabled: settings.suggestionsEnabled === true,
+    suggestionChannelId: /^\d{10,}$/.test(settings.suggestionChannelId || "") ? settings.suggestionChannelId : null,
+    suggestionAnonymousEnabled: plus && settings.suggestionAnonymousEnabled === true,
+    starboardEnabled: settings.starboardEnabled === true,
+    starboardChannelId: /^\d{10,}$/.test(settings.starboardChannelId || "") ? settings.starboardChannelId : null,
+    starboardThreshold: Number.isInteger(settings.starboardThreshold) ? settings.starboardThreshold : 3,
+    starboardEmoji: plus && typeof settings.starboardEmoji === "string" ? settings.starboardEmoji : "⭐",
+    starboardColor: plus && Number.isInteger(settings.starboardColor) ? settings.starboardColor : 0xf2c85b,
+    starboardAllowNsfw: plus && settings.starboardAllowNsfw === true,
+    scheduledPosts: plus && Array.isArray(settings.scheduledPosts) ? settings.scheduledPosts.slice(0, 10) : [],
+    colorRolesEnabled: settings.colorRolesEnabled === true,
+    colorRoleChannelId: /^\d{10,}$/.test(settings.colorRoleChannelId || "") ? settings.colorRoleChannelId : null,
+    colorRoleRequiredRoleId: /^\d{10,}$/.test(settings.colorRoleRequiredRoleId || "") ? settings.colorRoleRequiredRoleId : null,
+    colorRoleTitle: typeof settings.colorRoleTitle === "string" ? settings.colorRoleTitle.slice(0, 100) : "Duck Color Dock",
+    colorRoleDescription: typeof settings.colorRoleDescription === "string" ? settings.colorRoleDescription.slice(0, 500) : "Pick one color for your name. Choosing another automatically replaces the old one.",
+    colorRoleAccent: Number.isInteger(settings.colorRoleAccent) ? Math.max(0, Math.min(0xffffff, settings.colorRoleAccent)) : 0x7c68ee,
+    colorRoleAllowRemove: settings.colorRoleAllowRemove !== false,
+    colorRoleRandomOnJoin: plus && settings.colorRoleRandomOnJoin === true,
+    colorRoleOptions: Array.isArray(settings.colorRoleOptions) ? settings.colorRoleOptions.filter((item) => item && typeof item.label === "string" && Number.isInteger(item.color)).slice(0, plus ? 30 : 12).map((item) => ({ roleId: /^\d{10,}$/.test(item.roleId || "") ? item.roleId : null, label: item.label.slice(0, 80), color: Math.max(0, Math.min(0xffffff, item.color)) })) : [],
     customActions,
     loyalty,
     subscription: {
@@ -226,10 +260,11 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodMentionLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleMode", "reactionRoleLimit", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ticketTranscriptsEnabled", "autorolesEnabled", "autoroleRoleIds", "levelsEnabled", "levelAnnouncementChannelId", "levelIgnoredChannelIds", "levelRewards", "suggestionsEnabled", "suggestionChannelId", "suggestionAnonymousEnabled", "starboardEnabled", "starboardChannelId", "starboardThreshold", "starboardEmoji", "starboardColor", "starboardAllowNsfw", "scheduledPosts", "colorRolesEnabled", "colorRoleChannelId", "colorRoleRequiredRoleId", "colorRoleTitle", "colorRoleDescription", "colorRoleAccent", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "colorRoleOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodMentionLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "reactionRolesEnabled", "ticketsEnabled", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
+  const plus = hasPlusEntitlement(current, now);
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "reactionRolesEnabled", "ticketsEnabled", "ticketTranscriptsEnabled", "autorolesEnabled", "levelsEnabled", "suggestionsEnabled", "suggestionAnonymousEnabled", "starboardEnabled", "starboardAllowNsfw", "colorRolesEnabled", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
@@ -241,16 +276,31 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
   if ("aiScanFlagChannelId" in input) { if (input.aiScanFlagChannelId !== null && (typeof input.aiScanFlagChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanFlagChannelId))) throw new TypeError("AI review channel must be a Discord channel or null."); patch.aiScanFlagChannelId = input.aiScanFlagChannelId; }
   if ("aiScanRulesChannelId" in input) { if (input.aiScanRulesChannelId !== null && (typeof input.aiScanRulesChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanRulesChannelId))) throw new TypeError("AI rules channel must be a Discord channel or null."); patch.aiScanRulesChannelId = input.aiScanRulesChannelId; }
   if ("aiScanSensitivity" in input) { if (!AI_SCAN_SENSITIVITIES.has(input.aiScanSensitivity)) throw new TypeError("Unsupported AI scan sensitivity."); patch.aiScanSensitivity = input.aiScanSensitivity; }
-  for (const key of ["reactionRoleChannelId", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId"]) if (key in input) { if (input[key] !== null && (typeof input[key] !== "string" || !/^\d{10,}$/.test(input[key]))) throw new TypeError(`${key} must be a Discord ID or null.`); patch[key] = input[key]; }
+  for (const key of ["reactionRoleChannelId", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "levelAnnouncementChannelId", "suggestionChannelId", "starboardChannelId", "colorRoleChannelId", "colorRoleRequiredRoleId"]) if (key in input) { if (input[key] !== null && (typeof input[key] !== "string" || !/^\d{10,}$/.test(input[key]))) throw new TypeError(`${key} must be a Discord ID or null.`); patch[key] = input[key]; }
   for (const [key, max, fallback] of [["reactionRoleTitle", 100, "Choose your roles"], ["ticketPanelTitle", 100, "Duck Support"]]) if (key in input) { if (typeof input[key] !== "string") throw new TypeError(`${key} must be text.`); patch[key] = input[key].trim().slice(0, max) || fallback; }
   if ("reactionRoleOptions" in input) {
-    if (!Array.isArray(input.reactionRoleOptions) || input.reactionRoleOptions.length > 10) throw new TypeError("Reaction roles must contain up to 10 options.");
+    const limit = plus ? 25 : 10;
+    if (!Array.isArray(input.reactionRoleOptions) || input.reactionRoleOptions.length > limit) throw new TypeError(`Reaction roles must contain up to ${limit} options on this plan.`);
     patch.reactionRoleOptions = input.reactionRoleOptions.map((item, index) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["roleId", "label", "emoji"].includes(key)) || !/^\d{10,}$/.test(item.roleId || "") || typeof item.label !== "string" || typeof item.emoji !== "string") throw new TypeError(`Reaction role ${index + 1} is invalid.`); const label = item.label.trim(); const emoji = item.emoji.trim(); if (!label || label.length > 80 || emoji.length > 32) throw new TypeError(`Reaction role ${index + 1} has invalid text.`); return { roleId: item.roleId, label, emoji }; });
   }
   if ("ticketOptions" in input) {
-    if (!Array.isArray(input.ticketOptions) || input.ticketOptions.length > 5) throw new TypeError("Tickets must contain up to 5 options.");
+    const limit = plus ? 10 : 5;
+    if (!Array.isArray(input.ticketOptions) || input.ticketOptions.length > limit) throw new TypeError(`Tickets must contain up to ${limit} options on this plan.`);
     patch.ticketOptions = input.ticketOptions.map((item, index) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["id", "label", "description", "emoji"].includes(key)) || !/^[a-z0-9_-]{1,24}$/.test(item.id || "") || typeof item.label !== "string" || typeof item.description !== "string" || typeof item.emoji !== "string") throw new TypeError(`Ticket option ${index + 1} is invalid.`); const label = item.label.trim(); const description = item.description.trim(); const emoji = item.emoji.trim(); if (!label || label.length > 80 || description.length > 200 || emoji.length > 32) throw new TypeError(`Ticket option ${index + 1} has invalid text.`); return { id: item.id, label, description, emoji }; });
   }
+  if ("reactionRoleMode" in input) { if (!["normal", "exclusive"].includes(input.reactionRoleMode)) throw new TypeError("Unsupported reaction-role mode."); if (input.reactionRoleMode === "exclusive" && !plus) throw new TypeError("Exclusive reaction roles require Duck Plus."); patch.reactionRoleMode = input.reactionRoleMode; }
+  if ("reactionRoleLimit" in input) { if (!Number.isInteger(input.reactionRoleLimit) || input.reactionRoleLimit < 0 || input.reactionRoleLimit > 25) throw new TypeError("Reaction-role limit must be 0-25."); if (input.reactionRoleLimit > 0 && !plus) throw new TypeError("Reaction-role selection limits require Duck Plus."); patch.reactionRoleLimit = input.reactionRoleLimit; }
+  for (const key of ["ticketTranscriptsEnabled", "suggestionAnonymousEnabled", "starboardAllowNsfw"]) if (input[key] === true && !plus) throw new TypeError(`${key} requires Duck Plus.`);
+  for (const key of ["autoroleRoleIds", "levelIgnoredChannelIds"]) if (key in input) { const max = key === "autoroleRoleIds" ? (plus ? 5 : 1) : 25; if (!Array.isArray(input[key]) || input[key].length > max || input[key].some((id) => typeof id !== "string" || !/^\d{10,}$/.test(id))) throw new TypeError(`${key} must contain up to ${max} Discord IDs.`); patch[key] = [...new Set(input[key])]; }
+  if ("levelRewards" in input) { if (!plus && input.levelRewards?.length) throw new TypeError("Level reward roles require Duck Plus."); if (!Array.isArray(input.levelRewards) || input.levelRewards.length > 10) throw new TypeError("Level rewards must contain up to 10 entries."); patch.levelRewards = input.levelRewards.map((item) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["level", "roleId"].includes(key)) || !Number.isInteger(item.level) || item.level < 1 || item.level > 100 || !/^\d{10,}$/.test(item.roleId || "")) throw new TypeError("Each level reward needs a level from 1-100 and a role."); return { level: item.level, roleId: item.roleId }; }); if (new Set(patch.levelRewards.map(({ level }) => level)).size !== patch.levelRewards.length) throw new TypeError("Level rewards cannot repeat a level."); }
+  if ("starboardThreshold" in input) { if (!Number.isInteger(input.starboardThreshold) || input.starboardThreshold < 2 || input.starboardThreshold > 50) throw new TypeError("Starboard threshold must be 2-50."); patch.starboardThreshold = input.starboardThreshold; }
+  if ("starboardEmoji" in input) { if (typeof input.starboardEmoji !== "string" || !input.starboardEmoji.trim() || input.starboardEmoji.trim().length > 32) throw new TypeError("Starboard emoji is invalid."); if (input.starboardEmoji.trim() !== "⭐" && !plus) throw new TypeError("Custom starboard emoji requires Duck Plus."); patch.starboardEmoji = input.starboardEmoji.trim(); }
+  if ("starboardColor" in input) { if (typeof input.starboardColor !== "string" || !/^#[0-9a-f]{6}$/i.test(input.starboardColor)) throw new TypeError("Starboard color must be a hex color."); if (input.starboardColor.toLowerCase() !== "#f2c85b" && !plus) throw new TypeError("Custom starboard color requires Duck Plus."); patch.starboardColor = Number.parseInt(input.starboardColor.slice(1), 16); }
+  if ("scheduledPosts" in input) { if (!plus && input.scheduledPosts?.length) throw new TypeError("Scheduled pond posts require Duck Plus."); if (!Array.isArray(input.scheduledPosts) || input.scheduledPosts.length > 10) throw new TypeError("Scheduled posts must contain up to 10 entries."); patch.scheduledPosts = input.scheduledPosts.map((item, index) => { const keys = new Set(["id", "name", "enabled", "channelId", "intervalMinutes", "message"]); if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !keys.has(key)) || !/^[a-zA-Z0-9_-]{1,36}$/.test(item.id || "") || typeof item.name !== "string" || typeof item.enabled !== "boolean" || !/^\d{10,}$/.test(item.channelId || "") || !Number.isInteger(item.intervalMinutes) || item.intervalMinutes < 15 || item.intervalMinutes > 10_080 || typeof item.message !== "string") throw new TypeError(`Scheduled post ${index + 1} is invalid.`); const name = item.name.trim(); const message = item.message.trim(); if (!name || name.length > 60 || !message || message.length > 1_000) throw new TypeError(`Scheduled post ${index + 1} has invalid text.`); return { id: item.id, name, enabled: item.enabled, channelId: item.channelId, intervalMinutes: item.intervalMinutes, message }; }); if (new Set(patch.scheduledPosts.map(({ id }) => id)).size !== patch.scheduledPosts.length) throw new TypeError("Scheduled post IDs must be unique."); }
+  for (const [key, max, fallback] of [["colorRoleTitle", 100, "Duck Color Dock"], ["colorRoleDescription", 500, "Pick one color for your name."]]) if (key in input) { if (typeof input[key] !== "string") throw new TypeError(`${key} must be text.`); patch[key] = input[key].trim().slice(0, max) || fallback; }
+  if ("colorRoleAccent" in input) { if (typeof input.colorRoleAccent !== "string" || !/^#[0-9a-f]{6}$/i.test(input.colorRoleAccent)) throw new TypeError("Color Dock accent must be a hex color."); patch.colorRoleAccent = Number.parseInt(input.colorRoleAccent.slice(1), 16); }
+  if (input.colorRoleRandomOnJoin === true && !plus) throw new TypeError("Random join color assignment requires Duck Plus.");
+  if ("colorRoleOptions" in input) { const limit = plus ? 30 : 12; if (!Array.isArray(input.colorRoleOptions) || input.colorRoleOptions.length > limit) throw new TypeError(`Color Dock supports up to ${limit} colors on this plan.`); patch.colorRoleOptions = input.colorRoleOptions.map((item, index) => { if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["roleId", "label", "color"].includes(key)) || (item.roleId !== null && !/^\d{10,}$/.test(item.roleId || "")) || typeof item.label !== "string" || typeof item.color !== "string" || !/^#[0-9a-f]{6}$/i.test(item.color)) throw new TypeError(`Color ${index + 1} is invalid.`); const label = item.label.trim(); if (!label || label.length > 80) throw new TypeError(`Color ${index + 1} needs a label of 1-80 characters.`); return { roleId: item.roleId, label, color: Number.parseInt(item.color.slice(1), 16) }; }); if (new Set(patch.colorRoleOptions.map(({ label }) => label.toLocaleLowerCase("en-US"))).size !== patch.colorRoleOptions.length) throw new TypeError("Color labels must be unique."); const assignedRoleIds = patch.colorRoleOptions.map(({ roleId }) => roleId).filter(Boolean); if (new Set(assignedRoleIds).size !== assignedRoleIds.length) throw new TypeError("A Discord role cannot appear twice in Color Dock."); }
   if ("automodCustomWords" in input) {
     if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
     if (input.automodCustomWords.some((value) => typeof value !== "string")) throw new TypeError("Every custom word must be text.");

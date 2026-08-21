@@ -149,6 +149,54 @@ test("community modules and rule-aware scanning use bounded server-owned configu
   assert.throws(() => makeSettingsPatch({}, { ticketOptions: Array.from({ length: 6 }, (_, index) => ({ id: `x${index}`, label: "x", description: "", emoji: "" })) }), /up to 5/i);
 });
 
+test("Community Studio keeps useful Free modules and gates advanced controls to Plus", () => {
+  const roleId = "123456789012345678";
+  const channelId = "223456789012345678";
+  const free = makeSettingsPatch({}, {
+    autorolesEnabled: true,
+    autoroleRoleIds: [roleId],
+    levelsEnabled: true,
+    suggestionsEnabled: true,
+    suggestionChannelId: channelId,
+    starboardEnabled: true,
+    starboardChannelId: channelId,
+    starboardThreshold: 4,
+  }).settings;
+  assert.equal(free.levelsEnabled, true);
+  assert.deepEqual(free.autoroleRoleIds, [roleId]);
+  assert.equal(free.starboardEmoji, "⭐");
+  assert.throws(() => makeSettingsPatch({}, { autoroleRoleIds: [roleId, "323456789012345678"] }), /up to 1/);
+  assert.throws(() => makeSettingsPatch({}, { suggestionAnonymousEnabled: true }), /requires Duck Plus/);
+  assert.throws(() => makeSettingsPatch({}, { starboardEmoji: "🦆" }), /requires Duck Plus/);
+  assert.throws(() => makeSettingsPatch({}, { levelRewards: [{ level: 5, roleId }] }), /require Duck Plus/);
+
+  const plus = { subscription: { provider: "stripe", tier: "plus", status: "active" } };
+  const advanced = makeSettingsPatch(plus, {
+    autoroleRoleIds: [roleId, "323456789012345678"],
+    levelRewards: [{ level: 5, roleId }],
+    suggestionAnonymousEnabled: true,
+    starboardEmoji: "🦆",
+    starboardColor: "#16845c",
+    scheduledPosts: [{ id: "rules_reminder", name: "Rules reminder", enabled: true, channelId, intervalMinutes: 1440, message: "Remember the rules." }],
+  }).settings;
+  assert.equal(advanced.suggestionAnonymousEnabled, true);
+  assert.equal(advanced.starboardColor, 0x16845c);
+  assert.equal(advanced.scheduledPosts.length, 1);
+});
+
+test("Color Dock validates cosmetic palettes and keeps larger automation in Plus", () => {
+  const roleId = "123456789012345678";
+  const channelId = "223456789012345678";
+  const free = makeSettingsPatch({}, { colorRolesEnabled: true, colorRoleChannelId: channelId, colorRoleRequiredRoleId: roleId, colorRoleTitle: "Pond colors", colorRoleDescription: "Choose one.", colorRoleAccent: "#7c68ee", colorRoleAllowRemove: true, colorRoleOptions: [{ roleId: null, label: "Lagoon", color: "#20a4a8" }] }).settings;
+  assert.equal(free.colorRoleOptions[0].color, 0x20a4a8);
+  assert.equal(free.colorRoleAllowRemove, true);
+  assert.throws(() => makeSettingsPatch({}, { colorRoleRandomOnJoin: true }), /requires Duck Plus/);
+  assert.throws(() => makeSettingsPatch({}, { colorRoleOptions: Array.from({ length: 13 }, (_, index) => ({ roleId: null, label: `Color ${index}`, color: "#112233" })) }), /up to 12/);
+  assert.throws(() => makeSettingsPatch({}, { colorRoleOptions: [{ roleId: null, label: "Bad", color: "red" }] }), /invalid/);
+  const plus = { subscription: { tier: "plus", status: "active" } };
+  assert.equal(makeSettingsPatch(plus, { colorRoleRandomOnJoin: true }).settings.colorRoleRandomOnJoin, true);
+});
+
 test("custom actions use safe allowlists and loyalty-based caps", () => {
   const action = (index, actionType = "reply") => ({
     id: `rule_${index}`,
