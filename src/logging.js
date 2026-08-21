@@ -56,14 +56,24 @@ function splitDiscordLines(lines, maxLength = 1900) {
   const chunks = [];
   let current = "";
 
-  for (const line of lines) {
-    const safeLine = limitDiscordContent(line, maxLength);
-    const next = current ? `${current}\n${safeLine}` : safeLine;
-    if (next.length > maxLength && current) {
-      chunks.push(current);
-      current = safeLine;
-    } else {
-      current = next;
+  for (const rawLine of lines) {
+    let line = String(rawLine ?? "");
+    const segments = [];
+    while (line.length > maxLength) {
+      const whitespace = line.lastIndexOf(" ", maxLength);
+      const splitAt = whitespace >= Math.floor(maxLength * 0.55) ? whitespace : maxLength;
+      segments.push(line.slice(0, splitAt).trimEnd());
+      line = line.slice(splitAt).trimStart();
+    }
+    segments.push(line);
+    for (const segment of segments) {
+      const next = current ? `${current}\n${segment}` : segment;
+      if (next.length > maxLength && current) {
+        chunks.push(current);
+        current = segment;
+      } else {
+        current = next;
+      }
     }
   }
 

@@ -1,7 +1,7 @@
-import { ActionRowBuilder, EmbedBuilder, StringSelectMenuBuilder } from "discord.js";
+import { ActionRowBuilder, EmbedBuilder, PermissionsBitField, StringSelectMenuBuilder } from "discord.js";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
-import { isSafeSelfAssignableRole, recordAuditEvent } from "./community.js";
+import { assertCanPublishTo, isSafeSelfAssignableRole, recordAuditEvent } from "./community.js";
 
 function hexColor(value) { return `#${Math.max(0, Math.min(0xffffff, Number(value) || 0)).toString(16).padStart(6, "0").toUpperCase()}`; }
 function colorOptionEmoji(color) {
@@ -50,6 +50,8 @@ async function publishColorDock(guild, actorId) {
   if (!settings.colorRolesEnabled) throw Object.assign(new Error("Enable Color Dock first."), { status: 409 });
   const channel = guild.channels.cache.get(settings.colorRoleChannelId);
   if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("Choose a valid Color Dock channel."), { status: 400 });
+  const botMember = assertCanPublishTo(guild, channel);
+  if (!botMember.permissions.has(PermissionsBitField.Flags.ManageRoles)) throw Object.assign(new Error("Duck needs Manage Roles to create and assign Color Dock roles."), { status: 403 });
   if (!settings.colorRoleOptions.length) throw Object.assign(new Error("Add at least one color first."), { status: 400 });
   const options = await materializeColorRoles(guild, settings.colorRoleOptions);
   if (options.some((option, index) => option.roleId !== settings.colorRoleOptions[index].roleId)) updateGuildSettings(guild.id, { colorRoleOptions: options });

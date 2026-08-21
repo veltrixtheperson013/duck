@@ -40,7 +40,10 @@ test("server branding requires three calendar months of paid Plus", () => {
   assert.equal(getBrandingEligibleAt(paid), "2026-04-30T12:00:00.000Z");
   assert.equal(hasMaturePlusEntitlement(paid, now), true);
   assert.equal(hasMaturePlusEntitlement({ subscription: { ...paid.subscription, startedAt: "2026-03-01T00:00:00.000Z" } }, now), false);
-  assert.equal(hasMaturePlusEntitlement({ subscription: { provider: "owner", tier: "plus", status: "active", startedAt: "2020-01-01T00:00:00.000Z" } }, now), false);
+  const owner = { subscription: { provider: "owner", tier: "plus", status: "active" } };
+  assert.equal(hasMaturePlusEntitlement(owner, now), true);
+  assert.equal(getPlusLoyalty(owner, now).level, "plus_6");
+  assert.equal(getPlusLoyalty(owner, now).customActionLimit, null);
 });
 
 test("fun commands keep a Free set and enforce Plus toggles", () => {
@@ -48,9 +51,12 @@ test("fun commands keep a Free set and enforce Plus toggles", () => {
   assert.equal(free.funQuackEnabled, true);
   assert.equal(free.funDuckFactEnabled, true);
   assert.equal(free.funCoinflipEnabled, true);
+  assert.equal(free.funRpsEnabled, true);
+  assert.equal(free.funFortuneEnabled, true);
   assert.equal(free.funRoastEnabled, false);
   assert.equal(getFunCommandAccess(free, "quack").allowed, true);
   assert.equal(getFunCommandAccess(free, "roast").reason, "plus_required");
+  assert.equal(getFunCommandAccess(free, "battle").reason, "plus_required");
   assert.throws(() => makeSettingsPatch({}, { funRoastEnabled: true }), /requires Duck Plus/);
 
   const plus = { subscription: { tier: "plus", status: "active" } };

@@ -62,6 +62,11 @@ const FUN_COMMANDS = Object.freeze([
   { command: "truth", key: "funTruthEnabled", label: "Truth", tier: "free" },
   { command: "dare", key: "funDareEnabled", label: "Dare", tier: "free" },
   { command: "truthordare", key: "funTruthOrDareEnabled", label: "Truth or dare", tier: "free" },
+  { command: "rps", key: "funRpsEnabled", label: "Rock paper scissors", tier: "free" },
+  { command: "fortune", key: "funFortuneEnabled", label: "Fortunes", tier: "free" },
+  { command: "topic", key: "funTopicEnabled", label: "Conversation topics", tier: "free" },
+  { command: "joke", key: "funJokeEnabled", label: "Pond jokes", tier: "free" },
+  { command: "number", key: "funNumberEnabled", label: "Random number", tier: "free" },
   { command: "ship", key: "funShipEnabled", label: "Compatibility", tier: "plus" },
   { command: "curse", key: "funCurseEnabled", label: "Curses and blessings", tier: "plus" },
   { command: "spinwheel", key: "funSpinwheelEnabled", label: "Spin wheel", tier: "plus" },
@@ -76,6 +81,11 @@ const FUN_COMMANDS = Object.freeze([
   { command: "neverhaveiever", key: "funNeverHaveIEverEnabled", label: "Never have I ever", tier: "plus" },
   { command: "hotseat", key: "funHotseatEnabled", label: "Hot seat", tier: "plus" },
   { command: "vibecheck", key: "funVibeCheckEnabled", label: "Vibe check", tier: "plus" },
+  { command: "battle", key: "funBattleEnabled", label: "Pond battle", tier: "plus" },
+  { command: "dramatic", key: "funDramaticEnabled", label: "Dramatic introductions", tier: "plus" },
+  { command: "conspiracy", key: "funConspiracyEnabled", label: "Silly conspiracies", tier: "plus" },
+  { command: "challenge", key: "funChallengeEnabled", label: "Mini challenges", tier: "plus" },
+  { command: "caption", key: "funCaptionEnabled", label: "Caption generator", tier: "plus" },
 ]);
 const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
 const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with"]);
@@ -111,23 +121,26 @@ function addSubscriptionMonths(value, months) {
 function getPlusLoyalty(settings, now = Date.now()) {
   const plus = hasPlusEntitlement(settings, now);
   const subscription = settings?.subscription ?? {};
+  const owner = plus && subscription.provider === "owner";
   const paid = plus && subscription.provider === "stripe";
   const startedAt = paid ? Date.parse(subscription.startedAt || "") : NaN;
   const threeAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 3) || "") : NaN;
   const sixAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 6) || "") : NaN;
   const months = Number.isFinite(startedAt) ? Math.max(0, Math.floor((now - startedAt) / (30.4375 * 24 * 60 * 60_000))) : 0;
-  const level = !plus ? "free" : Number.isFinite(sixAt) && now >= sixAt ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : "plus";
+  const level = !plus ? "free" : owner || (Number.isFinite(sixAt) && now >= sixAt) ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : "plus";
   const customActionLimit = level === "plus_6" ? null : level === "plus_3" ? 50 : plus ? 25 : 5;
   const memoryReplies = level === "plus_6" ? 50 : level === "plus_3" ? 30 : plus ? 16 : 6;
   const nextAt = level === "plus" && Number.isFinite(threeAt) ? new Date(threeAt).toISOString() : level === "plus_3" && Number.isFinite(sixAt) ? new Date(sixAt).toISOString() : null;
   const progressStart = level === "plus" ? startedAt : level === "plus_3" ? threeAt : NaN;
   const progressEnd = level === "plus" ? threeAt : level === "plus_3" ? sixAt : NaN;
   const progress = Number.isFinite(progressStart) && Number.isFinite(progressEnd) ? Math.max(0, Math.min(1, (now - progressStart) / (progressEnd - progressStart))) : level === "plus_6" ? 1 : 0;
-  return { level, paid, months, startedAt: paid ? subscription.startedAt : null, nextAt, progress, customActionLimit, memoryReplies };
+  return { level, paid, owner, months, startedAt: paid ? subscription.startedAt : null, nextAt, progress, customActionLimit, memoryReplies };
 }
 
 function hasMaturePlusEntitlement(settings, now = Date.now()) {
-  if (!hasPlusEntitlement(settings, now) || settings?.subscription?.provider !== "stripe") return false;
+  if (!hasPlusEntitlement(settings, now)) return false;
+  if (settings?.subscription?.provider === "owner") return true;
+  if (settings?.subscription?.provider !== "stripe") return false;
   const eligibleAt = Date.parse(getBrandingEligibleAt(settings) || "");
   return Number.isFinite(eligibleAt) && eligibleAt <= now;
 }

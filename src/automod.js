@@ -1,7 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionsBitField } from "discord.js";
 import { addMemberWarning, getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings } from "./dashboard-config.js";
-import { recordAuditEvent } from "./community.js";
+import { assertCanPublishTo, recordAuditEvent } from "./community.js";
 
 const SWEAR_WORDS = ["fuck", "shit", "bitch", "cunt", "nigger", "nigga", "faggot", "retard"];
 const SEXUAL_TERMS = ["porn", "hentai", "nudes", "nude", "onlyfans", "sex tape", "rule34", "r34", "xxx"];
@@ -202,6 +202,7 @@ async function publishHoneypotCounter(guild, statsOverride = null, persist = upd
   if (!settings.automodHoneypotEnabled || !settings.automodHoneypotChannelId) throw Object.assign(new Error("Enable the honeypot and choose its channel first."), { status: 409 });
   const channel = guild.channels.cache.get(settings.automodHoneypotChannelId);
   if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("The honeypot channel is unavailable."), { status: 400 });
+  assertCanPublishTo(guild, channel);
   const stats = normalizedHoneypotStats(statsOverride || stored.honeypotStats);
   const existingId = /^\d{10,}$/.test(stored.honeypotCounterMessageId || "") ? stored.honeypotCounterMessageId : null;
   const existing = existingId && channel.messages?.fetch ? await channel.messages.fetch(existingId).catch(() => null) : null;

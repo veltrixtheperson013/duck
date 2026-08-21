@@ -37,6 +37,19 @@ const SELF_ASSIGN_BLOCKED_PERMISSIONS = [
 function clean(value, max = 240) { return String(value || "").replace(/\s+/g, " ").trim().slice(0, max); }
 function withSafeEmoji(button, value, fallback) { try { return button.setEmoji(value || fallback); } catch { return button.setEmoji(fallback); } }
 function isSafeSelfAssignableRole(role) { return Boolean(role && !role.managed && role.editable && !role.permissions.any(SELF_ASSIGN_BLOCKED_PERMISSIONS)); }
+function assertCanPublishTo(guild, channel) {
+  const botMember = guild?.members?.me;
+  if (!botMember) throw Object.assign(new Error("Duck is still connecting to this server. Try publishing again in a moment."), { status: 503 });
+  const permissions = channel?.permissionsFor?.(botMember);
+  const required = [
+    [PermissionsBitField.Flags.ViewChannel, "View Channel"],
+    [PermissionsBitField.Flags.SendMessages, "Send Messages"],
+    [PermissionsBitField.Flags.EmbedLinks, "Embed Links"],
+  ];
+  const missing = required.filter(([permission]) => !permissions?.has(permission)).map(([, label]) => label);
+  if (missing.length) throw Object.assign(new Error(`Duck needs ${missing.join(", ")} in #${channel?.name || "the selected channel"}.`), { status: 403 });
+  return botMember;
+}
 function getActivity(guildId) {
   let current = activity.get(guildId);
   const today = new Date().toISOString().slice(0, 10);
@@ -45,6 +58,7 @@ function getActivity(guildId) {
 }
 function recordMessageActivity(message) { const current = getActivity(message.guildId); current.messages += 1; if (current.activeUsers.size < 10_000) current.activeUsers.add(message.author.id); }
 function recordAiFlag(guildId) { getActivity(guildId).aiFlags += 1; }
+function auditSourceLabel(source) { return ({ discord: "Discord command", dashboard: "Web dashboard", automod: "Duck AutoMod", "ai-review": "AI review suggestion" })[source] || "Discord"; }
 
 async function recordAuditEvent(guild, event) {
   if (!guild?.id) return null;
@@ -64,12 +78,12 @@ async function recordAuditEvent(guild, event) {
   const logChannelId = settings.entryChannels?.logChannelId;
   const channel = logChannelId ? guild.channels.cache.get(logChannelId) : null;
   if (channel?.isTextBased?.() && typeof channel.send === "function") {
-    const embed = new EmbedBuilder().setColor(0x16845c).setTitle(entry.action).addFields(
-      { name: "User", value: entry.userId ? `<@${entry.userId}> (\`${entry.userId}\`)` : "Duck system", inline: true },
-      { name: "Time", value: `<t:${Math.floor(Date.parse(entry.createdAt) / 1000)}:F>`, inline: true },
-      { name: "Reason", value: entry.reason },
-      ...(entry.targetId ? [{ name: "Target", value: `<@${entry.targetId}> (\`${entry.targetId}\`)` }] : []),
-    ).setFooter({ text: `${entry.source} · Duck audit log` });
+    const embed = new EmbedBuilder().setColor(0x16845c).setTitle("Duck activity log").setDescription(`**${entry.action}**`).addFields(
+      { name: "Started by", value: entry.userId ? `<@${entry.userId}> (Discord ID \`${entry.userId}\`)` : "Duck automatically", inline: true },
+      { name: "When", value: `<t:${Math.floor(Date.parse(entry.createdAt) / 1000)}:F>`, inline: true },
+      { name: "Why it happened", value: entry.reason },
+      ...(entry.targetId ? [{ name: "Member affected", value: `<@${entry.targetId}> (Discord ID \`${entry.targetId}\`)` }] : []),
+    ).setFooter({ text: `${auditSourceLabel(entry.source)} · Duck keeps this record for your staff team` });
     await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
   }
   return entry;
@@ -98,6 +112,8 @@ async function publishReactionRolePanel(guild, actorId) {
   if (!settings.reactionRolesEnabled) throw Object.assign(new Error("Enable reaction roles first."), { status: 409 });
   const channel = guild.channels.cache.get(settings.reactionRoleChannelId);
   if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("Choose a valid reaction-role channel."), { status: 400 });
+  const botMember = assertCanPublishTo(guild, channel);
+  if (!botMember.permissions.has(PermissionsBitField.Flags.ManageRoles)) throw Object.assign(new Error("Duck needs Manage Roles to publish a working reaction-role panel."), { status: 403 });
   const options = settings.reactionRoleOptions;
   if (!options.length) throw Object.assign(new Error("Add at least one reaction role."), { status: 400 });
   const rows = [];
@@ -115,6 +131,8 @@ async function publishTicketPanel(guild, actorId) {
   if (!settings.ticketsEnabled) throw Object.assign(new Error("Enable tickets first."), { status: 409 });
   const channel = guild.channels.cache.get(settings.ticketPanelChannelId);
   if (!channel?.isTextBased?.() || typeof channel.send !== "function") throw Object.assign(new Error("Choose a valid ticket panel channel."), { status: 400 });
+  const botMember = assertCanPublishTo(guild, channel);
+  if (!botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) throw Object.assign(new Error("Duck needs Manage Channels to create tickets from this panel."), { status: 403 });
   const options = settings.ticketOptions;
   if (!options.length) throw Object.assign(new Error("Add at least one ticket option."), { status: 400 });
   const rows = [];
@@ -247,4 +265,4 @@ async function handleCommunityButton(interaction) {
   return false;
 }
 
-export { getGuildInsights, handleAiActionSelection, handleCommunityButton, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity };
+export { assertCanPublishTo, getGuildInsights, handleAiActionSelection, handleCommunityButton, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity };

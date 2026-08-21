@@ -7,9 +7,20 @@ import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyComm
 import { claimDiscordEvent, normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, planLocalModerationTool, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, requesterActionBlockReason, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
 import { handleAutomodAndCustomActions, publishHoneypotCounter } from "./automod.js";
 import { queueAiScan } from "./ai-scan.js";
-import { handleAiActionSelection, handleCommunityButton, recordMessageActivity } from "./community.js";
+import { getGuildInsights, handleAiActionSelection, handleCommunityButton, recordAuditEvent, recordMessageActivity } from "./community.js";
 import { applyAutoroles, awardMessageXp, flushLevelProfiles, handleCommunityReaction, handleCommunitySlashCommand, handleSuggestionDecision, startCommunityStudio } from "./community-studio.js";
 import { applyRandomJoinColor, handleColorCommand, handleColorSelect } from "./color-roles.js";
+
+async function sendDuckChatPages(message, content, options = {}, messageToEdit = null) {
+  const chunks = splitDiscordLines(String(content ?? "").split(/\r?\n/), 3900);
+  const pageOptions = (index) => ({ ...options, title: chunks.length > 1 ? `${options.title || "Duck"} · ${index + 1}/${chunks.length}` : options.title });
+  const firstPayload = makeDuckChatPayload(message, chunks[0] || "Duck returned an empty response.", pageOptions(0));
+  const first = messageToEdit ? await messageToEdit.edit(firstPayload) : await message.reply(firstPayload);
+  for (let index = 1; index < chunks.length; index += 1) {
+    await message.channel.send(makeDuckChatPayload(message, chunks[index], pageOptions(index)));
+  }
+  return first;
+}
 
 if (process.argv.includes("--check-commands")) {
   const body = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
@@ -128,6 +139,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (colorResult !== false) return;
       const studioResult = await handleCommunitySlashCommand(interaction);
       if (studioResult !== false) return;
+      if (interaction.commandName === "purgeuser") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", ephemeral: true });
+        const channelPermissions = interaction.channel?.permissionsFor?.(interaction.guild.members.me);
+        if (!channelPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Duck needs Manage Messages in this channel.", ephemeral: true });
+        const user = interaction.options.getUser("member", true); const count = interaction.options.getInteger("count", true);
+        await interaction.deferReply({ ephemeral: true });
+        const recent = await interaction.channel.messages.fetch({ limit: 100 });
+        const matches = recent.filter((item) => item.author.id === user.id && !item.pinned).first(count);
+        const removed = matches.length ? await interaction.channel.bulkDelete(matches, true) : null;
+        const removedCount = removed?.size || 0;
+        await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: user.id, action: "Purged member messages", reason: `${removedCount} recent message(s) removed from #${interaction.channel.name}`, source: "discord" });
+        await interaction.editReply(`Removed **${removedCount}** recent message${removedCount === 1 ? "" : "s"} from ${user}. Messages older than Discord's two-week bulk-delete limit are skipped.`);
+        return;
+      }
+      if (interaction.commandName === "modlog") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ViewAuditLog)) return interaction.reply({ content: "You need View Audit Log to use this command.", ephemeral: true });
+        const count = interaction.options.getInteger("count", false) || 10; const entries = getGuildInsights(interaction.guild).auditLog.slice(0, count);
+        const lines = entries.map((entry, index) => `${index + 1}. **${entry.action}** · <t:${Math.floor(Date.parse(entry.createdAt) / 1000)}:R>\n${entry.userId ? `By <@${entry.userId}> · ` : ""}${entry.targetId ? `Target <@${entry.targetId}> · ` : ""}${entry.reason}`);
+        const chunks = splitDiscordLines((lines.join("\n\n") || "Duck has no stored moderation events for this server yet.").split(/\r?\n/));
+        await interaction.reply({ content: chunks[0], ephemeral: true, allowedMentions: { parse: [] } });
+        for (const chunk of chunks.slice(1)) await interaction.followUp({ content: chunk, ephemeral: true, allowedMentions: { parse: [] } });
+        return;
+      }
       if (interaction.commandName === "duck") {
         const prompt = interaction.options.getString("prompt", false) || "commands";
         const response = await makeSlashDuckResponse(interaction, prompt);
@@ -622,14 +656,14 @@ client.on(Events.MessageCreate, async (message) => {
             return;
           }
         }
-        await queueMessage.edit(makeDuckChatPayload(message, parsedToolCall.content || content, {
+        await sendDuckChatPages(message, parsedToolCall.content || content, {
           color: chatResult.error ? DUCK_COLORS.danger : DUCK_COLORS.brand,
-        })).catch(() => {});
+        }, queueMessage);
       } else if (content) {
         const parsedToolCall = parseInlineToolCall(planningMessage, content);
-        await message.reply(makeDuckChatPayload(message, parsedToolCall.content || content, {
+        await sendDuckChatPages(message, parsedToolCall.content || content, {
           color: chatResult.error ? DUCK_COLORS.danger : DUCK_COLORS.brand,
-        }));
+        });
       } else if (queueMessage) {
         await queueMessage.edit(makeDuckChatPayload(message, "I tried to answer, but AI returned no content and I do not have a local fallback for that.", {
           title: "AI Response Failed",
