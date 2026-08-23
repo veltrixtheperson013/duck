@@ -17,6 +17,7 @@ const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), 
 const pages = new Map([
   ["/", { file: "index.html", type: "text/html; charset=utf-8" }], ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/features", { file: "features.html", type: "text/html; charset=utf-8" }], ["/features/", { file: "features.html", type: "text/html; charset=utf-8" }], ["/features.html", { file: "features.html", type: "text/html; charset=utf-8" }],
+  ["/updates", { file: "updates.html", type: "text/html; charset=utf-8" }], ["/updates/", { file: "updates.html", type: "text/html; charset=utf-8" }], ["/updates.html", { file: "updates.html", type: "text/html; charset=utf-8" }],
   ["/dashboard", { file: "dashboard.html", type: "text/html; charset=utf-8" }], ["/dashboard/", { file: "dashboard.html", type: "text/html; charset=utf-8" }], ["/dashboard.html", { file: "dashboard.html", type: "text/html; charset=utf-8" }],
   ["/pricing", { file: "pricing.html", type: "text/html; charset=utf-8" }], ["/pricing/", { file: "pricing.html", type: "text/html; charset=utf-8" }], ["/pricing.html", { file: "pricing.html", type: "text/html; charset=utf-8" }],
   ["/donate", { file: "donate.html", type: "text/html; charset=utf-8" }], ["/donate/", { file: "donate.html", type: "text/html; charset=utf-8" }], ["/donate.html", { file: "donate.html", type: "text/html; charset=utf-8" }],

@@ -6,6 +6,7 @@ test("dashboard settings allowlist fields and gate Plus models per guild", () =>
   const free = makeSettingsPatch({}, { aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" });
   assert.equal(free.settings.aiChatEnabled, false);
   assert.equal(free.settings.aiModel, "google/gemma-4-31b-it:free");
+  assert.equal(getPublicModelCatalog().ai.find(({ id }) => id === "openrouter/free").label, "OpenRouter Free Router");
   assert.throws(() => makeSettingsPatch({}, { aiModel: "tencent/hy3" }), /requires Duck Plus/);
   assert.throws(() => makeSettingsPatch({}, { subscription: { tier: "plus" } }), /Unknown setting/);
 

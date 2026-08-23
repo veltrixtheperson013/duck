@@ -38,6 +38,9 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(privacy.status, 200);
     assert.match(await privacy.text(), /Service providers/);
     assert.match(await (await fetch(`${origin}/features`)).text(), /Serious controls with deliberate guardrails/);
+    const updates = await fetch(`${origin}/updates`);
+    assert.equal(updates.status, 200);
+    assert.match(await updates.text(), /AI scanning is back on the free router/);
 
     const guide = await fetch(`${origin}/guide`);
     assert.equal(guide.status, 200);
@@ -47,6 +50,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.doesNotMatch(guideText, /Configure the environment|Choose an AI provider|Configure voice and TTS|Troubleshooting/);
     assert.equal((await fetch(`${origin}/guide.html`)).status, 200);
     assert.equal((await fetch(`${origin}/privacy-policy.html`)).status, 200);
+    assert.equal((await fetch(`${origin}/updates.html`)).status, 200);
 
     const css = await fetch(`${origin}/styles.css`);
     assert.equal(css.status, 200);
@@ -68,7 +72,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260833/);
+    assert.match(dashboardText, /styles\.css\?v=20260834/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
     assert.doesNotMatch(dashboardText, /data-settings-tab="billing"/);
@@ -114,6 +118,7 @@ test("public pages contain no GitHub references", async () => {
   const pages = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/features.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/updates.html", import.meta.url), "utf8"),
     readFile(new URL("../public/privacy-policy.html", import.meta.url), "utf8"),
     readFile(new URL("../public/guide.html", import.meta.url), "utf8"),
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),

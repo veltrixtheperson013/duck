@@ -12,10 +12,10 @@ const AI_MODELS = Object.freeze([
     disclaimer: "This provider may retain prompts, but states they are not used for training.",
   },
   {
-    id: "openai/gpt-oss-20b:free",
-    label: "OpenAI GPT-OSS 20B",
+    id: "openrouter/free",
+    label: "OpenRouter Free Router",
     tier: "free",
-    disclaimer: "This provider may retain prompts, but states they are not used for training.",
+    disclaimer: "OpenRouter selects an available free model. The model provider and its data policy can vary between requests.",
   },
   {
     id: "tencent/hy3",

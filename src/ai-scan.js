@@ -4,7 +4,7 @@ import { getPublicGuildSettings } from "./dashboard-config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, readBoundedJson, readBoundedText } from "./runtime.js";
 import { recordAiFlag } from "./community.js";
 
-const AI_SCAN_MODEL = "openai/gpt-oss-20b:free";
+const AI_SCAN_MODEL = "openrouter/free";
 const CATEGORIES = new Set(["harassment", "hate", "sexual", "violence", "self_harm", "scam", "spam", "other"]);
 const thresholds = { low: 0.9, balanced: 0.75, high: 0.6 };
 const scheduler = new FairGuildScheduler({ globalConcurrency: 2, guildConcurrency: 1, maxQueuedPerGuild: 10, maxQueuedGlobal: 50 });

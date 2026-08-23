@@ -6,7 +6,7 @@ test("AI scanner accepts only bounded advisory flags", () => {
   assert.deepEqual(parseScanResult('{"flag":true,"category":"harassment","confidence":0.91,"reason":"Targeted insults."}'), { category: "harassment", confidence: 0.91, reason: "Targeted insults." });
   assert.equal(parseScanResult('{"flag":false,"category":"other","confidence":0.9,"reason":"Safe."}'), null);
   assert.equal(parseScanResult('{"flag":true,"category":"ban_them","confidence":1,"reason":"No."}'), null);
-  assert.match(AI_SCAN_MODEL, /:free$/);
+  assert.equal(AI_SCAN_MODEL, "openrouter/free");
 });
 
 test("AI scanner is channel opt-in and sends only text to its fixed free model", async () => {
