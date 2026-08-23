@@ -6,15 +6,15 @@
   <meta name="description" content="Duck is an AI-powered Discord moderation and community bot with approval-gated tools, voice TTS, and useful server utilities.">
   <title>Duck — Discord moderation with feathers</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="styles.css?v=20260832" as="style"><link rel="stylesheet" href="styles.css?v=20260832">
-  <script src="site.js?v=20260823" defer></script>
+  <link rel="preload" href="styles.css?v=20260833" as="style"><link rel="stylesheet" href="styles.css?v=20260833">
+  <script src="site.js?v=20260833" defer></script>
 </head>
 <body>
   <header class="site-header">
     <a class="brand" href="index.html" aria-label="Duck home"><span aria-hidden="true">🦆</span> Duck</a>
     <button class="menu-button" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button>
     <nav class="main-nav" aria-label="Main navigation">
-      <a href="#features">Features</a>
+      <a href="features.html">Features</a>
       <a href="guide.html">Guide</a>
       <a href="pricing.html">Pricing</a>
       <a href="donate.html">Donate</a>
@@ -29,15 +29,15 @@
     <section class="hero">
       <div class="hero-copy">
         <div class="hero-kicker"><span class="kicker-dot"></span> Discord moderation, but make it quack</div>
-        <h1>A sharper server assistant with <span>zero interest in ruling the pond.</span></h1>
-        <p class="lede">Duck helps communities moderate safely, answer questions, manage voice, and automate the boring bits—while keeping consequential actions behind permission checks and approvals.</p>
+        <h1>AI-assisted Discord moderation, <span>with humans still in control.</span></h1>
+        <p class="lede">Duck helps your team review moderation, configure AutoMod, answer questions, and run community tools—without giving an AI unrestricted control of your server.</p>
         <div class="hero-actions">
           <a class="button primary" href="https://discord.com/oauth2/authorize?client_id=1507850959642955816">Add Duck to Discord <span aria-hidden="true">→</span></a>
           <a class="button discord" href="/auth/discord"><svg class="discord-mark" aria-hidden="true" viewBox="0 0 16 16"><path fill="currentColor" d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612"/></svg> Login with Discord</a>
-          <a class="button secondary" href="#features">See what Duck does</a>
+          <a class="button secondary" href="#product">See Duck in action</a>
         </div>
         <p class="microcopy">No tracking pixels. Just one unusually employable duck and a secure server dashboard.</p>
-        <div class="hero-proof" aria-label="Duck capabilities"><span>30+ commands</span><i></i><span>Approval controls</span><i></i><span><strong data-server-count>—</strong> servers</span></div>
+        <div class="hero-proof" aria-label="Duck capabilities"><span>30+ commands</span><i></i><span>Approval controls</span><i data-server-separator hidden></i><span data-server-metric hidden><strong data-server-count></strong> servers</span></div>
       </div>
       <div class="duck-card" aria-label="Duck mascot card">
         <span class="bubble bubble-one"></span><span class="bubble bubble-two"></span><span class="bubble bubble-three"></span>
@@ -48,6 +48,30 @@
       </div>
     </section>
 
+    <section class="product-proof" id="product">
+      <div class="section-heading product-heading">
+        <p class="eyebrow">The control room, not a black box</p>
+        <h2>Moderate Discord without giving an AI unrestricted control.</h2>
+        <p>See what Duck proposes, decide what happens, and configure every safety boundary per server.</p>
+      </div>
+      <div class="product-window" aria-label="Duck dashboard preview">
+        <div class="product-window-bar"><span></span><span></span><span></span><strong>Duck dashboard · Safety</strong><small>Test Pond</small></div>
+        <div class="product-window-body">
+          <nav class="product-sidebar" aria-label="Dashboard preview sections"><b>Overview</b><b class="is-active">Safety</b><b>AutoMod</b><b>Community</b><b>Reaction roles</b><b>Insights</b></nav>
+          <div class="product-panel">
+            <div class="product-panel-heading"><span>🛡️</span><div><small>MODERATION &amp; SAFETY</small><h3>Human approval stays in the loop</h3><p>Configure what Duck may suggest and what always needs a moderator.</p></div><i>Approval gated</i></div>
+            <div class="product-settings">
+              <article><div><strong>Layered AutoMod</strong><small>Rate guards, mention limits, invites, and local content filters</small></div><span class="demo-toggle is-on"></span></article>
+              <article><div><strong>AI review suggestions</strong><small>Post advisory flags to a private staff channel</small></div><span class="demo-toggle is-on"></span></article>
+              <article><div><strong>Automatic destructive actions</strong><small>Bans and role changes still require an authorized human</small></div><span class="demo-toggle"></span></article>
+            </div>
+            <aside class="approval-preview"><div><span>DUCK PROPOSAL</span><strong>Timeout a member for repeated mention spam?</strong><p>Rule matched locally · Moderator role required · Hierarchy will be checked again</p></div><button type="button" disabled>Reject</button><button class="approve" type="button" disabled>Approve</button></aside>
+          </div>
+        </div>
+      </div>
+      <div class="approval-flow" aria-label="Duck approval flow"><span>User request</span><i>→</i><span>Duck proposes action</span><i>→</i><span>Moderator approves</span><i>→</i><span>Permission check</span><i>→</i><span>Action</span></div>
+    </section>
+
     <section class="trust-strip" aria-label="Duck highlights">
       <p><strong>Permission-aware</strong><span>Actions respect Discord roles</span></p>
       <p><strong>Approval-gated</strong><span>Review important actions first</span></p>
@@ -56,25 +80,21 @@
 
     <section class="features" id="features">
       <div class="section-heading">
-        <p class="eyebrow">A surprisingly capable bird</p>
-        <h2>Everything your server needs to stay useful, welcoming, and slightly more aquatic.</h2>
+        <p class="eyebrow">Four calm corners of the pond</p>
+        <h2>Everything important, grouped by what your team is trying to do.</h2>
       </div>
-      <div class="feature-grid">
-        <article><span class="feature-icon" aria-hidden="true">🛡️</span><h3>Safer moderation</h3><p>Ban, kick, timeout, warn, lock channels, manage roles, and handle voice moderation with current permission and role-hierarchy checks.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">✨</span><h3>Natural-language help</h3><p>Ask Duck questions or describe a moderation task normally. AI suggestions are validated locally before they become actions.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🔊</span><h3>Voice and TTS</h3><p>Bring messages into voice with DAVE-capable TTS, bounded queues, session ownership, and anti-abuse budgets.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">⚡</span><h3>Fast across servers</h3><p>Fair per-server scheduling, bounded caches, request deadlines, and retries keep one busy community from slowing everyone else.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🚨</span><h3>Layered AutoMod</h3><p>Combine rate guards, language and sexual-content filters, custom blocked phrases, warnings, and permission-safe escalation.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🧩</span><h3>No-code automations</h3><p>Build safe if-this-then-that rules for replies, reactions, cleanup, warnings, and moderation—without running arbitrary code.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🧠</span><h3>Useful memory</h3><p>Duck remembers a bounded window of its own recent replies inside each server, so conversations feel connected without mixing ponds.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🧰</span><h3>Useful utilities</h3><p>Get server details, reminders, quotes, polls, dice, coin flips, duck facts, and a highly scientific quack on demand.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🎫</span><h3>Private support tickets</h3><p>Publish multiple ticket types with private channels, one-ticket safeguards, and separate Ticket Support and Ticket Admin access.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🎭</span><h3>Reaction roles</h3><p>Build polished button panels so members can safely add or remove server roles without staff busywork.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">📊</span><h3>Stats and audit trails</h3><p>See activity, AI flags, tickets, and a server-isolated history of who did what, when, and why.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🪷</span><h3>Community Studio</h3><p>Run Pond Levels, member proposals, join roles, message highlights, scheduled posts, and richer role panels from one calm workspace.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🌈</span><h3>Color Dock</h3><p>Build a safe server palette, let members choose one exclusive name color, and create permissionless color roles directly from the dashboard.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">🔒</span><h3>Privacy-minded</h3><p>No advertising profiles or website analytics. AI requests may be processed by configured third-party providers, so Duck is transparent about the limits.</p><a href="privacy-policy.html">Read the privacy policy →</a></article>
+      <div class="feature-grid feature-grid-summary">
+        <article><span class="feature-icon" aria-hidden="true">🛡️</span><h3>Moderation &amp; Safety</h3><p>Approval-gated actions, role-hierarchy enforcement, layered AutoMod, review queues, and plain-English audit trails.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">✨</span><h3>AI Assistant</h3><p>Natural-language help with bounded, server-isolated context and locally validated action proposals.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">🪷</span><h3>Community Tools</h3><p>Tickets, reaction roles, levels, proposals, scheduled posts, Starboard, Color Dock, and safe automations.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">🔊</span><h3>Voice &amp; Utilities</h3><p>Queued TTS, reminders, polls, quotes, server tools, games, and an appropriately scientific amount of quacking.</p></article>
       </div>
+      <a class="feature-inventory-link" href="features.html">Explore every Duck feature <span aria-hidden="true">→</span></a>
+    </section>
+
+    <section class="safety-proof">
+      <div><p class="eyebrow">Safety architecture</p><h2>Duck can’t just ban people because an AI said so.</h2><p>AI output is advisory. Consequential actions move through explicit approval and fresh Discord checks at the moment they run.</p><a href="guide.html#automod">Read how review works →</a></div>
+      <ol><li><span>1</span><div><strong>Local rules run first</strong><small>Rate and content protections do not need an AI verdict.</small></div></li><li><span>2</span><div><strong>A human reviews the proposal</strong><small>Only authorized moderators receive action controls.</small></div></li><li><span>3</span><div><strong>Permissions are checked again</strong><small>Member access, bot permissions, and role hierarchy must still pass.</small></div></li><li><span>4</span><div><strong>The result is recorded</strong><small>Each server keeps its own readable moderation trail.</small></div></li></ol>
     </section>
 
     <section class="cta">

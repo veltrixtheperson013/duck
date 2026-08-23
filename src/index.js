@@ -188,7 +188,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      if (interaction.commandName === "capibility") {
+      if (interaction.commandName === "capability" || interaction.commandName === "capibility") {
         await handleCapabilityCommand(interaction);
         return;
       }

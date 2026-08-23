@@ -58,7 +58,7 @@ function isStripeServerConfigured() {
 }
 
 function makePlusCheckoutInput({ guildId, discordUserId, period }) {
-  if (!isPlusEnabled()) throw Object.assign(new Error("Duck Plus is currently unavailable."), { status: 503 });
+  if (!isPlusEnabled()) throw Object.assign(new Error("Duck Plus is not available yet."), { status: 503 });
   const priceId = getPlusPriceId(period);
   if (!priceId) throw Object.assign(new Error("That Duck Plus billing period is not configured."), { status: 503 });
   const baseUrl = getPublicBaseUrl();

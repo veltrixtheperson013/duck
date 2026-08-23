@@ -6,10 +6,18 @@ if (!reducedMotion) {
 
 const serverCount = document.querySelector("[data-server-count]");
 if (serverCount) {
+  const metric = serverCount.closest("[data-server-metric]");
+  const separator = document.querySelector("[data-server-separator]");
   fetch("/api/stats")
     .then((response) => response.ok ? response.json() : Promise.reject(new Error("Stats unavailable")))
-    .then(({ servers }) => { serverCount.textContent = new Intl.NumberFormat().format(Math.max(0, Number(servers) || 0)); })
-    .catch(() => { serverCount.closest("span").textContent = "Multi-server ready"; });
+    .then(({ servers }) => {
+      const count = Number(servers);
+      if (!Number.isSafeInteger(count) || count <= 0) return;
+      serverCount.textContent = new Intl.NumberFormat().format(count);
+      metric.hidden = false;
+      if (separator) separator.hidden = false;
+    })
+    .catch(() => {});
 }
 
 const menuButton = document.querySelector(".menu-button");
@@ -32,7 +40,7 @@ if (menuButton && mainNavigation) {
   });
 }
 
-const revealItems = document.querySelectorAll(".feature-grid article, .trust-strip, .cta, .guide-step, .policy-document section");
+const revealItems = document.querySelectorAll(".feature-grid article, .trust-strip, .product-window, .approval-flow, .safety-proof, .catalog-section, .cta, .guide-step, .policy-document section");
 if (!reducedMotion && "IntersectionObserver" in window) {
   document.documentElement.classList.add("has-reveal");
   const observer = new IntersectionObserver((entries) => {

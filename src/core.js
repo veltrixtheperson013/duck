@@ -5312,7 +5312,7 @@ function makeUtilityHelp() {
     "`/clear` `/clearwarnings` `/addrole` `/removerole` `/tool`",
     "",
     "**Server Administration**",
-    "`/announce` `/sendrules` `/bulk` `/prefix` `/capibility` `/setup` `/entry-setup` `/synccommands`",
+    "`/announce` `/sendrules` `/bulk` `/prefix` `/capability` `/setup` `/entry-setup` `/synccommands`",
     "`/setup quarantine-channel:<voice channel>` updates the voice quarantine destination.",
     "",
     "**Information & Utilities**",
@@ -6477,7 +6477,7 @@ function slashCommandContent(interaction) {
 }
 
 function validateSlashCommandDispatchers(commandBodies) {
-  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capibility", "synccommands", "suggest", "rank", "leaderboard", "color", "colors", "purgeuser", "modlog"]);
+  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capability", "capibility", "synccommands", "suggest", "rank", "leaderboard", "color", "colors", "purgeuser", "modlog"]);
   const setupCommand = commandBodies.find((command) => command.name === "setup");
   const setupOptions = new Map((setupCommand?.options || []).map((option) => [option.name, option]));
   if (!setupOptions.has("channel") || !setupOptions.has("quarantine-channel")) {
@@ -7062,6 +7062,18 @@ async function registerCommands(client, options = {}) {
       .addStringOption((option) => option.setName("request").setDescription("Example: lock #general for a raid").setRequired(true)),
   ];
 
+  const capabilityCommand = (name, description) => new SlashCommandBuilder().setName(name).setDescription(description)
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addStringOption((option) => option
+      .setName("mode")
+      .setDescription("Choose Duck's server action policy.")
+      .setRequired(true)
+      .addChoices(
+        { name: "Ask for approval", value: CAPABILITY_MODES.ask },
+        { name: "Approve for me (Recommended)", value: CAPABILITY_MODES.approve },
+        { name: "Agent mode", value: CAPABILITY_MODES.agent },
+      ));
+
   const adminCommands = [
     new SlashCommandBuilder().setName("sendrules").setDescription("Post the formatted server rules embed.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
@@ -7077,17 +7089,8 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("prefix").setDescription("Set this server's additional Duck command prefix.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
       .addStringOption((option) => option.setName("value").setDescription("1-5 visible characters, such as !! or ?").setMinLength(1).setMaxLength(5).setRequired(true)),
-    new SlashCommandBuilder().setName("capibility").setDescription("Set how Duck approves and executes server actions.")
-      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
-      .addStringOption((option) => option
-        .setName("mode")
-        .setDescription("Choose Duck's server action policy.")
-        .setRequired(true)
-        .addChoices(
-          { name: "Ask for approval", value: CAPABILITY_MODES.ask },
-          { name: "Approve for me (Recommended)", value: CAPABILITY_MODES.approve },
-          { name: "Agent mode", value: CAPABILITY_MODES.agent },
-        )),
+    capabilityCommand("capability", "Set how Duck approves and executes server actions."),
+    capabilityCommand("capibility", "Legacy spelling of /capability. This alias will be retired later."),
     new SlashCommandBuilder().setName("synccommands").setDescription("Immediately synchronize Duck's slash commands in this server.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
   ];

@@ -8,9 +8,13 @@ const plusCard = document.querySelector("[data-plus-card]");
 if (plusCard) {
   fetch("/api/site-config")
     .then((response) => response.ok ? response.json() : Promise.reject(new Error("Site configuration unavailable")))
-    .then(({ plusEnabled }) => {
-      if (!plusEnabled) return;
+    .then(({ plusEnabled, billingConfigured }) => {
+      if (!plusEnabled || !billingConfigured) return;
       plusCard.querySelectorAll("[data-plus-action]").forEach((element) => { element.hidden = false; });
+      const comingSoon = plusCard.querySelector("[data-plus-coming-soon]");
+      if (comingSoon) comingSoon.hidden = true;
+      const badge = plusCard.querySelector("[data-plus-badge]");
+      if (badge) badge.textContent = "Annual = better value";
       const unavailable = plusCard.querySelector("[data-plus-unavailable]");
       if (unavailable) unavailable.hidden = true;
     })
