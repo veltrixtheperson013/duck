@@ -13,6 +13,7 @@ import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.j
 
 const activity = new Map();
 const ticketLocks = new Set();
+const ticketCloseLocks = new Set();
 const SELF_ASSIGN_BLOCKED_PERMISSIONS = [
   PermissionsBitField.Flags.Administrator,
   PermissionsBitField.Flags.BanMembers,
@@ -59,6 +60,13 @@ function getActivity(guildId) {
 function recordMessageActivity(message) { const current = getActivity(message.guildId); current.messages += 1; if (current.activeUsers.size < 10_000) current.activeUsers.add(message.author.id); }
 function recordAiFlag(guildId) { getActivity(guildId).aiFlags += 1; }
 function auditSourceLabel(source) { return ({ discord: "Discord command", dashboard: "Web dashboard", automod: "Duck AutoMod", "ai-review": "AI review suggestion" })[source] || "Discord"; }
+function ticketClosePermissionOverwrites(channel, ownerId) {
+  const overwrites = channel?.permissionOverwrites?.cache;
+  if (!overwrites?.values) return [];
+  return [...overwrites.values()]
+    .filter((overwrite) => overwrite.id !== ownerId)
+    .map((overwrite) => ({ id: overwrite.id, type: overwrite.type, allow: overwrite.allow, deny: overwrite.deny }));
+}
 
 async function recordAuditEvent(guild, event) {
   if (!guild?.id) return null;
@@ -201,24 +209,38 @@ async function handleTicketClose(interaction) {
   const settings = getPublicGuildSettings(raw);
   const staff = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels) || [settings.ticketSupportRoleId, settings.ticketAdminRoleId].some((id) => id && interaction.member.roles.cache.has(id));
   if (interaction.user.id !== ownerId && !staff) return interaction.reply({ content: "Only the ticket owner or support staff can close this ticket.", ephemeral: true });
-  await interaction.deferReply();
-  await interaction.channel.permissionOverwrites.edit(ownerId, { ViewChannel: false, SendMessages: false }, { reason: `Ticket closed by ${interaction.user.tag}` });
-  await interaction.channel.setName(`closed-${interaction.channel.name}`.slice(0, 100), `Ticket closed by ${interaction.user.tag}`).catch(() => null);
-  await interaction.channel.setTopic(`duck-ticket-closed:${ownerId};closed-by:${interaction.user.id}`).catch(() => null);
-  if (settings.ticketTranscriptsEnabled && hasPlusEntitlement(raw)) {
-    const logChannelId = raw.entryChannels?.logChannelId;
-    const logChannel = logChannelId ? interaction.guild.channels.cache.get(logChannelId) : null;
-    if (logChannel?.isTextBased?.() && typeof logChannel.send === "function") {
-      const messages = await interaction.channel.messages.fetch({ limit: 100 }).catch(() => null);
-      if (messages) {
-        const transcript = [...messages.values()].reverse().map((message) => `[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id}): ${String(message.cleanContent || message.content || "").replace(/[\r\n]+/g, " ").slice(0, 1_500)}${message.attachments.size ? ` [${message.attachments.size} attachment(s)]` : ""}`).join("\n").slice(0, 240_000);
-        const file = new AttachmentBuilder(Buffer.from(transcript || "No cached ticket messages were available.", "utf8"), { name: `ticket-${interaction.channel.id}.txt`, description: "Duck Plus ticket transcript" });
-        await logChannel.send({ content: `Transcript for closed ticket <#${interaction.channel.id}>`, files: [file], allowedMentions: { parse: [] } }).catch(() => null);
+  const lockKey = `${interaction.guildId}:${interaction.channelId}`;
+  if (ticketCloseLocks.has(lockKey)) return interaction.reply({ content: "This ticket is already being closed.", ephemeral: true });
+  ticketCloseLocks.add(lockKey);
+  try {
+    await interaction.deferReply();
+    const reason = `Ticket closed by ${interaction.user.tag}`;
+    const retainedOverwrites = ticketClosePermissionOverwrites(interaction.channel, ownerId);
+    await interaction.channel.permissionOverwrites.set(retainedOverwrites, reason);
+    await interaction.channel.setName(`closed-${interaction.channel.name}`.slice(0, 100), reason).catch(() => null);
+    await interaction.channel.setTopic(`duck-ticket-closed:${ownerId};closed-by:${interaction.user.id}`).catch(() => null);
+    if (settings.ticketTranscriptsEnabled && hasPlusEntitlement(raw)) {
+      const logChannelId = raw.entryChannels?.logChannelId;
+      const logChannel = logChannelId ? interaction.guild.channels.cache.get(logChannelId) : null;
+      if (logChannel?.isTextBased?.() && typeof logChannel.send === "function") {
+        const messages = await interaction.channel.messages.fetch({ limit: 100 }).catch(() => null);
+        if (messages) {
+          const transcript = [...messages.values()].reverse().map((message) => `[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id}): ${String(message.cleanContent || message.content || "").replace(/[\r\n]+/g, " ").slice(0, 1_500)}${message.attachments.size ? ` [${message.attachments.size} attachment(s)]` : ""}`).join("\n").slice(0, 240_000);
+          const file = new AttachmentBuilder(Buffer.from(transcript || "No cached ticket messages were available.", "utf8"), { name: `ticket-${interaction.channel.id}.txt`, description: "Duck Plus ticket transcript" });
+          await logChannel.send({ content: `Transcript for closed ticket <#${interaction.channel.id}>`, files: [file], allowedMentions: { parse: [] } }).catch(() => null);
+        }
       }
     }
+    await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: ownerId, action: "Closed ticket", reason: `#${interaction.channel.name}`, source: "discord" });
+    return interaction.editReply({ content: "Ticket closed. Staff can review or delete this channel when ready." });
+  } catch (error) {
+    const detail = error?.code === 10009 ? "Discord had stale ticket permissions. Please try again; Duck has refreshed the safe close operation." : clean(error?.message, 160) || "Discord rejected the channel update.";
+    const failure = { content: `Duck could not close this ticket: ${detail}` };
+    if (interaction.deferred || interaction.replied) return interaction.editReply(failure).catch(() => null);
+    return interaction.reply({ ...failure, ephemeral: true }).catch(() => null);
+  } finally {
+    ticketCloseLocks.delete(lockKey);
   }
-  await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: ownerId, action: "Closed ticket", reason: `#${interaction.channel.name}`, source: "discord" });
-  return interaction.editReply({ content: "Ticket closed. Staff can review or delete this channel when ready." });
 }
 
 function aiActionParts(customId) { const match = customId.match(/^duck_ai_(?:action|pick):(\d{10,}):(\d{10,}):(\d{10,})$/); return match ? { channelId: match[1], messageId: match[2], userId: match[3] } : null; }
@@ -265,4 +287,4 @@ async function handleCommunityButton(interaction) {
   return false;
 }
 
-export { assertCanPublishTo, getGuildInsights, handleAiActionSelection, handleCommunityButton, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity };
+export { assertCanPublishTo, getGuildInsights, handleAiActionSelection, handleCommunityButton, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity, ticketClosePermissionOverwrites };

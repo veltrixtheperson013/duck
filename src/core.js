@@ -1750,14 +1750,16 @@ function pruneRuntimeCaches() {
   }
 
   flushJsonWrites();
-  logDebug("cache.sweep", {
-    messageChannels: messageHistoryCache.size,
-    resources: resourceFetchCache.size,
-    contexts: serverContextCache.size,
-    removedMessages,
-    removedResources,
-    removedContexts,
-  });
+  if (messageHistoryCache.size || resourceFetchCache.size || serverContextCache.size || removedMessages || removedResources || removedContexts) {
+    logDebug("cache.sweep", {
+      messageChannels: messageHistoryCache.size,
+      resources: resourceFetchCache.size,
+      contexts: serverContextCache.size,
+      removedMessages,
+      removedResources,
+      removedContexts,
+    });
+  }
 }
 
 async function refreshRuntimeCaches() {
@@ -1823,15 +1825,17 @@ async function refreshRuntimeCaches() {
     }
   });
 
-  logDebug("cache.refresh", {
-    messageChannels: messageHistoryCache.size,
-    resources: resourceFetchCache.size,
-    refreshedMessages,
-    failedMessages,
-    refreshedResources,
-    failedResources,
-    ms: elapsedMs(startedAt),
-  });
+  if (messageEntries.length || resourceEntries.length || failedMessages || failedResources) {
+    logDebug("cache.refresh", {
+      messageChannels: messageHistoryCache.size,
+      resources: resourceFetchCache.size,
+      refreshedMessages,
+      failedMessages,
+      refreshedResources,
+      failedResources,
+      ms: elapsedMs(startedAt),
+    });
+  }
 }
 
 function startCacheMaintenance() {
