@@ -172,6 +172,20 @@ test("remote Operator Deck accepts a private path configured without a leading s
   finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });
 
+test("invalid remote Operator Deck configuration cannot take Duck offline", async () => {
+  const keys = ["DUCK_PUBLIC_URL", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_SESSION_SECURE", "DUCK_REMOTE_ADMIN_ENABLED", "DUCK_REMOTE_ADMIN_PATH", "DUCK_ADMIN_OWNER_ID", "DUCK_ADMIN_TOKEN"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]])); const warnings = [];
+  Object.assign(process.env, { DUCK_PUBLIC_URL: "https://duck.wispbyte.app", DISCORD_OAUTH_REDIRECT_URI: "https://duck.wispbyte.app/auth/discord/callback", DUCK_SESSION_SECURE: "true", DUCK_REMOTE_ADMIN_ENABLED: "true", DUCK_REMOTE_ADMIN_PATH: "pond-valid-private-path", DUCK_ADMIN_OWNER_ID: "1138897388694687834", DUCK_ADMIN_TOKEN: "too-short" });
+  try {
+    await withWebsite(async (origin) => {
+      assert.equal((await fetch(`${origin}/health`)).status, 200);
+      assert.equal((await fetch(`${origin}/pond-valid-private-path/`)).status, 404);
+    }, { logWarnImpl: (...args) => warnings.push(args) });
+    assert.equal(warnings[0][0], "remote-operator.disabled-invalid-config");
+    assert.deepEqual(warnings[0][1].invalid, ["DUCK_ADMIN_TOKEN"]);
+  } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
+});
+
 test("public pages contain no GitHub references", async () => {
   const pages = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
-import { createDuckOperatorServer, grantPlus } from "../src/admin.js";
+import { createDuckOperatorServer, grantPlus, startDuckOperatorServer } from "../src/admin.js";
 import { ClusterManager } from "../src/clusters.js";
 
 async function withOperator(run) {
@@ -28,4 +28,16 @@ test("operator Plus grants cannot overwrite active Stripe billing", () => {
   assert.throws(() => grantPlus("123456789012345678", "plus_3", null, () => ({ subscription: { provider: "stripe", tier: "plus", status: "active" } }), () => {}), /Stripe subscription/);
   const granted = grantPlus("123456789012345678", "plus_6", null, () => ({}), (id, patch) => updates.push([id, patch]));
   assert.equal(granted.levelOverride, "plus_6"); assert.equal(updates[0][0], "123456789012345678");
+});
+
+test("invalid local Operator Deck configuration cannot take Duck offline", () => {
+  const previousEnabled = process.env.DUCK_ADMIN_ENABLED; const previousToken = process.env.DUCK_ADMIN_TOKEN; const warnings = [];
+  process.env.DUCK_ADMIN_ENABLED = "true"; process.env.DUCK_ADMIN_TOKEN = "too-short";
+  try {
+    assert.equal(startDuckOperatorServer({ logWarnImpl: (...args) => warnings.push(args) }), null);
+    assert.equal(warnings[0][0], "operator.disabled-invalid-config");
+  } finally {
+    previousEnabled == null ? delete process.env.DUCK_ADMIN_ENABLED : process.env.DUCK_ADMIN_ENABLED = previousEnabled;
+    previousToken == null ? delete process.env.DUCK_ADMIN_TOKEN : process.env.DUCK_ADMIN_TOKEN = previousToken;
+  }
 });

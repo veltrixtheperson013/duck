@@ -42,6 +42,8 @@ DUCK_ADMIN_SESSION_MINUTES=15
 DUCK_ADMIN_ALLOWED_IPS=
 ```
 
+If either Operator Deck is enabled with incomplete security settings, Duck logs which setting is invalid and keeps the bot and public website online with that deck disabled.
+
 Sign in to Duck's normal dashboard with that Discord account first, then manually open `https://duck.wispbyte.app/<your-private-path>/`. The private path is not linked or advertised. Duck returns a normal 404 to other Discord accounts and signed-out visitors. Unlocking additionally requires the 64-or-more-character `DUCK_ADMIN_TOKEN`; Duck exchanges it for a short-lived HttpOnly, Secure, SameSite=Strict session bound to the current Discord session, client address, and browser. Every mutation requires a separate CSRF token and same-origin HTTPS request. Unlock attempts and operator changes have dedicated strict rate limits. `DUCK_ADMIN_ALLOWED_IPS` optionally accepts exact comma-separated client IPs, but should stay empty when the host's reverse proxy hides the real visitor IP.
 
 ## Features

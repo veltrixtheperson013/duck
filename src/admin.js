@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { deleteGuildSettings, flushJsonWrites, getGuildSettings, loadSettings, updateGuildSettings } from "./config.js";
 import { getClusterManager } from "./clusters.js";
 import { clearWebsiteBanner, getOperatorState, recordOperatorAction, removePlatformBlock, scheduleMaintenance, setClusterAssignmentOverride, setClusterStatusOverride, setPlatformBlock, setWebsiteBanner, updateMaintenance } from "./operator-state.js";
-import { logError, logInfo } from "./logging.js";
+import { logError, logInfo, logWarn } from "./logging.js";
 
 const LOOPBACKS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const DISCORD_ID = /^\d{10,20}$/;
@@ -146,7 +146,13 @@ function createDuckOperatorServer(options = {}) {
 
 function startDuckOperatorServer(options = {}) {
   if (!/^(1|true|yes|on)$/i.test(String(process.env.DUCK_ADMIN_ENABLED || "false"))) return null;
-  const server = createDuckOperatorServer(options); server.listen(server.operatorPort, "127.0.0.1", () => logInfo("operator.ready", { address: "127.0.0.1", port: server.operatorPort })); return server;
+  let server;
+  try { server = createDuckOperatorServer(options); }
+  catch (error) {
+    (options.logWarnImpl || logWarn)("operator.disabled-invalid-config", { reason: error.message, impact: "Local Operator Deck disabled; Duck remains online." });
+    return null;
+  }
+  server.listen(server.operatorPort, "127.0.0.1", () => logInfo("operator.ready", { address: "127.0.0.1", port: server.operatorPort })); return server;
 }
 
 export { createDuckOperatorController, createDuckOperatorServer, grantPlus, startDuckOperatorServer };

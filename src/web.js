@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { ChannelType, PermissionsBitField, Routes } from "discord.js";
 import { getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, makeSettingsPatch } from "./dashboard-config.js";
-import { logError } from "./logging.js";
+import { logError, logWarn } from "./logging.js";
 import { readBoundedJson } from "./runtime.js";
 import { getPublicBaseUrl, getStripeClient, isPlusEnabled, isStripeServerConfigured, makeDonationCheckoutInput, makePlusCheckoutInput, makeStripeSubscriptionPatch } from "./stripe.js";
 import { getGuildInsights, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAuditEvent } from "./community.js";
@@ -160,6 +160,7 @@ function createDuckWebsiteServer(options = {}) {
   const getGuildSettings = options.getGuildSettings || (() => ({}));
   const updateGuildSettings = options.updateGuildSettings || (() => {});
   const reportError = options.logErrorImpl || logError;
+  const reportWarn = options.logWarnImpl || logWarn;
   const stripe = options.stripeClient ?? getStripeClient();
   const clusterManager = options.clusterManager || getClusterManager();
   const sessions = new Map(); const operatorSessions = new Map(); const webhookEvents = new Map();
@@ -172,16 +173,25 @@ function createDuckWebsiteServer(options = {}) {
   const clientId = () => String(process.env.CLIENT_ID || "").trim();
   const clientSecret = () => String(process.env.DISCORD_CLIENT_SECRET || "").trim();
   const redirectUri = () => String(process.env.DISCORD_OAUTH_REDIRECT_URI || "https://duck.wispbyte.app/auth/discord/callback").trim();
-  const remoteOperatorEnabled = /^(1|true|yes|on)$/i.test(String(process.env.DUCK_REMOTE_ADMIN_ENABLED || "false"));
+  let remoteOperatorEnabled = /^(1|true|yes|on)$/i.test(String(process.env.DUCK_REMOTE_ADMIN_ENABLED || "false"));
   const remoteOperatorPath = remoteOperatorEnabled ? normalizeOperatorPath(process.env.DUCK_REMOTE_ADMIN_PATH) : null;
   const remoteOperatorToken = String(process.env.DUCK_ADMIN_TOKEN || "");
   const remoteOperatorOwnerId = String(process.env.DUCK_ADMIN_OWNER_ID || DUCK_OWNER_USER_ID);
   const remoteOperatorAllowedIps = new Set(String(process.env.DUCK_ADMIN_ALLOWED_IPS || "").split(",").map((item) => normalizeRemoteAddress(item.trim())).filter(Boolean));
   const remoteOperatorSessionMs = Math.max(5, Math.min(Number(process.env.DUCK_ADMIN_SESSION_MINUTES) || 15, 30)) * 60_000;
-  if (remoteOperatorEnabled && (!remoteOperatorPath || !/^\d{10,20}$/.test(remoteOperatorOwnerId) || remoteOperatorToken.length < 64 || remoteOperatorToken.length > 512)) throw new Error("Remote Operator Deck requires a 16+ character DUCK_REMOTE_ADMIN_PATH, a valid DUCK_ADMIN_OWNER_ID, and a 64+ character DUCK_ADMIN_TOKEN.");
-  const operatorController = createDuckOperatorController({ client, clusterManager, getGuildSettings, updateGuildSettings, deleteGuildSettings: options.deleteGuildSettings });
   const secureCookie = () => !/^(0|false|no)$/i.test(process.env.DUCK_SESSION_SECURE || "") && redirectUri().startsWith("https:");
-  if (remoteOperatorEnabled && !secureCookie()) throw new Error("Remote Operator Deck requires HTTPS and DUCK_SESSION_SECURE=true.");
+  if (remoteOperatorEnabled) {
+    const invalid = [];
+    if (!remoteOperatorPath) invalid.push("DUCK_REMOTE_ADMIN_PATH");
+    if (!/^\d{10,20}$/.test(remoteOperatorOwnerId)) invalid.push("DUCK_ADMIN_OWNER_ID");
+    if (remoteOperatorToken.length < 64 || remoteOperatorToken.length > 512) invalid.push("DUCK_ADMIN_TOKEN");
+    if (!secureCookie()) invalid.push("HTTPS/DUCK_SESSION_SECURE");
+    if (invalid.length) {
+      remoteOperatorEnabled = false;
+      reportWarn("remote-operator.disabled-invalid-config", { invalid, impact: "Operator Deck disabled; Duck remains online." });
+    }
+  }
+  const operatorController = createDuckOperatorController({ client, clusterManager, getGuildSettings, updateGuildSettings, deleteGuildSettings: options.deleteGuildSettings });
   const cookie = (name, value, maxAge) => `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
   const operatorCookie = (value, maxAge) => `duck_operator=${encodeURIComponent(value)}; Path=${remoteOperatorPath || "/"}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
   const prune = (force = false) => { const now = Date.now(); if (!force && now - lastPruneAt < 30_000 && sessions.size <= 5_000 && operatorSessions.size <= 8 && webhookEvents.size <= 10_000 && requestRates.size <= 10_000) return; lastPruneAt = now; for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key); for (const [key, value] of operatorSessions) if (value.expiresAt <= now || !sessions.has(value.discordSessionId)) operatorSessions.delete(key); for (const [key, value] of webhookEvents) if (value <= now) webhookEvents.delete(key); for (const [key, value] of requestRates) if (value.resetAt <= now) requestRates.delete(key); for (const [key, value] of globalRates) if (value.resetAt <= now) globalRates.delete(key); while (sessions.size > 5_000) sessions.delete(sessions.keys().next().value); while (operatorSessions.size > 8) operatorSessions.delete(operatorSessions.keys().next().value); while (webhookEvents.size > 10_000) webhookEvents.delete(webhookEvents.keys().next().value); while (requestRates.size > 10_000) requestRates.delete(requestRates.keys().next().value); };
