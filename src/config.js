@@ -525,6 +525,15 @@ function updateGuildSettings(guildId, patch) {
   saveSettings(settings);
 }
 
+function deleteGuildSettings(guildId) {
+  if (!/^\d{10,}$/.test(String(guildId))) throw new TypeError("Guild ID must be a Discord ID.");
+  const settings = loadSettings();
+  const existed = Object.hasOwn(settings.guilds, guildId);
+  delete settings.guilds[guildId];
+  saveSettings(settings);
+  return existed;
+}
+
 function requireConfig() {
   loadDotEnv();
   loadJsonConfig();
@@ -655,5 +664,6 @@ export {
   getGuildCapabilityMode,
   getCapabilityModeLabel,
   updateGuildSettings,
+  deleteGuildSettings,
   requireConfig,
 };

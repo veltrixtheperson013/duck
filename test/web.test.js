@@ -40,7 +40,9 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(await (await fetch(`${origin}/features`)).text(), /Serious controls with deliberate guardrails/);
     const updates = await fetch(`${origin}/updates`);
     assert.equal(updates.status, 200);
-    assert.match(await updates.text(), /AI scanning now follows each server's chatbot model/);
+    const updatesText = await updates.text();
+    assert.match(updatesText, /AI scanning now follows each server's chatbot model/);
+    assert.match(updatesText, /Duck waddled onto the web/);
 
     const guide = await fetch(`${origin}/guide`);
     assert.equal(guide.status, 200);
@@ -60,6 +62,9 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     const script = await fetch(`${origin}/site.js`);
     assert.equal(script.status, 200);
     assert.match(script.headers.get("content-type"), /^text\/javascript/);
+    const themeInit = await fetch(`${origin}/theme-init.js`);
+    assert.equal(themeInit.status, 200);
+    assert.match(await themeInit.text(), /duck-theme/);
 
     const dashboard = await fetch(`${origin}/dashboard`);
     assert.equal(dashboard.status, 200);
@@ -72,7 +77,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260839/);
+    assert.match(dashboardText, /theme-init\.js\?v=20260840/);
+    assert.match(dashboardText, /styles\.css\?v=20260841/);
     assert.match(dashboardText, /Verification challenge/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
@@ -119,6 +125,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
 test("website rejects unsupported methods and unknown routes", async () => {
   await withWebsite(async (origin) => {
     assert.equal((await fetch(`${origin}/missing`)).status, 404);
+    assert.equal((await fetch(`${origin}/admin`)).status, 404);
     assert.equal((await fetch(`${origin}/`, { method: "POST" })).status, 405);
     assert.equal((await fetch(`${origin}/dashboard/servers/123456789012345678`, { method: "POST" })).status, 405);
   });
@@ -132,6 +139,7 @@ test("public pages contain no GitHub references", async () => {
     readFile(new URL("../public/privacy-policy.html", import.meta.url), "utf8"),
     readFile(new URL("../public/guide.html", import.meta.url), "utf8"),
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../public/theme-init.js", import.meta.url), "utf8"),
     readFile(new URL("../public/site.js", import.meta.url), "utf8"),
     readFile(new URL("../public/dashboard.html", import.meta.url), "utf8"),
     readFile(new URL("../public/dashboard.js", import.meta.url), "utf8"),
@@ -267,7 +275,7 @@ test("Duck Plus defaults off and fails closed", async () => {
     assert.equal(isStripeServerConfigured(), false);
     assert.throws(() => makePlusCheckoutInput({ guildId: "123456789012345678", discordUserId: "999999999999999999", period: "month" }), /not available yet/);
     await withWebsite(async (origin) => {
-      assert.deepEqual(await (await fetch(`${origin}/api/site-config`)).json(), { plusEnabled: false, billingConfigured: false });
+      assert.deepEqual(await (await fetch(`${origin}/api/site-config`)).json(), { plusEnabled: false, billingConfigured: false, banner: null });
     });
   } finally {
     if (previous == null) delete process.env.DUCK_PLUS_ENABLED;

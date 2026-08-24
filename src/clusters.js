@@ -78,6 +78,29 @@ class ClusterManager {
     return this.statuses.get(clusterId) || this.defaultStatus;
   }
 
+  setStatus(clusterId, statusValue) {
+    validateClusterId(clusterId, this.count, "Cluster status update");
+    const status = String(statusValue || "").toLowerCase();
+    if (!(status in CLUSTER_STATUSES)) throw new TypeError("Cluster status must be normal, outage, maintenance, or offline.");
+    this.statuses.set(clusterId, status);
+    return this.describeCluster(clusterId);
+  }
+
+  setAssignment(guildId, clusterId) {
+    const id = String(guildId || "");
+    if (!DISCORD_ID.test(id)) throw new TypeError("Guild ID must be a Discord server ID.");
+    validateClusterId(clusterId, this.count, "Cluster assignment");
+    this.assignments.set(id, clusterId);
+    return this.describeGuild(id);
+  }
+
+  clearAssignment(guildId) {
+    const id = String(guildId || "");
+    if (!DISCORD_ID.test(id)) throw new TypeError("Guild ID must be a Discord server ID.");
+    this.assignments.delete(id);
+    return this.describeGuild(id);
+  }
+
   describeCluster(clusterId, serverCount = 0) {
     const status = this.statusForCluster(clusterId);
     const now = this.now();

@@ -45,6 +45,10 @@ test("server branding requires three calendar months of paid Plus", () => {
   assert.equal(hasMaturePlusEntitlement(owner, now), true);
   assert.equal(getPlusLoyalty(owner, now).level, "plus_12");
   assert.equal(getPlusLoyalty(owner, now).customActionLimit, null);
+  const operatorGrant = { subscription: { provider: "operator", tier: "plus", status: "active", levelOverride: "plus_6", startedAt: "2026-08-14T00:00:00.000Z", expiresAt: null } };
+  assert.equal(getPlusLoyalty(operatorGrant, now).level, "plus_6");
+  assert.equal(getPlusLoyalty(operatorGrant, now).customActionLimit, 100);
+  assert.equal(hasMaturePlusEntitlement(operatorGrant, now), true);
 });
 
 test("fun commands keep a Free set and enforce Plus toggles", () => {

@@ -16,6 +16,21 @@ Duck Plus uses hosted Stripe Checkout. Configure `DUCK_PUBLIC_URL`, `STRIPE_SECR
 
 The fixed one-time support amounts on `/donate` also use hosted Stripe Checkout when `STRIPE_SECRET_KEY` is configured. `DUCK_DONATION_CHECKOUT_URL` remains available as an optional HTTPS fallback and may include `{amount}`.
 
+## Private Operator Deck
+
+Duck includes a separate owner operations console for cluster status and assignments, maintenance scheduling, platform blocks, per-server Plus grants and loyalty tiers, website banners, bounded database inspection/export, profile deletion, write flushing, and an operator audit trail. It is not a route on the public website: when enabled, it always binds to `127.0.0.1` on `DUCK_ADMIN_PORT` (`9590` by default) and also requires a separate `DUCK_ADMIN_TOKEN` of at least 32 characters.
+
+Generate a token and enable it:
+
+```text
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+DUCK_ADMIN_ENABLED=true
+DUCK_ADMIN_PORT=9590
+DUCK_ADMIN_TOKEN=the_generated_value
+```
+
+Open `http://127.0.0.1:9590` on the computer running Duck. If Duck runs on a remote server, use an SSH local port-forward such as `ssh -L 9590:127.0.0.1:9590 your-server`, then open the same local URL. Do not expose or reverse-proxy port 9590. The console rejects non-loopback clients, unexpected Host headers, cross-origin mutations, weak or missing tokens, oversized JSON, prototype keys, and excessive changes. Secrets are never included in its database export.
+
 ## Features
 
 - `/setup channel:#channel` chooses the channel where Duck listens. `/setup quarantine-channel:<voice channel>` configures the Administrator-only voice quarantine destination.

@@ -24,3 +24,12 @@ test("cluster health is server-owned, bounded, and reports uptime", () => {
   assert.throws(() => new ClusterManager({ env: { DUCK_CLUSTER_STATUS: "hacked" } }), /must be normal/);
   assert.throws(() => new ClusterManager({ env: { DUCK_CLUSTER_COUNT: "1000" } }), /integer from 1 to 32/);
 });
+
+test("operator cluster changes remain ID-only and runtime bounded", () => {
+  const manager = new ClusterManager({ env: { DUCK_CLUSTER_COUNT: "3" } });
+  assert.equal(manager.setStatus("cluster-02", "maintenance").status, "maintenance");
+  assert.equal(manager.setAssignment("123456789012345678", "cluster-03").id, "cluster-03");
+  assert.match(manager.clearAssignment("123456789012345678").id, /^cluster-0[1-3]$/);
+  assert.throws(() => manager.setAssignment("My Pond", "cluster-01"), /server ID/);
+  assert.throws(() => manager.setStatus("cluster-99", "normal"), /invalid cluster ID/);
+});

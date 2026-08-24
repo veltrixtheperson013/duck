@@ -135,14 +135,16 @@ function getPlusLoyalty(settings, now = Date.now()) {
   const plus = hasPlusEntitlement(settings, now);
   const subscription = settings?.subscription ?? {};
   const owner = plus && subscription.provider === "owner";
-  const paid = plus && subscription.provider === "stripe";
+  const paid = plus && ["stripe", "operator"].includes(subscription.provider);
   const startedAt = paid ? Date.parse(subscription.startedAt || "") : NaN;
   const twoAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 2) || "") : NaN;
   const threeAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 3) || "") : NaN;
   const sixAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 6) || "") : NaN;
   const twelveAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 12) || "") : NaN;
   const months = Number.isFinite(startedAt) ? Math.max(0, Math.floor((now - startedAt) / (30.4375 * 24 * 60 * 60_000))) : 0;
-  const level = !plus ? "free" : owner || (Number.isFinite(twelveAt) && now >= twelveAt) ? "plus_12" : Number.isFinite(sixAt) && now >= sixAt ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : Number.isFinite(twoAt) && now >= twoAt ? "plus_2" : "plus";
+  const override = subscription.provider === "operator" && ["plus", "plus_2", "plus_3", "plus_6", "plus_12"].includes(subscription.levelOverride) ? subscription.levelOverride : null;
+  const earnedLevel = Number.isFinite(twelveAt) && now >= twelveAt ? "plus_12" : Number.isFinite(sixAt) && now >= sixAt ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : Number.isFinite(twoAt) && now >= twoAt ? "plus_2" : "plus";
+  const level = !plus ? "free" : owner ? "plus_12" : override || earnedLevel;
   const limits = { free: [5, 6], plus: [25, 16], plus_2: [35, 24], plus_3: [50, 32], plus_6: [100, 64], plus_12: [null, 100] };
   const [customActionLimit, memoryReplies] = limits[level];
   const milestones = { plus: [startedAt, twoAt, "plus_2"], plus_2: [twoAt, threeAt, "plus_3"], plus_3: [threeAt, sixAt, "plus_6"], plus_6: [sixAt, twelveAt, "plus_12"] };
@@ -155,6 +157,7 @@ function getPlusLoyalty(settings, now = Date.now()) {
 function hasMaturePlusEntitlement(settings, now = Date.now()) {
   if (!hasPlusEntitlement(settings, now)) return false;
   if (settings?.subscription?.provider === "owner") return true;
+  if (settings?.subscription?.provider === "operator") return ["plus_3", "plus_6", "plus_12"].includes(settings.subscription.levelOverride);
   if (settings?.subscription?.provider !== "stripe") return false;
   const eligibleAt = Date.parse(getBrandingEligibleAt(settings) || "");
   return Number.isFinite(eligibleAt) && eligibleAt <= now;
@@ -277,7 +280,7 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     subscription: {
       tier: plus ? "plus" : "free",
       status: plus ? subscription.status : "inactive",
-      source: plus && subscription.provider === "owner" ? "owner" : plus ? "stripe" : null,
+      source: plus && ["owner", "operator"].includes(subscription.provider) ? subscription.provider : plus ? "stripe" : null,
       expiresAt: plus ? subscription.expiresAt ?? null : null,
       cancelAtPeriodEnd: plus ? Boolean(subscription.cancelAtPeriodEnd) : false,
       brandingEligible: hasMaturePlusEntitlement(settings, now),

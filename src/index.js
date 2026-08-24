@@ -10,6 +10,8 @@ import { queueAiScan } from "./ai-scan.js";
 import { getGuildInsights, handleAiActionSelection, handleCommunityButton, handleTicketVerificationModal, recordAuditEvent, recordMessageActivity } from "./community.js";
 import { applyAutoroles, awardMessageXp, flushLevelProfiles, handleCommunityReaction, handleCommunitySlashCommand, handleSuggestionDecision, startCommunityStudio } from "./community-studio.js";
 import { applyRandomJoinColor, handleColorCommand, handleColorSelect } from "./color-roles.js";
+import { isPlatformBlocked } from "./operator-state.js";
+import { startDuckOperatorServer } from "./admin.js";
 
 async function sendDuckChatPages(message, content, options = {}, messageToEdit = null) {
   const chunks = splitDiscordLines(String(content ?? "").split(/\r?\n/), 3900);
@@ -32,6 +34,7 @@ if (process.argv.includes("--check-commands")) {
 requireConfig();
 loadPendingActions();
 startKeepAliveServer();
+startDuckOperatorServer({ client, getGuildSettings, updateGuildSettings });
 startCacheMaintenance();
 process.once("beforeExit", () => { flushLevelProfiles(); flushJsonWrites(); });
 process.once("SIGINT", () => { flushLevelProfiles(); flushRuntimeStateAndExit("SIGINT"); });
@@ -134,6 +137,7 @@ client.on(Events.GuildCreate, async (guild) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!claimDiscordEvent(`interaction:${interaction.id}`)) return;
+    if (isPlatformBlocked(interaction.user?.id)) { if (interaction.isRepliable()) await interaction.reply({ content: "You cannot use Duck right now. Contact Duck's operator if you believe this is a mistake.", ephemeral: true }).catch(() => null); return; }
     if (interaction.isChatInputCommand()) {
       const colorResult = await handleColorCommand(interaction);
       if (colorResult !== false) return;
@@ -460,7 +464,7 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     if (!claimDiscordEvent(`message:${message.id}`)) return;
     rememberMessage(message);
-    if (!message.guild || message.author.bot) return;
+    if (!message.guild || message.author.bot || isPlatformBlocked(message.author.id)) return;
     recordMessageActivity(message);
     if (await handleAutomodAndCustomActions(message)) return;
     await awardMessageXp(message);
