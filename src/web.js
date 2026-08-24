@@ -175,7 +175,7 @@ function createDuckWebsiteServer(options = {}) {
   const redirectUri = () => String(process.env.DISCORD_OAUTH_REDIRECT_URI || "https://duck.wispbyte.app/auth/discord/callback").trim();
   let remoteOperatorEnabled = /^(1|true|yes|on)$/i.test(String(process.env.DUCK_REMOTE_ADMIN_ENABLED || "false"));
   const remoteOperatorPath = remoteOperatorEnabled ? normalizeOperatorPath(process.env.DUCK_REMOTE_ADMIN_PATH) : null;
-  const remoteOperatorToken = String(process.env.DUCK_ADMIN_TOKEN || "");
+  const remoteOperatorToken = String(process.env.DUCK_ADMIN_TOKEN || "").trim();
   const remoteOperatorOwnerId = String(process.env.DUCK_ADMIN_OWNER_ID || DUCK_OWNER_USER_ID);
   const remoteOperatorAllowedIps = new Set(String(process.env.DUCK_ADMIN_ALLOWED_IPS || "").split(",").map((item) => normalizeRemoteAddress(item.trim())).filter(Boolean));
   const remoteOperatorSessionMs = Math.max(5, Math.min(Number(process.env.DUCK_ADMIN_SESSION_MINUTES) || 15, 30)) * 60_000;
@@ -265,8 +265,11 @@ function createDuckWebsiteServer(options = {}) {
   }
   function requireOperatorCsrf(req, auth) { const supplied = Buffer.from(String(req.headers["x-duck-operator-csrf"] || "")); const expected = Buffer.from(String(auth?.session?.csrf || "")); return supplied.length > 20 && supplied.length === expected.length && timingSafeEqual(supplied, expected); }
   function requireOperatorOrigin(req) {
-    let expected; try { expected = new URL(process.env.DUCK_PUBLIC_URL || redirectUri()).origin; } catch { return false; }
-    return expected.startsWith("https://") && String(req.headers.origin || "") === expected && String(req.headers["sec-fetch-site"] || "same-origin").toLowerCase() !== "cross-site";
+    let supplied; try { supplied = new URL(String(req.headers.origin || "")); } catch { return false; }
+    let configured = null; try { configured = new URL(process.env.DUCK_PUBLIC_URL || redirectUri()).origin; } catch { /* The request host can still prove same-origin. */ }
+    const requestHost = String(req.headers.host || "").trim().toLowerCase();
+    const sameRequestHost = /^[a-z0-9.-]+(?::\d{1,5})?$/.test(requestHost) && supplied.host.toLowerCase() === requestHost;
+    return supplied.protocol === "https:" && (supplied.origin === configured || sameRequestHost) && String(req.headers["sec-fetch-site"] || "same-origin").toLowerCase() !== "cross-site";
   }
 
   async function handleRemoteOperator(req, res, pathname, method) {
@@ -285,9 +288,10 @@ function createDuckWebsiteServer(options = {}) {
     if (subpath === "/api/session" && method === "GET") return json(res, 200, { authenticated: Boolean(operatorAuth), csrf: operatorAuth?.session.csrf || null, loginCsrf: operatorAuth ? null : discordAuth.session.csrf, expiresAt: operatorAuth ? new Date(operatorAuth.session.expiresAt).toISOString() : null, user: discordAuth.session.user }, method);
     if (subpath === "/api/session" && method === "POST") {
       if (!allowRequest(req, "operator-unlock", 5, 15 * 60_000)) return json(res, 429, { error: "Too many unlock attempts. Wait 15 minutes." }, method, { "Retry-After": "900" });
-      if (!requireOperatorOrigin(req) || !requireCsrf(req, discordAuth)) return json(res, 403, { error: "Operator request verification failed." });
+      if (!requireOperatorOrigin(req)) return json(res, 403, { error: "The Operator Deck origin did not match this page. Reload the private page and try again." });
+      if (!requireCsrf(req, discordAuth)) return json(res, 403, { error: "Your dashboard verification session expired. Reload the private page and try again." });
       const input = await readJsonBody(req, 2 * 1024);
-      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => key !== "token") || !secretMatches(input.token, remoteOperatorToken)) return json(res, 403, { error: "Operator access denied." });
+      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => key !== "token") || !secretMatches(String(input.token || "").trim(), remoteOperatorToken)) return json(res, 403, { error: "That token does not match the token loaded by Duck. Check Wispbyte environment overrides, restart Duck, then try again." });
       for (const [id, session] of operatorSessions) if (session.userId === remoteOperatorOwnerId) operatorSessions.delete(id);
       const id = randomToken(); const csrf = randomToken(); const expiresAt = Date.now() + remoteOperatorSessionMs;
       operatorSessions.set(id, { userId: remoteOperatorOwnerId, discordSessionId: discordAuth.id, ip: operatorClientIp(req), userAgent: operatorUserAgent(req), csrf, expiresAt });

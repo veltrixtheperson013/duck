@@ -111,7 +111,7 @@ function createDuckOperatorController(options = {}) {
 }
 
 function createDuckOperatorServer(options = {}) {
-  const clusterManager = options.clusterManager || getClusterManager(); const token = String(options.token || process.env.DUCK_ADMIN_TOKEN || ""); const port = Math.max(1, Math.min(Number(options.port || process.env.DUCK_ADMIN_PORT) || 9590, 65_535)); const controller = createDuckOperatorController({ ...options, clusterManager });
+  const clusterManager = options.clusterManager || getClusterManager(); const token = String(options.token || process.env.DUCK_ADMIN_TOKEN || "").trim(); const port = Math.max(1, Math.min(Number(options.port || process.env.DUCK_ADMIN_PORT) || 9590, 65_535)); const controller = createDuckOperatorController({ ...options, clusterManager });
   if (token.length < 32) throw new Error("DUCK_ADMIN_TOKEN must contain at least 32 characters.");
   const mutationTimes = [];
   const server = http.createServer({ maxHeaderSize: 8 * 1024 }, async (req, res) => {
