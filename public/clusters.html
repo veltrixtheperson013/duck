@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Live uptime and service status for Duck's isolated server clusters.">
+  <title>Cluster Status — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="preload" href="/styles.css?v=20260839" as="style"><link rel="stylesheet" href="/styles.css?v=20260839">
+  <script src="/site.js?v=20260834" defer></script><script src="/clusters.js?v=20260839" defer></script>
+</head>
+<body class="cluster-status-page">
+  <div class="route-progress" data-route-progress aria-hidden="true"><i></i></div>
+  <header class="site-header"><a class="brand" href="/"><span aria-hidden="true">🦆</span> Duck</a><button class="menu-button" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button><nav class="main-nav" aria-label="Main navigation"><a href="/features">Features</a><a href="/guide">Guide</a><a href="/updates">Updates</a><a aria-current="page" href="/clusters">Status</a><a href="/pricing">Pricing</a><a href="/dashboard">Dashboard</a></nav></header>
+  <main class="cluster-status-shell">
+    <section class="cluster-status-hero">
+      <div><p class="eyebrow"><i class="status-dot normal"></i> Live cluster status</p><h1>Every pond, accounted for.</h1><p>Duck divides Discord servers into isolated clusters so a busy batch cannot fill every queue.</p></div>
+      <div class="overall-cluster-status" data-overall-status><i></i><span>Checking Duck…</span></div>
+    </section>
+    <section class="cluster-summary" aria-label="Cluster summary">
+      <article><strong data-cluster-total>—</strong><small>Total clusters</small></article>
+      <article><strong data-cluster-operating>—</strong><small>Normal</small></article>
+      <article><strong data-cluster-servers>—</strong><small>Duck servers</small></article>
+      <article><strong data-cluster-latency>—</strong><small>Gateway latency</small></article>
+    </section>
+    <section class="cluster-lookup-card">
+      <div class="cluster-lookup-copy"><p class="eyebrow">Server lookup</p><h2>Find your server’s cluster</h2><p>Enter a Discord server ID. Duck returns only its deterministic cluster assignment—not whether that server exists or has Duck installed.</p><form data-cluster-lookup><label class="sr-only" for="cluster-server-id">Discord server ID</label><input id="cluster-server-id" name="serverId" inputmode="numeric" pattern="[0-9]{10,20}" minlength="10" maxlength="20" placeholder="Discord server ID" required><button class="button primary" type="submit">Look up</button></form></div>
+      <div class="cluster-lookup-result" data-cluster-lookup-result aria-live="polite"><small>Result</small><div><span><small>Cluster</small><strong>—</strong></span><span><small>Status</small><strong>Waiting</strong></span></div></div>
+    </section>
+    <section class="cluster-hive-section">
+      <div class="cluster-hive-heading"><div><p class="eyebrow">Cluster hive</p><h2>All clusters</h2><p>Hover or focus a cell for live details.</p></div><div class="cluster-legend"><span><i class="normal"></i>Normal</span><span><i class="outage"></i>Outage</span><span><i class="maintenance"></i>Maintenance</span><span><i class="offline"></i>Offline</span></div></div>
+      <div class="cluster-hive" data-cluster-hive aria-live="polite"></div>
+      <p class="cluster-updated" data-cluster-updated>Connecting to the pond…</p>
+    </section>
+  </main>
+  <footer><a class="brand" href="/"><span aria-hidden="true">🦆</span> Duck</a><p>Built for healthier Discord communities.</p><div class="footer-links"><a href="/clusters">Status</a><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a></div></footer>
+</body>
+</html>

@@ -112,6 +112,59 @@ class FairGuildScheduler {
   }
 }
 
+class ClusteredGuildScheduler {
+  constructor({ resolveClusterId, clusterCount = 1, globalConcurrency = 4, guildConcurrency = 1, maxQueuedPerGuild = 20, maxQueuedGlobal = 200 } = {}) {
+    if (typeof resolveClusterId !== "function") throw new TypeError("A cluster resolver is required.");
+    this.resolveClusterId = resolveClusterId;
+    this.clusterCount = Math.max(1, Math.min(Number(clusterCount) || 1, 32));
+    this.globalConcurrency = Math.max(1, Number(globalConcurrency) || 4);
+    this.activeAcrossClusters = 0;
+    this.permitWaiters = [];
+    this.schedulerOptions = {
+      globalConcurrency: Math.max(1, Math.ceil((Number(globalConcurrency) || 4) / this.clusterCount)),
+      guildConcurrency,
+      maxQueuedPerGuild,
+      maxQueuedGlobal: Math.max(maxQueuedPerGuild, Math.ceil((Number(maxQueuedGlobal) || 200) / this.clusterCount)),
+    };
+    this.clusters = new Map();
+  }
+
+  async withGlobalPermit(task) {
+    if (this.activeAcrossClusters >= this.globalConcurrency) await new Promise((resolve) => this.permitWaiters.push(resolve));
+    this.activeAcrossClusters += 1;
+    try { return await task(); }
+    finally { this.activeAcrossClusters -= 1; this.permitWaiters.shift()?.(); }
+  }
+
+  schedulerFor(clusterId) {
+    if (!/^cluster-\d{2}$/.test(String(clusterId || ""))) throw new TypeError("Cluster resolver returned an invalid cluster ID.");
+    let scheduler = this.clusters.get(clusterId);
+    if (!scheduler) {
+      if (this.clusters.size >= this.clusterCount) throw new RangeError("Cluster resolver exceeded the configured cluster count.");
+      scheduler = new FairGuildScheduler(this.schedulerOptions);
+      this.clusters.set(clusterId, scheduler);
+    }
+    return scheduler;
+  }
+
+  schedule(guildId, task, options = {}) {
+    const clusterId = this.resolveClusterId(guildId);
+    const result = this.schedulerFor(clusterId).schedule(guildId, () => this.withGlobalPermit(task), options);
+    return { ...result, clusterId };
+  }
+
+  snapshot(guildId) {
+    const clusterId = this.resolveClusterId(guildId);
+    const cluster = this.schedulerFor(clusterId).snapshot(guildId);
+    let queuedGlobal = 0; let guilds = 0;
+    for (const scheduler of this.clusters.values()) {
+      queuedGlobal += scheduler.queuedGlobal;
+      guilds += scheduler.guilds.size;
+    }
+    return { ...cluster, clusterId, activeCluster: cluster.activeGlobal, queuedCluster: cluster.queuedGlobal, activeGlobal: this.activeAcrossClusters, queuedGlobal: queuedGlobal + this.permitWaiters.length, guilds };
+  }
+}
+
 function parseRetryAfterMs(response) {
   const value = response?.headers?.get?.("retry-after");
   if (!value) return null;
@@ -203,6 +256,7 @@ function modelSupportsVision(providerName, model, options = {}) {
 }
 
 export {
+  ClusteredGuildScheduler,
   FairGuildScheduler,
   QueueCapacityError,
   fetchWithTimeoutAndRetry,

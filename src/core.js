@@ -7,9 +7,10 @@ import { isDebugEnabled, shouldLogAiBodies, logInfo, logDebug, logWarn, logError
 import { pendingActions, pendingByChannel, pendingExpiryTimers, serverContextCache, messageHistoryCache, resourceFetchCache, pendingJsonWrites, voiceSessions, voiceQuarantineExpiryTimers, voiceQuarantineMoves, commandCooldowns, processedDiscordEvents, reminderTimers } from "./state.js";
 import { quotesPath, TOOL_DEFINITIONS, UTILITY_COMMANDS, DEFAULT_QUOTES, CURSES, BLESSINGS, EIGHT_BALL_ANSWERS, TOOL_REQUIREMENTS, DUCK_COLORS, COMMAND_PRESENTATION, RISK_COPY, CAPABILITY_MODES } from "./constants.js";
 import { packageInfo, buildInfo, loadJsonFile, saveJsonFile, flushJsonWrites, getMemberWarnings, addMemberWarning, clearMemberWarnings, getPendingActionTtlMs, getServerContextCacheTtlMs, getAiContextMemberLimit, getAiContextChannelLimit, getAiContextRoleLimit, getAiContextMessageChannelLimit, getAiContextMaxChars, getAiContextMessageChars, getAiContextFocusedMessages, getAiContextBackgroundMessages, getAiContextFetchConcurrency, getAiContextAttachmentLimit, isAiVisionEnabled, getAiVisionMaxImages, getAiVisionBatchSize, getAiVisionMaxAttachmentBytes, getAiVisionDetail, getMessageCacheTtlMs, getMessageCacheLimit, getCacheRefreshMs, getCacheRefreshChannelLimit, getCacheRefreshConcurrency, getEnvBoolean, supportsCurrentVoiceRuntime, getEnvId, getLegacyCommandContent, getEntryChannelConfig, getAiChatMaxTokens, getAiChatMaxAttempts, getAiRequestTimeoutMs, getAiHttpMaxAttempts, getCommandScope, shouldExcludeReasoning, savePendingActions, getActionRequestChannelId, schedulePendingExpiry, getGuildSettings, getGuildCapabilityMode, getCapabilityModeLabel, updateGuildSettings } from "./config.js";
-import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
+import { ClusteredGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, modelSupportsVision, readBoundedJson, readBoundedText } from "./runtime.js";
 import { createDuckWebsiteServer } from "./web.js";
 import { getAiModelDefinition, getDefaultAiModel, getFunCommandAccess, getPlusLoyalty, hasPlusEntitlement } from "./dashboard-config.js";
+import { getClusterManager } from "./clusters.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
@@ -39,7 +40,10 @@ function rememberAiReply(message, content, now = Date.now()) {
 }
 
 function getAiScheduler() {
-  aiScheduler ??= new FairGuildScheduler({
+  const clusters = getClusterManager();
+  aiScheduler ??= new ClusteredGuildScheduler({
+    resolveClusterId: (guildId) => isDiscordGuildId(guildId) ? clusters.clusterIdForGuild(guildId) : "cluster-01",
+    clusterCount: clusters.count,
     globalConcurrency: Math.max(1, Math.min(Number(process.env.AI_MAX_CONCURRENT_GLOBAL) || 4, 16)),
     guildConcurrency: Math.max(1, Math.min(Number(process.env.AI_MAX_CONCURRENT_PER_GUILD) || 1, 4)),
     maxQueuedPerGuild: Math.max(1, Math.min(Number(process.env.AI_MAX_QUEUE_PER_GUILD) || 20, 100)),

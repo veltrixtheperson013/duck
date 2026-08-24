@@ -1,4 +1,4 @@
-const state = { me: null, guilds: [], catalog: null, activeGuild: null, activePlus: false, isAdministrator: false, loyalty: null, channels: [], categories: [], roles: [], customActions: [], slowmodes: [], branding: { avatar: undefined, banner: undefined }, serverFilter: "all", loading: 0, guildRefreshAttempts: 0, guildRefreshNextAt: 0, guildRefreshPending: false };
+const state = { me: null, guilds: [], clusters: [], catalog: null, activeGuild: null, activePlus: false, isAdministrator: false, loyalty: null, channels: [], categories: [], roles: [], customActions: [], slowmodes: [], branding: { avatar: undefined, banner: undefined }, serverFilter: "all", loading: 0, guildRefreshAttempts: 0, guildRefreshNextAt: 0, guildRefreshPending: false };
 const guildRefreshScheduleMs = [10_000, 30_000, 60_000, 120_000];
 let guildRefreshButtonTimer = null;
 const $ = (selector) => document.querySelector(selector);
@@ -20,11 +20,11 @@ function guildIcon(guild) {
 
 function renderGuilds(search = $("[data-server-search]")?.value || "") {
   const term = search.trim().toLowerCase(); const list = $("[data-server-list]"); const fragment = document.createDocumentFragment(); list.replaceChildren();
-  const visible = state.guilds.filter((guild) => guild.name.toLowerCase().includes(term) && (state.serverFilter === "all" || (state.serverFilter === "manageable" && guild.canManage) || (state.serverFilter === "installed" && guild.botPresent)));
+  const visible = state.guilds.filter((guild) => (guild.name.toLowerCase().includes(term) || guild.id.includes(term) || guild.cluster?.id?.includes(term)) && (state.serverFilter === "all" || (state.serverFilter === "manageable" && guild.canManage) || (state.serverFilter === "installed" && guild.botPresent)));
   for (const [index, guild] of visible.entries()) {
     const card = document.createElement("article"); const details = document.createElement("div"); const heading = document.createElement("h3"); const copy = document.createElement("p"); const badges = document.createElement("div"); const button = document.createElement("button");
     card.className = `server-card is-entering${guild.botPresent ? " has-duck" : ""}`; card.style.setProperty("--card-delay", `${Math.min(index, 6) * 18}ms`); heading.textContent = guild.name; copy.textContent = guild.botPresent ? (guild.canManage ? "Ready for server-specific configuration" : "Ask an admin for Manage Server permission") : "Invite Duck before configuring this server";
-    badges.className = "server-badges"; const role = document.createElement("span"); role.textContent = guild.owner ? "Owner" : guild.isAdministrator ? "Administrator" : guild.canManage ? "Manager" : "Member"; const presence = document.createElement("span"); presence.className = guild.botPresent ? "is-present" : "is-absent"; presence.textContent = guild.botPresent ? "Duck online" : "Duck absent"; badges.append(role, presence);
+    badges.className = "server-badges"; const role = document.createElement("span"); role.textContent = guild.owner ? "Owner" : guild.isAdministrator ? "Administrator" : guild.canManage ? "Manager" : "Member"; const presence = document.createElement("span"); presence.className = guild.botPresent ? "is-present" : "is-absent"; presence.textContent = guild.botPresent ? "Duck online" : "Duck absent"; const serverId = document.createElement("span"); serverId.className = "server-id-badge"; serverId.textContent = `ID ${guild.id}`; badges.append(role, presence, serverId); if (guild.cluster) { const cluster = document.createElement("span"); cluster.className = `cluster-badge is-${guild.cluster.status}`; cluster.textContent = guild.cluster.id; badges.append(cluster); }
     button.className = `button ${guild.botPresent ? "secondary" : "primary"}`; button.textContent = guild.botPresent ? "Configure server" : "Invite Duck"; button.disabled = guild.botPresent && !guild.canManage; const destination = guild.botPresent ? `/dashboard/servers/${encodeURIComponent(guild.id)}` : guild.inviteUrl; button.addEventListener("pointerenter", () => { if (!guild.botPresent || !guild.canManage || document.head.querySelector(`link[href="${destination}"]`)) return; const prefetch = document.createElement("link"); prefetch.rel = "prefetch"; prefetch.href = destination; document.head.append(prefetch); }, { once: true }); button.addEventListener("click", () => { setLoading(true); location.assign(destination); });
     details.append(heading, copy, badges); card.append(guildIcon(guild), details, button); fragment.append(card);
   }
@@ -61,6 +61,10 @@ function updateGuildRefreshButton() {
   clearTimeout(guildRefreshButtonTimer);
   guildRefreshButtonTimer = remaining > 0 ? setTimeout(updateGuildRefreshButton, Math.min(1_000, remaining) + 25) : null;
 }
+
+function renderDashboardClusters() {
+  const hive = $("[data-dashboard-clusters]"); if (!hive) return; const cells = state.clusters.map((cluster) => { const link = document.createElement("a"); const number = document.createElement("strong"); const detail = document.createElement("small"); link.href = "/clusters"; link.className = `dashboard-cluster-hex is-${cluster.status}`; link.title = `${cluster.id}: ${cluster.statusLabel}, ${Number(cluster.serverCount || 0).toLocaleString()} servers`; number.textContent = cluster.id.replace("cluster-", ""); detail.textContent = cluster.statusLabel; link.append(number, detail); return link; }); hive.replaceChildren(...cells);
+}
 async function refreshGuilds(force = false) {
   const now = Date.now();
   if (state.guildRefreshPending) return null;
@@ -74,9 +78,10 @@ async function refreshGuilds(force = false) {
   try {
     const data = await api(`api/guilds${force ? "?refresh=1" : ""}`);
     state.guilds = Array.isArray(data.guilds) ? data.guilds : [];
+    state.clusters = Array.isArray(data.clusters) ? data.clusters : state.clusters;
     state.guildRefreshAttempts = data.stale ? Math.max(1, state.guildRefreshAttempts || 0) : 0;
     state.guildRefreshNextAt = data.stale ? Date.now() + Math.max(Number(data.retryAfterMs) || 0, 10_000) : 0;
-    renderGuilds();
+    renderGuilds(); renderDashboardClusters();
     updateGuildRefreshButton();
     if (data.stale) notice("Discord is busy, so Duck is showing your safely cached server list. Refresh will unlock automatically.");
     else if (force) notice("Server list refreshed.");
@@ -186,7 +191,7 @@ async function openSettings(guild) {
     const data = await api(`api/guilds/${guild.id}/settings`); state.activeGuild = guild;
     const form = $("[data-settings-form]"); const settings = data.settings ?? {}; const subscription = settings.subscription ?? { tier: "free", status: "inactive", source: null, expiresAt: null, cancelAtPeriodEnd: false, brandingEligible: false, brandingEligibleAt: null }; const plus = subscription.tier === "plus"; state.activePlus = plus; state.isAdministrator = Boolean(data.isAdministrator);
     state.catalog = normalizeCatalog(data.models, settings); state.channels = data.channels ?? []; state.categories = data.categories ?? []; state.roles = data.roles ?? []; configurePlan(data, settings, subscription, plus, guild);
-    $("[data-dialog-title]").textContent = guild.name;
+    $("[data-dialog-title]").textContent = guild.name; $("[data-dialog-server-id]").textContent = `Server ID ${guild.id}`; const clusterLink = $("[data-dialog-cluster]"); const cluster = data.cluster || guild.cluster; clusterLink.textContent = cluster ? `${cluster.id} · ${cluster.statusLabel}` : "Cluster unavailable"; clusterLink.className = cluster ? `is-${cluster.status}` : "";
     for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "reactionRolesEnabled", "ticketsEnabled", "ticketTranscriptsEnabled", "autorolesEnabled", "levelsEnabled", "suggestionsEnabled", "suggestionAnonymousEnabled", "starboardEnabled", "starboardAllowNsfw", "colorRolesEnabled", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "ttsEnabled", "ttsAnnounceNames", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...funSettingNames]) form[key].checked = Boolean(settings[key]);
     for (const key of ["capabilityMode", "commandPrefix", "aiChannelMode", "aiContextMode", "aiResponseStyle", "aiPersonality", "aiScanSensitivity", "reactionRoleTitle", "reactionRoleMode", "reactionRoleLimit", "ticketPanelTitle", "colorRoleTitle", "colorRoleDescription", "welcomeMessage", "farewellMessage", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodMentionLimit", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "starboardThreshold", "starboardEmoji"]) form[key].value = settings[key]; form.starboardColor.value = `#${Number(settings.starboardColor || 0xf2c85b).toString(16).padStart(6, "0")}`; form.colorRoleAccent.value = `#${Number(settings.colorRoleAccent || 0x7c68ee).toString(16).padStart(6, "0")}`; form.automodCustomWords.value = (settings.automodCustomWords || []).join(", ");
     form.capabilityMode.disabled = !data.isAdministrator; form.commandPrefix.disabled = !data.isAdministrator;
@@ -224,10 +229,10 @@ async function refreshInsights(button) { const original = button.textContent; bu
 
 async function initialize() {
   try {
-    const [data, guildData] = await Promise.all([api("api/me"), api("api/guilds")]); state.me = data; state.guilds = Array.isArray(guildData.guilds) ? guildData.guilds : []; setAccountAvatar($("[data-account-avatar]"), data.user); setAccountAvatar($("[data-menu-avatar]"), data.user); $("[data-menu-name]").textContent = data.user.globalName || data.user.username; $("[data-menu-id]").textContent = `ID ${data.user.id}`; $("[data-account-trigger-name]").textContent = data.user.globalName || data.user.username; $("[data-global-account]").hidden = false; renderAccountPage(data.user); const profile = $("[data-user-area]"); profile.replaceChildren(); const avatar = data.user.avatar ? document.createElement("img") : document.createElement("span");
+    const [data, guildData] = await Promise.all([api("api/me"), api("api/guilds")]); state.me = data; state.guilds = Array.isArray(guildData.guilds) ? guildData.guilds : []; state.clusters = Array.isArray(guildData.clusters) ? guildData.clusters : []; setAccountAvatar($("[data-account-avatar]"), data.user); setAccountAvatar($("[data-menu-avatar]"), data.user); $("[data-menu-name]").textContent = data.user.globalName || data.user.username; $("[data-menu-id]").textContent = `ID ${data.user.id}`; $("[data-account-trigger-name]").textContent = data.user.globalName || data.user.username; $("[data-global-account]").hidden = false; renderAccountPage(data.user); const profile = $("[data-user-area]"); profile.replaceChildren(); const avatar = data.user.avatar ? document.createElement("img") : document.createElement("span");
     if (data.user.avatar) { avatar.src = `https://cdn.discordapp.com/avatars/${encodeURIComponent(data.user.id)}/${encodeURIComponent(data.user.avatar)}.webp?size=128`; avatar.alt = ""; } else { avatar.className = "profile-placeholder"; avatar.textContent = "🦆"; }
     const profileCopy = document.createElement("div"); const welcome = document.createElement("small"); const name = document.createElement("strong"); const logout = document.createElement("button"); welcome.textContent = data.isOwner ? "Duck owner" : "Signed in as"; name.textContent = data.user.globalName || data.user.username; logout.type = "button"; logout.textContent = "Log out"; logout.addEventListener("click", async () => { await api("auth/logout", { method: "POST" }); location.reload(); }); profileCopy.append(welcome, name); profile.append(avatar, profileCopy, logout);
-    $("[data-stat-total]").textContent = state.guilds.length; $("[data-stat-manage]").textContent = state.guilds.filter((guild) => guild.canManage).length; $("[data-stat-installed]").textContent = state.guilds.filter((guild) => guild.botPresent).length; renderGuilds();
+    $("[data-stat-total]").textContent = state.guilds.length; $("[data-stat-manage]").textContent = state.guilds.filter((guild) => guild.canManage).length; $("[data-stat-installed]").textContent = state.guilds.filter((guild) => guild.botPresent).length; renderGuilds(); renderDashboardClusters();
     if (accountPageRequested) { document.body.classList.add("account-page-open"); $("[data-account-page]").hidden = false; document.title = "Account — Duck"; return; }
     if (requestedPlanGuildId) { const guild = state.guilds.find(({ id }) => id === requestedPlanGuildId); if (!guild?.botPresent || !guild.canManage) throw new Error("That server is unavailable or you do not have permission to view its plan."); await openPlanPage(guild); return; }
     $("[data-dashboard]").hidden = false;

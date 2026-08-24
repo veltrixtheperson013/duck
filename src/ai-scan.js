@@ -1,12 +1,18 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
 import { getGuildSettings } from "./config.js";
 import { getAiModelDefinition, getPublicGuildSettings } from "./dashboard-config.js";
-import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, readBoundedJson, readBoundedText } from "./runtime.js";
+import { ClusteredGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, readBoundedJson, readBoundedText } from "./runtime.js";
 import { recordAiFlag } from "./community.js";
+import { getClusterManager } from "./clusters.js";
 
 const CATEGORIES = new Set(["harassment", "hate", "sexual", "violence", "self_harm", "scam", "spam", "other"]);
 const thresholds = { low: 0.9, balanced: 0.75, high: 0.6 };
-const scheduler = new FairGuildScheduler({ globalConcurrency: 2, guildConcurrency: 1, maxQueuedPerGuild: 10, maxQueuedGlobal: 50 });
+let scheduler = null;
+function getScanScheduler() {
+  const clusters = getClusterManager();
+  scheduler ??= new ClusteredGuildScheduler({ resolveClusterId: (guildId) => clusters.clusterIdForGuild(guildId), clusterCount: clusters.count, globalConcurrency: Math.max(2, clusters.count), guildConcurrency: 1, maxQueuedPerGuild: 10, maxQueuedGlobal: 50 });
+  return scheduler;
+}
 const recentScans = new Map();
 const rulesCache = new Map();
 
@@ -105,7 +111,7 @@ async function scanMessage(message, settings) {
 function queueAiScan(message) {
   const settings = getPublicGuildSettings(getGuildSettings(message.guildId));
   if (!shouldQueueScan(message, settings)) return null;
-  try { return scheduler.schedule(message.guildId, () => scanMessage(message, settings)).promise; }
+  try { return getScanScheduler().schedule(message.guildId, () => scanMessage(message, settings)).promise; }
   catch (error) { if (error instanceof QueueCapacityError) return null; throw error; }
 }
 

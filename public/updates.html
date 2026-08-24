@@ -7,7 +7,7 @@
   <link rel="canonical" href="https://duck.wispbyte.app/updates">
   <title>Updates — Duck</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="styles.css?v=20260836" as="style"><link rel="stylesheet" href="styles.css?v=20260836">
+  <link rel="preload" href="styles.css?v=20260839" as="style"><link rel="stylesheet" href="styles.css?v=20260839">
   <script src="site.js?v=20260834" defer></script>
 </head>
 <body>
@@ -17,6 +17,12 @@
     <section class="updates-hero"><p class="eyebrow">What is new at the pond</p><h1>Duck keeps getting <span>less buggy.</span></h1><p>Release notes in normal English: what changed, what was fixed, and what server teams can use now.</p><a class="button primary" href="dashboard.html">Open your dashboard</a></section>
 
     <section class="update-timeline" aria-label="Duck release history">
+      <article class="update-card is-hotfix">
+        <div class="update-meta"><time datetime="2026-08-23">August 23, 2026</time><span>Cluster foundation</span></div>
+        <h2>Duck’s infrastructure has a hive now</h2>
+        <p>Discord server IDs are deterministically divided into isolated cluster queues, with a live honeycomb status page and server-ID lookup.</p>
+        <ul><li>Normal, outage, maintenance, and offline states with uptime.</li><li>Cluster and Discord server IDs shown in the server viewer.</li><li>Strict backend-only assignment and health state—browser requests cannot choose either.</li></ul>
+      </article>
       <article class="update-card is-hotfix">
         <div class="update-meta"><time datetime="2026-08-23">August 23, 2026</time><span>Dashboard and fun update</span></div>
         <h2>Fewer Discord waits, more reasons to stay</h2>

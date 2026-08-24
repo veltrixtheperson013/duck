@@ -72,7 +72,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260838/);
+    assert.match(dashboardText, /styles\.css\?v=20260839/);
     assert.match(dashboardText, /Verification challenge/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
@@ -83,6 +83,15 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /funRoastEnabled/);
     assert.match(dashboardText, /Server identity/);
     assert.match(dashboardText, /data-route-progress/);
+    assert.match(dashboardText, /Cluster hive/);
+    const clustersPage = await fetch(`${origin}/clusters`);
+    assert.equal(clustersPage.status, 200);
+    assert.match(await clustersPage.text(), /Every pond, accounted for/);
+    const clusterStatus = await (await fetch(`${origin}/api/clusters/status`)).json();
+    assert.equal(clusterStatus.clusters.length, 4);
+    const lookup = await (await fetch(`${origin}/api/clusters/lookup?server_id=123456789012345678`)).json();
+    assert.match(lookup.cluster.id, /^cluster-0[1-4]$/);
+    assert.equal((await fetch(`${origin}/api/clusters/lookup?server_id=server-name`)).status, 400);
     const serverDashboard = await fetch(`${origin}/dashboard/servers/123456789012345678`);
     assert.equal(serverDashboard.status, 200);
     assert.equal(serverDashboard.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
@@ -126,6 +135,8 @@ test("public pages contain no GitHub references", async () => {
     readFile(new URL("../public/site.js", import.meta.url), "utf8"),
     readFile(new URL("../public/dashboard.html", import.meta.url), "utf8"),
     readFile(new URL("../public/dashboard.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/clusters.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/clusters.js", import.meta.url), "utf8"),
     readFile(new URL("../public/pricing.html", import.meta.url), "utf8"),
     readFile(new URL("../public/donate.html", import.meta.url), "utf8"),
     readFile(new URL("../public/refunds.html", import.meta.url), "utf8"),
@@ -346,6 +357,8 @@ test("Discord OAuth session can list and update only a present manageable guild"
       assert.equal(guilds.guilds[0].botPresent, true);
       assert.equal(guilds.guilds[0].canManage, true);
       assert.equal(guilds.guilds[0].isAdministrator, false);
+      assert.match(guilds.guilds[0].cluster.id, /^cluster-0[1-4]$/);
+      assert.equal(guilds.clusters.reduce((sum, cluster) => sum + cluster.serverCount, 0), 1);
       const update = await fetch(`${origin}/api/guilds/${guildId}/settings`, { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json", "X-Duck-CSRF": me.csrf }, body: JSON.stringify({ aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" }) });
       assert.equal(update.status, 200);
       assert.equal(stored.get(guildId).aiChatEnabled, false);
@@ -370,6 +383,7 @@ test("Discord OAuth session can list and update only a present manageable guild"
       assert.equal(duplicateCheckout.status, 409);
       stored.set(guildId, { ...stored.get(guildId), subscription: { provider: "stripe", tier: "plus", status: "active", startedAt: "2025-01-01T00:00:00.000Z", customerId: "cus_test", subscriptionId: "sub_test", purchaserId: userId, expiresAt: "2027-01-01T00:00:00.000Z", cancelAtPeriodEnd: false } });
       const settings = await (await fetch(`${origin}/api/guilds/${guildId}/settings`, { headers: { Cookie: cookie } })).json();
+      assert.equal(settings.cluster.id, guilds.guilds[0].cluster.id);
       assert.equal(settings.canManageSubscription, true);
       assert.equal(settings.canCancelSubscription, true);
       assert.equal(settings.settings.subscription.brandingEligible, true);

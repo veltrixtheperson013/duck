@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node .",
     "preview": "node scripts/preview-website.js",
-    "check": "node --check src/index.js && node --check src/core.js && node --check src/runtime.js && node --check src/automod.js && node --check src/ai-scan.js && node --check src/community.js && node --check src/community-studio.js && node --check src/color-roles.js && node --check src/dashboard-config.js && node --check src/stripe.js && node --check src/web.js && node --check public/dashboard.js && node --check public/billing.js && node --check scripts/preview-website.js",
+    "check": "node --check src/index.js && node --check src/core.js && node --check src/runtime.js && node --check src/clusters.js && node --check src/automod.js && node --check src/ai-scan.js && node --check src/community.js && node --check src/community-studio.js && node --check src/color-roles.js && node --check src/dashboard-config.js && node --check src/stripe.js && node --check src/web.js && node --check public/dashboard.js && node --check public/clusters.js && node --check public/billing.js && node --check scripts/preview-website.js",
     "check:commands": "node . --check-commands",
     "lint": "eslint src test",
     "test": "node --test"

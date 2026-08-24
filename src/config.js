@@ -5,6 +5,7 @@ import { generateDependencyReport, version as voicePackageVersion } from "@disco
 import { settingsPath, pendingActionsPath, warningsPath, MAX_TIMER_DELAY_MS, CAPABILITY_MODES, CAPABILITY_MODE_LABELS } from "./constants.js";
 import { pendingActions, pendingByChannel, pendingExpiryTimers, jsonFileCache, pendingJsonWrites } from "./state.js";
 import { isDebugEnabled, logInfo, logDebug, logWarn, logError, redact } from "./logging.js";
+import { getClusterManager } from "./clusters.js";
 
 let packageInfo = { name: "duck-discord-ai-moderator", version: "unknown" };
 let buildInfo = {
@@ -528,6 +529,7 @@ function requireConfig() {
   loadDotEnv();
   loadJsonConfig();
   loadBuildInfo();
+  const clusterManager = getClusterManager();
   logInfo("startup.config", {
     package: packageInfo.name,
     version: packageInfo.version,
@@ -564,6 +566,7 @@ function requireConfig() {
     pendingActionTtlMs: getPendingActionTtlMs(),
     commandScope: getCommandScope(),
     status: getStatusConfig(),
+    clusters: clusterManager.count,
   });
   logInfo("voice.dependencies", {
     voicePackageVersion,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ClusteredGuildScheduler,
   FairGuildScheduler,
   QueueCapacityError,
   fetchWithTimeoutAndRetry,
@@ -8,6 +9,21 @@ import {
   readBoundedJson,
   readBoundedText,
 } from "../src/runtime.js";
+
+test("cluster queues isolate batches while preserving per-server serialization", async () => {
+  const scheduler = new ClusteredGuildScheduler({ resolveClusterId: (guildId) => guildId.startsWith("a") ? "cluster-01" : "cluster-02", clusterCount: 2, globalConcurrency: 2, guildConcurrency: 1, maxQueuedPerGuild: 2, maxQueuedGlobal: 4 });
+  const events = []; let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const first = scheduler.schedule("alpha", async () => { events.push("alpha-start"); await blocker; events.push("alpha-end"); }).promise;
+  const second = scheduler.schedule("alpha", async () => events.push("alpha-second")).promise;
+  const otherCluster = scheduler.schedule("beta", async () => events.push("beta-start")).promise;
+  await otherCluster;
+  assert.deepEqual(events.slice(0, 2).sort(), ["alpha-start", "beta-start"]);
+  assert.equal(scheduler.snapshot("alpha").clusterId, "cluster-01");
+  assert.equal(scheduler.snapshot("beta").clusterId, "cluster-02");
+  release(); await Promise.all([first, second]);
+  assert.deepEqual(events.slice(-2), ["alpha-end", "alpha-second"]);
+});
 
 test("vision is model-aware and Tencent HY3 is never auto-enabled", () => {
   assert.equal(modelSupportsVision("OpenRouter", "tencent/hy3:free"), false);
