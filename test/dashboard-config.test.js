@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getBrandingEligibleAt, getFunCommandAccess, getPlusLoyalty, getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
+import { getAiModelDefinition, getBrandingEligibleAt, getFunCommandAccess, getPlusLoyalty, getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, hasPlusEntitlement, makeSettingsPatch } from "../src/dashboard-config.js";
 
 test("dashboard settings allowlist fields and gate Plus models per guild", () => {
   const free = makeSettingsPatch({}, { aiChatEnabled: false, aiModel: "google/gemma-4-31b-it:free" });
@@ -131,6 +131,14 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
   assert.throws(() => makeSettingsPatch({}, { automodViolationsBeforeWarn: 0 }), /1 to 20/);
 
   assert.deepEqual(makeSettingsPatch(plus, { automodCustomWords: [" Spoiler ", "spoiler"] }).settings.automodCustomWords, ["spoiler"]);
+});
+
+test("model definitions and private provider policies cannot change at runtime", () => {
+  const tencent = getAiModelDefinition("tencent/hy3");
+  assert.equal(Object.isFrozen(tencent), true);
+  assert.equal(Object.isFrozen(tencent.providerRouting), true);
+  assert.equal(Object.isFrozen(tencent.providerRouting.order), true);
+  assert.throws(() => { tencent.providerRouting.data_collection = "allow"; }, TypeError);
 });
 
 test("community modules and rule-aware scanning use bounded server-owned configuration", () => {

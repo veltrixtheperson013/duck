@@ -25,9 +25,9 @@
       </article>
       <article class="update-card is-hotfix">
         <div class="update-meta"><time datetime="2026-08-23">August 23, 2026</time><span>Emergency hotfix</span></div>
-        <h2>AI scanning is back on the free router</h2>
-        <p>OpenRouter retired the old free model address. Duck now asks OpenRouter's free router to choose an available model instead, so channel scanning no longer fails with that model-unavailable 404.</p>
-        <ul><li>Restored experimental AI scan requests.</li><li>Updated the dashboard model description to match the real routing behavior.</li><li>Kept AI flags advisory: Duck suggests; moderators decide.</li></ul>
+        <h2>AI scanning now follows each server's chatbot model</h2>
+        <p>Experimental channel scanning now uses the same allowlisted model selected for that server's chatbot instead of forcing a separate free-router request.</p>
+        <ul><li>Server-specific model selection is preserved for every scan.</li><li>Provider privacy routing is copied from the selected model.</li><li>AI flags remain advisory: Duck suggests; moderators decide.</li></ul>
       </article>
 
       <article class="update-card">

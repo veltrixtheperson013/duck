@@ -40,7 +40,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(await (await fetch(`${origin}/features`)).text(), /Serious controls with deliberate guardrails/);
     const updates = await fetch(`${origin}/updates`);
     assert.equal(updates.status, 200);
-    assert.match(await updates.text(), /AI scanning is back on the free router/);
+    assert.match(await updates.text(), /AI scanning now follows each server's chatbot model/);
 
     const guide = await fetch(`${origin}/guide`);
     assert.equal(guide.status, 200);

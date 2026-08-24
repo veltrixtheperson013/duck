@@ -1,3 +1,10 @@
+function freezeModelDefinition(model) {
+  const providerRouting = model.providerRouting
+    ? Object.freeze({ ...model.providerRouting, ...(model.providerRouting.order ? { order: Object.freeze([...model.providerRouting.order]) } : {}) })
+    : undefined;
+  return Object.freeze({ ...model, ...(providerRouting ? { providerRouting } : {}) });
+}
+
 const AI_MODELS = Object.freeze([
   {
     id: "cohere/north-mini-code:free",
@@ -31,7 +38,7 @@ const AI_MODELS = Object.freeze([
     disclaimer: "Routed only through providers that declare no data collection. Provider policies can still change.",
     providerRouting: { data_collection: "deny" },
   },
-]);
+].map(freezeModelDefinition));
 
 const TTS_MODELS = Object.freeze([
   {
@@ -46,7 +53,7 @@ const TTS_MODELS = Object.freeze([
     tier: "plus",
     disclaimer: "Duck Plus voice using the host-configured ElevenLabs voice and model.",
   },
-]);
+].map(freezeModelDefinition));
 
 const AI_MODEL_IDS = new Set(AI_MODELS.map(({ id }) => id));
 const TTS_MODEL_IDS = new Set(TTS_MODELS.map(({ id }) => id));

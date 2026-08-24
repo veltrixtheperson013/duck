@@ -1,10 +1,9 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
 import { getGuildSettings } from "./config.js";
-import { getPublicGuildSettings } from "./dashboard-config.js";
+import { getAiModelDefinition, getPublicGuildSettings } from "./dashboard-config.js";
 import { FairGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, readBoundedJson, readBoundedText } from "./runtime.js";
 import { recordAiFlag } from "./community.js";
 
-const AI_SCAN_MODEL = "openrouter/free";
 const CATEGORIES = new Set(["harassment", "hate", "sexual", "violence", "self_harm", "scam", "spam", "other"]);
 const thresholds = { low: 0.9, balanced: 0.75, high: 0.6 };
 const scheduler = new FairGuildScheduler({ globalConcurrency: 2, guildConcurrency: 1, maxQueuedPerGuild: 10, maxQueuedGlobal: 50 });
@@ -33,8 +32,9 @@ function shouldQueueScan(message, settings, now = Date.now()) {
   return true;
 }
 
-async function requestSuggestion(content, rules = "No server-specific rules were supplied.", fetchImpl = fetch) {
-  if (typeof rules === "function") { fetchImpl = rules; rules = "No server-specific rules were supplied."; }
+async function requestSuggestion(content, { rules = "No server-specific rules were supplied.", model, fetchImpl = fetch } = {}) {
+  const selectedModel = getAiModelDefinition(model);
+  if (!selectedModel) throw new TypeError("AI scanning requires a server-selected model from Duck's allowlist.");
   const response = await fetchWithTimeoutAndRetry("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -44,7 +44,8 @@ async function requestSuggestion(content, rules = "No server-specific rules were
       "X-OpenRouter-Title": `${process.env.OPENROUTER_APP_NAME || "Duck Discord Bot"} advisory scanner`,
     },
     body: JSON.stringify({
-      model: AI_SCAN_MODEL,
+      model: selectedModel.id,
+      ...(selectedModel.providerRouting ? { provider: selectedModel.providerRouting } : {}),
       temperature: 0,
       max_tokens: 160,
       messages: [
@@ -72,7 +73,7 @@ async function getServerRules(message, settings, now = Date.now()) {
 }
 
 async function scanMessage(message, settings) {
-  const result = await requestSuggestion(message.content, await getServerRules(message, settings));
+  const result = await requestSuggestion(message.content, { rules: await getServerRules(message, settings), model: settings.aiModel });
   if (!result || result.confidence < thresholds[settings.aiScanSensitivity]) return null;
   const channel = message.guild.channels.cache.get(settings.aiScanFlagChannelId)
     ?? await message.guild.channels.fetch(settings.aiScanFlagChannelId).catch(() => null);
@@ -90,7 +91,7 @@ async function scanMessage(message, settings) {
       { name: "Message excerpt", value: excerpt || "(no text)" },
     )
     .setURL(message.url)
-    .setFooter({ text: `Advisory only · ${AI_SCAN_MODEL}` })
+    .setFooter({ text: `Advisory only · ${settings.aiModel}` })
     .setTimestamp();
   const actions = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`duck_ai_action:${message.channelId}:${message.id}:${message.author.id}`).setLabel("Take Action").setEmoji("🛡️").setStyle(ButtonStyle.Primary),
@@ -108,4 +109,4 @@ function queueAiScan(message) {
   catch (error) { if (error instanceof QueueCapacityError) return null; throw error; }
 }
 
-export { AI_SCAN_MODEL, getServerRules, parseScanResult, queueAiScan, requestSuggestion, shouldQueueScan };
+export { getServerRules, parseScanResult, queueAiScan, requestSuggestion, shouldQueueScan };
