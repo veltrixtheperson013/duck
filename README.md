@@ -31,6 +31,19 @@ DUCK_ADMIN_TOKEN=the_generated_value
 
 Open `http://127.0.0.1:9590` on the computer running Duck. If Duck runs on a remote server, use an SSH local port-forward such as `ssh -L 9590:127.0.0.1:9590 your-server`, then open the same local URL. Do not expose or reverse-proxy port 9590. The console rejects non-loopback clients, unexpected Host headers, cross-origin mutations, weak or missing tokens, oversized JSON, prototype keys, and excessive changes. Secrets are never included in its database export.
 
+For hosts that provide SFTP but no SSH tunnel, enable the hardened remote Operator Deck on Duck's existing HTTPS website. Keep the loopback controller enabled so persisted maintenance and cluster overrides are restored, then configure a private path and the one allowed Discord owner:
+
+```text
+DUCK_ADMIN_ENABLED=true
+DUCK_REMOTE_ADMIN_ENABLED=true
+DUCK_REMOTE_ADMIN_PATH=/pond-operations-use-a-long-random-value
+DUCK_ADMIN_OWNER_ID=1138897388694687834
+DUCK_ADMIN_SESSION_MINUTES=15
+DUCK_ADMIN_ALLOWED_IPS=
+```
+
+Sign in to Duck's normal dashboard with that Discord account first, then manually open `https://duck.wispbyte.app/<your-private-path>/`. The private path is not linked or advertised. Duck returns a normal 404 to other Discord accounts and signed-out visitors. Unlocking additionally requires the 64-or-more-character `DUCK_ADMIN_TOKEN`; Duck exchanges it for a short-lived HttpOnly, Secure, SameSite=Strict session bound to the current Discord session, client address, and browser. Every mutation requires a separate CSRF token and same-origin HTTPS request. Unlock attempts and operator changes have dedicated strict rate limits. `DUCK_ADMIN_ALLOWED_IPS` optionally accepts exact comma-separated client IPs, but should stay empty when the host's reverse proxy hides the real visitor IP.
+
 ## Features
 
 - `/setup channel:#channel` chooses the channel where Duck listens. `/setup quarantine-channel:<voice channel>` configures the Administrator-only voice quarantine destination.

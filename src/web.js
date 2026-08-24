@@ -13,9 +13,17 @@ import { getGuildInsights, isSafeSelfAssignableRole, publishReactionRolePanel, p
 import { publishHoneypotCounter } from "./automod.js";
 import { publishColorDock } from "./color-roles.js";
 import { getClusterManager } from "./clusters.js";
-import { getActiveWebsiteBanner, isPlatformBlocked } from "./operator-state.js";
+import { getActiveWebsiteBanner, isPlatformBlocked, recordOperatorAction } from "./operator-state.js";
+import { createDuckOperatorController } from "./admin.js";
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
+const adminDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "admin-public");
+const operatorAssets = new Map([
+  ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
+  ["/admin.css", { file: "admin.css", type: "text/css; charset=utf-8" }],
+  ["/admin.js", { file: "admin.js", type: "text/javascript; charset=utf-8" }],
+]);
+const operatorAssetCache = new Map([...operatorAssets.values()].map(({ file }) => [file, fs.readFileSync(path.join(adminDirectory, file))]));
 const pages = new Map([
   ["/", { file: "index.html", type: "text/html; charset=utf-8" }], ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/features", { file: "features.html", type: "text/html; charset=utf-8" }], ["/features/", { file: "features.html", type: "text/html; charset=utf-8" }], ["/features.html", { file: "features.html", type: "text/html; charset=utf-8" }],
@@ -45,6 +53,10 @@ function redirect(res, location, headers = {}) { res.writeHead(302, { ...securit
 function sendAsset(req, res, page, method, extraHeaders = {}) { const asset = assetCache.get(page.file); if (!asset) return send(res, 500, "text/plain; charset=utf-8", "Duck could not load this page.", method); const isHtml = page.type.startsWith("text/html"); const cacheControl = isHtml ? "no-cache" : page.type === "image/svg+xml" ? "public, max-age=604800, stale-while-revalidate=86400" : "public, max-age=3600, stale-while-revalidate=86400"; const zipped = /(?:^|,)\s*gzip\s*(?:,|$)/i.test(req.headers["accept-encoding"] || ""); const etag = zipped ? asset.gzipEtag : asset.etag; const common = { ...securityHeaders(page.type), "Cache-Control": cacheControl, ETag: etag, Vary: "Accept-Encoding", ...(zipped ? { "Content-Encoding": "gzip" } : {}), ...extraHeaders }; if (req.headers["if-none-match"] === etag) { res.writeHead(304, common); return res.end(); } const body = zipped ? asset.gzip : asset.body; res.writeHead(200, { ...common, "Content-Length": body.length }); res.end(method === "HEAD" ? undefined : body); }
 function parseCookies(req) { const cookies = Object.create(null); for (const part of String(req.headers.cookie || "").split(";")) { const [key, value] = part.trim().split(/=(.*)/s); if (!key) continue; try { cookies[key] = decodeURIComponent(value || ""); } catch { /* Ignore malformed attacker-controlled cookies. */ } } return cookies; }
 function randomToken() { return randomBytes(32).toString("base64url"); }
+function digest(value) { return createHash("sha256").update(String(value || "")).digest(); }
+function secretMatches(supplied, expected, minimum = 64) { const value = String(supplied || ""); return value.length >= minimum && value.length <= 512 && timingSafeEqual(digest(value), digest(expected)); }
+function normalizeRemoteAddress(value) { const address = String(value || "").trim(); return address ? address.replace(/^::ffff:/, "") : ""; }
+function normalizeOperatorPath(value) { const raw = String(value || "").trim().replace(/^\/+|\/+$/g, ""); const pathname = raw ? `/${raw}` : ""; return /^\/[A-Za-z0-9_-]{16,80}$/.test(pathname) && pathname !== "/admin" ? pathname : null; }
 function hasManageGuildPermission(guild) { if (guild?.owner) return true; try { const permissions = BigInt(guild?.permissions || "0"); return (permissions & (MANAGE_GUILD | ADMINISTRATOR)) !== 0n; } catch { return false; } }
 function hasAdministratorPermission(guild) { if (guild?.owner) return true; try { return (BigInt(guild?.permissions || "0") & ADMINISTRATOR) !== 0n; } catch { return false; } }
 function makeBotInviteUrl(guildId, clientId = process.env.CLIENT_ID || "1507850959642955816") { const url = new URL("https://discord.com/oauth2/authorize"); url.searchParams.set("client_id", clientId); url.searchParams.set("guild_id", guildId); url.searchParams.set("disable_guild_select", "true"); return url.toString(); }
@@ -150,7 +162,7 @@ function createDuckWebsiteServer(options = {}) {
   const reportError = options.logErrorImpl || logError;
   const stripe = options.stripeClient ?? getStripeClient();
   const clusterManager = options.clusterManager || getClusterManager();
-  const sessions = new Map(); const webhookEvents = new Map();
+  const sessions = new Map(); const operatorSessions = new Map(); const webhookEvents = new Map();
   const oauthStateSecret = randomBytes(32);
   const requestRates = new Map(); const globalRates = new Map(); const billingCheckoutLocks = new Set();
   let lastPruneAt = 0; let discordInflight = 0;
@@ -160,9 +172,19 @@ function createDuckWebsiteServer(options = {}) {
   const clientId = () => String(process.env.CLIENT_ID || "").trim();
   const clientSecret = () => String(process.env.DISCORD_CLIENT_SECRET || "").trim();
   const redirectUri = () => String(process.env.DISCORD_OAUTH_REDIRECT_URI || "https://duck.wispbyte.app/auth/discord/callback").trim();
+  const remoteOperatorEnabled = /^(1|true|yes|on)$/i.test(String(process.env.DUCK_REMOTE_ADMIN_ENABLED || "false"));
+  const remoteOperatorPath = remoteOperatorEnabled ? normalizeOperatorPath(process.env.DUCK_REMOTE_ADMIN_PATH) : null;
+  const remoteOperatorToken = String(process.env.DUCK_ADMIN_TOKEN || "");
+  const remoteOperatorOwnerId = String(process.env.DUCK_ADMIN_OWNER_ID || DUCK_OWNER_USER_ID);
+  const remoteOperatorAllowedIps = new Set(String(process.env.DUCK_ADMIN_ALLOWED_IPS || "").split(",").map((item) => normalizeRemoteAddress(item.trim())).filter(Boolean));
+  const remoteOperatorSessionMs = Math.max(5, Math.min(Number(process.env.DUCK_ADMIN_SESSION_MINUTES) || 15, 30)) * 60_000;
+  if (remoteOperatorEnabled && (!remoteOperatorPath || !/^\d{10,20}$/.test(remoteOperatorOwnerId) || remoteOperatorToken.length < 64 || remoteOperatorToken.length > 512)) throw new Error("Remote Operator Deck requires a 16+ character DUCK_REMOTE_ADMIN_PATH, a valid DUCK_ADMIN_OWNER_ID, and a 64+ character DUCK_ADMIN_TOKEN.");
+  const operatorController = createDuckOperatorController({ client, clusterManager, getGuildSettings, updateGuildSettings, deleteGuildSettings: options.deleteGuildSettings });
   const secureCookie = () => !/^(0|false|no)$/i.test(process.env.DUCK_SESSION_SECURE || "") && redirectUri().startsWith("https:");
+  if (remoteOperatorEnabled && !secureCookie()) throw new Error("Remote Operator Deck requires HTTPS and DUCK_SESSION_SECURE=true.");
   const cookie = (name, value, maxAge) => `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
-  const prune = (force = false) => { const now = Date.now(); if (!force && now - lastPruneAt < 30_000 && sessions.size <= 5_000 && webhookEvents.size <= 10_000 && requestRates.size <= 10_000) return; lastPruneAt = now; for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key); for (const [key, value] of webhookEvents) if (value <= now) webhookEvents.delete(key); for (const [key, value] of requestRates) if (value.resetAt <= now) requestRates.delete(key); for (const [key, value] of globalRates) if (value.resetAt <= now) globalRates.delete(key); while (sessions.size > 5_000) sessions.delete(sessions.keys().next().value); while (webhookEvents.size > 10_000) webhookEvents.delete(webhookEvents.keys().next().value); while (requestRates.size > 10_000) requestRates.delete(requestRates.keys().next().value); };
+  const operatorCookie = (value, maxAge) => `duck_operator=${encodeURIComponent(value)}; Path=${remoteOperatorPath || "/"}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
+  const prune = (force = false) => { const now = Date.now(); if (!force && now - lastPruneAt < 30_000 && sessions.size <= 5_000 && operatorSessions.size <= 8 && webhookEvents.size <= 10_000 && requestRates.size <= 10_000) return; lastPruneAt = now; for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key); for (const [key, value] of operatorSessions) if (value.expiresAt <= now || !sessions.has(value.discordSessionId)) operatorSessions.delete(key); for (const [key, value] of webhookEvents) if (value <= now) webhookEvents.delete(key); for (const [key, value] of requestRates) if (value.resetAt <= now) requestRates.delete(key); for (const [key, value] of globalRates) if (value.resetAt <= now) globalRates.delete(key); while (sessions.size > 5_000) sessions.delete(sessions.keys().next().value); while (operatorSessions.size > 8) operatorSessions.delete(operatorSessions.keys().next().value); while (webhookEvents.size > 10_000) webhookEvents.delete(webhookEvents.keys().next().value); while (requestRates.size > 10_000) requestRates.delete(requestRates.keys().next().value); };
   function makeOAuthState() { const payload = `${Date.now()}.${randomToken()}`; const signature = createHmac("sha256", oauthStateSecret).update(payload).digest("base64url"); return `${payload}.${signature}`; }
   function verifyOAuthState(value) { const parts = String(value || "").split("."); const createdAt = Number(parts[0]); if (parts.length !== 3 || !Number.isFinite(createdAt) || createdAt > Date.now() + 60_000 || Date.now() - createdAt > 10 * 60_000) return false; const expected = createHmac("sha256", oauthStateSecret).update(`${parts[0]}.${parts[1]}`).digest(); let supplied; try { supplied = Buffer.from(parts[2], "base64url"); } catch { return false; } return supplied.length === expected.length && timingSafeEqual(supplied, expected); }
   function allowRequest(req, bucket, limit, windowMs) { const now = Date.now(); const globalLimit = Math.max(limit * 10, 100); let global = globalRates.get(bucket); if (!global || global.resetAt <= now) { global = { count: 0, resetAt: now + windowMs }; globalRates.set(bucket, global); } if (++global.count > globalLimit) return false; const key = `${req.socket.remoteAddress || "unknown"}:${bucket}`; let current = requestRates.get(key); if (!current || current.resetAt <= now) { current = { count: 0, resetAt: now + windowMs }; setBoundedMapEntry(requestRates, key, current, 10_000); } current.count += 1; return current.count <= limit; }
@@ -221,12 +243,72 @@ function createDuckWebsiteServer(options = {}) {
   function getSession(req) { prune(); const id = parseCookies(req).duck_session; const session = id && sessions.get(id); if (session && isPlatformBlocked(session.user?.id)) { sessions.delete(id); return null; } return session ? { id, session } : null; }
   async function guildAccess(req, guildId, fresh = false) { const auth = getSession(req); if (!auth) return { error: "Sign in with Discord first.", status: 401 }; const now = Date.now(); const cacheTtl = fresh ? guildAuthCacheTtlMs : guildCacheTtlMs; const hasValidGuildCache = Array.isArray(auth.session.guilds) && auth.session.guildsAt > now - cacheTtl; const isBackedOff = auth.session.guildsBackoffUntil > now; let guilds; if (hasValidGuildCache) guilds = auth.session.guilds; else if (fresh && isBackedOff) return { error: "Discord is rate limiting permission refreshes. Try again shortly.", status: 503, retryAfterMs: Math.max(0, auth.session.guildsBackoffUntil - now) }; else if (isBackedOff) { if (!Array.isArray(auth.session.guilds)) return { error: "Discord is rate limiting guild refreshes. Try again shortly.", status: 503, retryAfterMs: Math.max(0, auth.session.guildsBackoffUntil - now) }; guilds = auth.session.guilds; } else { guilds = await refreshGuildCache(auth.session); } const guild = guilds.find(({ id }) => id === guildId); if (!guild) return { error: "You are not a member of that server.", status: 403 }; if (!hasManageGuildPermission(guild)) return { error: "Manage Server permission is required.", status: 403 }; const botGuild = client?.guilds?.cache?.get(guildId); if (!botGuild) return { error: "Invite Duck to this server before configuring it.", status: 409 }; const isAdministrator = hasAdministratorPermission(guild); let member = null; if (!isAdministrator) { member = botGuild.members?.cache?.get(auth.session.user.id) ?? (botGuild.members?.fetch ? await botGuild.members.fetch({ user: auth.session.user.id, force: true }).catch(() => null) : null); if (!member) return { error: "Duck could not verify your current server membership.", status: 403 }; } return { ...auth, guild, botGuild, member, isAdministrator }; }
   function requireCsrf(req, auth) { const supplied = Buffer.from(String(req.headers["x-duck-csrf"] || "")); const expected = Buffer.from(String(auth.session.csrf || "")); return supplied.length > 20 && supplied.length === expected.length && timingSafeEqual(supplied, expected); }
+  function operatorClientIp(req) { return normalizeRemoteAddress(req.socket.remoteAddress); }
+  function operatorIpAllowed(req) { return !remoteOperatorAllowedIps.size || remoteOperatorAllowedIps.has(operatorClientIp(req)); }
+  function operatorUserAgent(req) { return createHash("sha256").update(String(req.headers["user-agent"] || "").slice(0, 512)).digest("base64url"); }
+  function operatorDiscordAuth(req) { const auth = getSession(req); return auth && auth.session.user?.id === remoteOperatorOwnerId && operatorIpAllowed(req) ? auth : null; }
+  function getOperatorSession(req, discordAuth) {
+    if (!discordAuth) return null;
+    const id = parseCookies(req).duck_operator; const session = id && operatorSessions.get(id); const now = Date.now();
+    if (!session || session.expiresAt <= now || session.discordSessionId !== discordAuth.id || session.userId !== remoteOperatorOwnerId || session.ip !== operatorClientIp(req) || session.userAgent !== operatorUserAgent(req)) { if (id) operatorSessions.delete(id); return null; }
+    return { id, session };
+  }
+  function requireOperatorCsrf(req, auth) { const supplied = Buffer.from(String(req.headers["x-duck-operator-csrf"] || "")); const expected = Buffer.from(String(auth?.session?.csrf || "")); return supplied.length > 20 && supplied.length === expected.length && timingSafeEqual(supplied, expected); }
+  function requireOperatorOrigin(req) {
+    let expected; try { expected = new URL(process.env.DUCK_PUBLIC_URL || redirectUri()).origin; } catch { return false; }
+    return expected.startsWith("https://") && String(req.headers.origin || "") === expected && String(req.headers["sec-fetch-site"] || "same-origin").toLowerCase() !== "cross-site";
+  }
+
+  async function handleRemoteOperator(req, res, pathname, method) {
+    const discordAuth = operatorDiscordAuth(req);
+    if (!discordAuth) { send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method); return; }
+    const subpath = pathname.slice(remoteOperatorPath.length) || "/";
+    if (subpath === "" || subpath === "/") {
+      if (pathname !== `${remoteOperatorPath}/`) { redirect(res, `${remoteOperatorPath}/`, { "X-Robots-Tag": "noindex, nofollow, noarchive" }); return; }
+      return send(res, 200, "text/html; charset=utf-8", operatorAssetCache.get("index.html"), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
+    }
+    const asset = operatorAssets.get(subpath);
+    if (asset && ["GET", "HEAD"].includes(method)) return send(res, 200, asset.type, operatorAssetCache.get(asset.file), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
+    if (!subpath.startsWith("/api/")) return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
+
+    const operatorAuth = getOperatorSession(req, discordAuth);
+    if (subpath === "/api/session" && method === "GET") return json(res, 200, { authenticated: Boolean(operatorAuth), csrf: operatorAuth?.session.csrf || null, loginCsrf: operatorAuth ? null : discordAuth.session.csrf, expiresAt: operatorAuth ? new Date(operatorAuth.session.expiresAt).toISOString() : null, user: discordAuth.session.user }, method);
+    if (subpath === "/api/session" && method === "POST") {
+      if (!allowRequest(req, "operator-unlock", 5, 15 * 60_000)) return json(res, 429, { error: "Too many unlock attempts. Wait 15 minutes." }, method, { "Retry-After": "900" });
+      if (!requireOperatorOrigin(req) || !requireCsrf(req, discordAuth)) return json(res, 403, { error: "Operator request verification failed." });
+      const input = await readJsonBody(req, 2 * 1024);
+      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => key !== "token") || !secretMatches(input.token, remoteOperatorToken)) return json(res, 403, { error: "Operator access denied." });
+      for (const [id, session] of operatorSessions) if (session.userId === remoteOperatorOwnerId) operatorSessions.delete(id);
+      const id = randomToken(); const csrf = randomToken(); const expiresAt = Date.now() + remoteOperatorSessionMs;
+      operatorSessions.set(id, { userId: remoteOperatorOwnerId, discordSessionId: discordAuth.id, ip: operatorClientIp(req), userAgent: operatorUserAgent(req), csrf, expiresAt });
+      recordOperatorAction("operator.session-unlocked", { target: remoteOperatorOwnerId, reason: "Discord owner and operator token verified" });
+      return json(res, 200, { ok: true, csrf, expiresAt: new Date(expiresAt).toISOString() }, method, { "Set-Cookie": operatorCookie(id, Math.floor(remoteOperatorSessionMs / 1000)) });
+    }
+    if (!operatorAuth) return json(res, 401, { error: "Unlock the Operator Deck again." }, method, { "Set-Cookie": operatorCookie("", 0) });
+    if (subpath === "/api/session" && method === "DELETE") {
+      if (!requireOperatorOrigin(req) || !requireOperatorCsrf(req, operatorAuth)) return json(res, 403, { error: "Operator request verification failed." });
+      operatorSessions.delete(operatorAuth.id); return json(res, 200, { ok: true }, method, { "Set-Cookie": operatorCookie("", 0) });
+    }
+    if (!allowRequest(req, "operator-read", 60, 60_000)) return json(res, 429, { error: "Operator request limit reached. Slow down." }, method, { "Retry-After": "60" });
+    if (subpath === "/api/overview" && method === "GET") return json(res, 200, operatorController.overview(), method);
+    const guildMatch = subpath.match(/^\/api\/database\/guilds\/(\d{10,20})$/);
+    if (guildMatch && method === "GET") return json(res, 200, operatorController.inspectGuild(guildMatch[1]), method);
+    if (subpath === "/api/database/export" && method === "GET") return json(res, 200, operatorController.exportDatabase(), method);
+    if (subpath === "/api/action" && method === "POST") {
+      if (!allowRequest(req, "operator-mutation", 12, 60_000)) return json(res, 429, { error: "Operator change limit reached. Wait before changing more settings." }, method, { "Retry-After": "60" });
+      if (!requireOperatorOrigin(req) || !requireOperatorCsrf(req, operatorAuth)) return json(res, 403, { error: "Operator request verification failed." });
+      const result = operatorController.action(await readJsonBody(req, 64 * 1024));
+      return json(res, 200, { ok: true, result }, method);
+    }
+    return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD, POST, DELETE" });
+  }
 
   const server = http.createServer({ maxHeaderSize: 16 * 1024 }, async (req, res) => {
     const method = req.method || "GET"; const requestId = randomBytes(8).toString("hex"); res.setHeader("X-Request-ID", requestId); let pathname;
     try { pathname = new URL(req.url || "/", "http://duck.local").pathname; } catch { return send(res, 400, "text/plain; charset=utf-8", "Bad request.", method); }
     try {
       prune();
+      if (remoteOperatorEnabled && (pathname === remoteOperatorPath || pathname.startsWith(`${remoteOperatorPath}/`))) { await handleRemoteOperator(req, res, pathname, method); return; }
       const rate = pathname.startsWith("/auth/") ? ["auth", 30, 10 * 60_000] : pathname === "/api/clusters/lookup" ? ["cluster-lookup", 30, 60_000] : pathname === "/api/billing/webhook" ? ["billing-webhook", 120, 60_000] : pathname === "/donate/checkout" ? ["billing-donation", 10, 60_000] : pathname.endsWith("/branding") ? ["branding", 6, 60_000] : pathname.includes("/billing/") ? ["billing-user", 20, 60_000] : ["web", 300, 60_000];
       if (!allowRequest(req, ...rate)) return json(res, 429, { error: "Too many requests. Try again shortly." }, method, { "Retry-After": "60" });
       if (pathname.endsWith("/publish") && !allowRequest(req, "module-publish", 10, 60_000)) return json(res, 429, { error: "Too many panel publications. Try again shortly." }, method, { "Retry-After": "60" });

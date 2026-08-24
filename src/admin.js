@@ -75,8 +75,43 @@ function startOperatorMaintenance(clusterManager) {
   apply(); const timer = setInterval(apply, 15_000); timer.unref(); return timer;
 }
 
+function createDuckOperatorController(options = {}) {
+  const client = options.client;
+  const clusterManager = options.clusterManager || getClusterManager();
+  const getSettings = options.getGuildSettings || getGuildSettings;
+  const updateSettings = options.updateGuildSettings || updateGuildSettings;
+  const deleteSettings = options.deleteGuildSettings || deleteGuildSettings;
+  return {
+    overview() {
+      const guilds = client?.guilds?.cache ? [...client.guilds.cache.values()].map((guild) => ({ id: guild.id, name: String(guild.name || "Unknown server").slice(0, 100), members: Number(guild.memberCount) || 0, cluster: clusterManager.describeGuild(guild.id) })) : [];
+      return { service: { startedAt: new Date(Date.now() - Math.max(0, Number(process.uptime()) * 1000)).toISOString(), uptimeSeconds: Math.floor(process.uptime()), memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024), node: process.version }, guilds, clusters: clusterManager.list(guilds.map(({ id }) => id)), operator: publicOperatorState(getOperatorState()), database: { guildProfiles: Object.keys(loadSettings().guilds || {}).length } };
+    },
+    inspectGuild(guildId) { const id = validId(guildId, "Server ID"); return { guildId: id, settings: getSettings(id) }; },
+    exportDatabase() { return { exportedAt: new Date().toISOString(), settings: loadSettings(), operator: publicOperatorState(getOperatorState()) }; },
+    action(input) {
+      if (!safeObject(input)) throw new TypeError("Request must be a safe JSON object.");
+      const action = String(input.action || ""); let result;
+      if (action === "cluster.status") { result = clusterManager.setStatus(String(input.clusterId), String(input.status)); setClusterStatusOverride(String(input.clusterId), String(input.status)); }
+      else if (action === "cluster.assign") { const guildId = validId(input.guildId, "Server ID"); result = clusterManager.setAssignment(guildId, String(input.clusterId)); setClusterAssignmentOverride(guildId, String(input.clusterId)); }
+      else if (action === "cluster.unassign") { const guildId = validId(input.guildId, "Server ID"); result = clusterManager.clearAssignment(guildId); setClusterAssignmentOverride(guildId, null); }
+      else if (action === "maintenance.schedule") result = scheduleMaintenance(input);
+      else if (action === "platform.block") result = setPlatformBlock(validId(input.userId, "User ID"), input.reason);
+      else if (action === "platform.unblock") result = { removed: removePlatformBlock(validId(input.userId, "User ID")) };
+      else if (action === "plus.grant") { const guildId = validId(input.guildId, "Server ID"); result = grantPlus(guildId, String(input.level), input.expiresAt, getSettings, updateSettings); }
+      else if (action === "plus.revoke") { const guildId = validId(input.guildId, "Server ID"); const current = getSettings(guildId); if (current.subscription?.provider !== "operator") throw Object.assign(new Error("Only operator-granted Plus can be revoked here."), { status: 409 }); updateSettings(guildId, { subscription: { provider: "operator", tier: "free", status: "revoked", revokedAt: new Date().toISOString() } }); result = { revoked: true }; }
+      else if (action === "banner.set") result = setWebsiteBanner(input);
+      else if (action === "banner.clear") { clearWebsiteBanner(); result = { cleared: true }; }
+      else if (action === "database.flush") { flushJsonWrites(); result = { flushed: true }; }
+      else if (action === "database.delete-guild") { const guildId = validId(input.guildId, "Server ID"); if (String(input.confirmation) !== guildId) throw new TypeError("Type the exact server ID to confirm deletion."); result = { deleted: deleteSettings(guildId) }; }
+      else throw Object.assign(new Error("Unknown operator action."), { status: 400 });
+      recordOperatorAction(action, { target: input.guildId || input.userId || input.clusterId || "Duck", reason: input.reason || "Operator request" });
+      return result;
+    },
+  };
+}
+
 function createDuckOperatorServer(options = {}) {
-  const client = options.client; const clusterManager = options.clusterManager || getClusterManager(); const token = String(options.token || process.env.DUCK_ADMIN_TOKEN || ""); const port = Math.max(1, Math.min(Number(options.port || process.env.DUCK_ADMIN_PORT) || 9590, 65_535)); const getSettings = options.getGuildSettings || getGuildSettings; const updateSettings = options.updateGuildSettings || updateGuildSettings; const deleteSettings = options.deleteGuildSettings || deleteGuildSettings;
+  const clusterManager = options.clusterManager || getClusterManager(); const token = String(options.token || process.env.DUCK_ADMIN_TOKEN || ""); const port = Math.max(1, Math.min(Number(options.port || process.env.DUCK_ADMIN_PORT) || 9590, 65_535)); const controller = createDuckOperatorController({ ...options, clusterManager });
   if (token.length < 32) throw new Error("DUCK_ADMIN_TOKEN must contain at least 32 characters.");
   const mutationTimes = [];
   const server = http.createServer({ maxHeaderSize: 8 * 1024 }, async (req, res) => {
@@ -92,28 +127,13 @@ function createDuckOperatorServer(options = {}) {
     }
     try {
       if (pathname === "/api/overview" && method === "GET") {
-        const guilds = client?.guilds?.cache ? [...client.guilds.cache.values()].map((guild) => ({ id: guild.id, name: String(guild.name || "Unknown server").slice(0, 100), members: Number(guild.memberCount) || 0, cluster: clusterManager.describeGuild(guild.id) })) : [];
-        return json(res, 200, { service: { startedAt: new Date(Date.now() - Math.max(0, Number(process.uptime()) * 1000)).toISOString(), uptimeSeconds: Math.floor(process.uptime()), memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024), node: process.version }, guilds, clusters: clusterManager.list(guilds.map(({ id }) => id)), operator: publicOperatorState(getOperatorState()), database: { guildProfiles: Object.keys(loadSettings().guilds || {}).length } }, method);
+        return json(res, 200, controller.overview(), method);
       }
       const guildMatch = pathname.match(/^\/api\/database\/guilds\/(\d{10,20})$/);
-      if (guildMatch && method === "GET") return json(res, 200, { guildId: guildMatch[1], settings: getSettings(guildMatch[1]) }, method);
-      if (pathname === "/api/database/export" && method === "GET") return json(res, 200, { exportedAt: new Date().toISOString(), settings: loadSettings(), operator: publicOperatorState(getOperatorState()) }, method);
+      if (guildMatch && method === "GET") return json(res, 200, controller.inspectGuild(guildMatch[1]), method);
+      if (pathname === "/api/database/export" && method === "GET") return json(res, 200, controller.exportDatabase(), method);
       if (pathname === "/api/action" && method === "POST") {
-        const input = await readJson(req); const action = String(input.action || ""); let result;
-        if (action === "cluster.status") { result = clusterManager.setStatus(String(input.clusterId), String(input.status)); setClusterStatusOverride(String(input.clusterId), String(input.status)); }
-        else if (action === "cluster.assign") { const guildId = validId(input.guildId, "Server ID"); result = clusterManager.setAssignment(guildId, String(input.clusterId)); setClusterAssignmentOverride(guildId, String(input.clusterId)); }
-        else if (action === "cluster.unassign") { const guildId = validId(input.guildId, "Server ID"); result = clusterManager.clearAssignment(guildId); setClusterAssignmentOverride(guildId, null); }
-        else if (action === "maintenance.schedule") result = scheduleMaintenance(input);
-        else if (action === "platform.block") result = setPlatformBlock(validId(input.userId, "User ID"), input.reason);
-        else if (action === "platform.unblock") result = { removed: removePlatformBlock(validId(input.userId, "User ID")) };
-        else if (action === "plus.grant") { const guildId = validId(input.guildId, "Server ID"); result = grantPlus(guildId, String(input.level), input.expiresAt, getSettings, updateSettings); }
-        else if (action === "plus.revoke") { const guildId = validId(input.guildId, "Server ID"); const current = getSettings(guildId); if (current.subscription?.provider !== "operator") throw Object.assign(new Error("Only operator-granted Plus can be revoked here."), { status: 409 }); updateSettings(guildId, { subscription: { provider: "operator", tier: "free", status: "revoked", revokedAt: new Date().toISOString() } }); result = { revoked: true }; }
-        else if (action === "banner.set") result = setWebsiteBanner(input);
-        else if (action === "banner.clear") { clearWebsiteBanner(); result = { cleared: true }; }
-        else if (action === "database.flush") { flushJsonWrites(); result = { flushed: true }; }
-        else if (action === "database.delete-guild") { const guildId = validId(input.guildId, "Server ID"); if (String(input.confirmation) !== guildId) throw new TypeError("Type the exact server ID to confirm deletion."); result = { deleted: deleteSettings(guildId) }; }
-        else throw Object.assign(new Error("Unknown operator action."), { status: 400 });
-        recordOperatorAction(action, { target: input.guildId || input.userId || input.clusterId || "Duck", reason: input.reason || "Operator request" });
+        const input = await readJson(req); const result = controller.action(input);
         return json(res, 200, { ok: true, result }, method);
       }
       return json(res, 405, { error: "Method not allowed." }, method);
@@ -129,4 +149,4 @@ function startDuckOperatorServer(options = {}) {
   const server = createDuckOperatorServer(options); server.listen(server.operatorPort, "127.0.0.1", () => logInfo("operator.ready", { address: "127.0.0.1", port: server.operatorPort })); return server;
 }
 
-export { createDuckOperatorServer, grantPlus, startDuckOperatorServer };
+export { createDuckOperatorController, createDuckOperatorServer, grantPlus, startDuckOperatorServer };

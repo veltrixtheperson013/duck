@@ -58,6 +58,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.status, 200);
     assert.match(css.headers.get("content-type"), /^text\/css/);
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
+    const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/);
 
     const script = await fetch(`${origin}/site.js`);
     assert.equal(script.status, 200);
@@ -78,7 +79,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260841/);
+    assert.match(dashboardText, /styles\.css\?v=20260842/);
     assert.match(dashboardText, /Verification challenge/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
@@ -129,6 +130,46 @@ test("website rejects unsupported methods and unknown routes", async () => {
     assert.equal((await fetch(`${origin}/`, { method: "POST" })).status, 405);
     assert.equal((await fetch(`${origin}/dashboard/servers/123456789012345678`, { method: "POST" })).status, 405);
   });
+});
+
+test("remote Operator Deck requires Discord owner, token, origin, and CSRF", async () => {
+  const keys = ["CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_PUBLIC_URL", "DUCK_SESSION_SECURE", "DUCK_REMOTE_ADMIN_ENABLED", "DUCK_REMOTE_ADMIN_PATH", "DUCK_ADMIN_OWNER_ID", "DUCK_ADMIN_TOKEN", "DUCK_ADMIN_SESSION_MINUTES", "DUCK_ADMIN_ALLOWED_IPS"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const ownerId = "1138897388694687834"; const strangerId = "900000000000000002"; const operatorPath = "/pond-ops-test-4f9a12c85e7b"; const operatorToken = "a".repeat(64);
+  Object.assign(process.env, { CLIENT_ID: "1507850959642955816", DISCORD_CLIENT_SECRET: "test-secret", DISCORD_OAUTH_REDIRECT_URI: "https://duck.wispbyte.app/auth/discord/callback", DUCK_PUBLIC_URL: "https://duck.wispbyte.app", DUCK_SESSION_SECURE: "true", DUCK_REMOTE_ADMIN_ENABLED: "true", DUCK_REMOTE_ADMIN_PATH: operatorPath, DUCK_ADMIN_OWNER_ID: ownerId, DUCK_ADMIN_TOKEN: operatorToken, DUCK_ADMIN_SESSION_MINUTES: "15", DUCK_ADMIN_ALLOWED_IPS: "" });
+  const fetchImpl = async (url, options = {}) => {
+    const authorization = String(options.headers?.Authorization || "");
+    if (String(url).endsWith("/oauth2/token")) { const code = options.body.get("code"); return Response.json({ access_token: `access-${code}`, refresh_token: `refresh-${code}`, expires_in: 3600 }); }
+    if (String(url).endsWith("/users/@me")) return Response.json({ id: authorization.endsWith("access-owner") ? ownerId : strangerId, username: "operator-test", avatar: null });
+    if (String(url).endsWith("/users/@me/guilds")) return Response.json([]);
+    return new Response("not found", { status: 404 });
+  };
+  const signIn = async (origin, code) => { const begin = await fetch(`${origin}/auth/discord`, { redirect: "manual" }); const oauthUrl = new URL(begin.headers.get("location")); const stateCookie = begin.headers.get("set-cookie").match(/duck_oauth_state=([^;]+)/)[1]; const callback = await fetch(`${origin}/auth/discord/callback?code=${code}&state=${encodeURIComponent(oauthUrl.searchParams.get("state"))}`, { redirect: "manual", headers: { Cookie: `duck_oauth_state=${stateCookie}` } }); return `duck_session=${callback.headers.get("set-cookie").match(/duck_session=([^;,]+)/)[1]}`; };
+  try {
+    await withWebsite(async (origin) => {
+      assert.equal((await fetch(`${origin}${operatorPath}/`)).status, 404);
+      const strangerCookie = await signIn(origin, "stranger"); assert.equal((await fetch(`${origin}${operatorPath}/`, { headers: { Cookie: strangerCookie } })).status, 404);
+      const ownerCookie = await signIn(origin, "owner"); const agent = "duck-operator-security-test";
+      const page = await fetch(`${origin}${operatorPath}/`, { headers: { Cookie: ownerCookie, "User-Agent": agent } }); assert.equal(page.status, 200); assert.equal(page.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
+      assert.doesNotMatch(page.headers.get("content-security-policy"), /trusted-types/); assert.equal((await fetch(`${origin}${operatorPath}/admin.js`)).status, 404); assert.equal((await fetch(`${origin}${operatorPath}/admin.js`, { headers: { Cookie: ownerCookie, "User-Agent": agent } })).status, 200);
+      const sessionStatus = await (await fetch(`${origin}${operatorPath}/api/session`, { headers: { Cookie: ownerCookie, "User-Agent": agent } })).json(); assert.equal(sessionStatus.authenticated, false); assert.ok(sessionStatus.loginCsrf);
+      const wrongOrigin = await fetch(`${origin}${operatorPath}/api/session`, { method: "POST", headers: { Cookie: ownerCookie, Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-CSRF": sessionStatus.loginCsrf }, body: JSON.stringify({ token: operatorToken }) }); assert.equal(wrongOrigin.status, 403);
+      const wrongToken = await fetch(`${origin}${operatorPath}/api/session`, { method: "POST", headers: { Cookie: ownerCookie, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-CSRF": sessionStatus.loginCsrf }, body: JSON.stringify({ token: "b".repeat(64) }) }); assert.equal(wrongToken.status, 403);
+      const unlock = await fetch(`${origin}${operatorPath}/api/session`, { method: "POST", headers: { Cookie: ownerCookie, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-CSRF": sessionStatus.loginCsrf }, body: JSON.stringify({ token: operatorToken }) }); assert.equal(unlock.status, 200); const unlocked = await unlock.json(); const operatorCookie = `duck_operator=${unlock.headers.get("set-cookie").match(/duck_operator=([^;]+)/)[1]}`;
+      const cookies = `${ownerCookie}; ${operatorCookie}`; const overview = await fetch(`${origin}${operatorPath}/api/overview`, { headers: { Cookie: cookies, "User-Agent": agent } }); assert.equal(overview.status, 200);
+      const noCsrf = await fetch(`${origin}${operatorPath}/api/action`, { method: "POST", headers: { Cookie: cookies, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json" }, body: JSON.stringify({ action: "database.flush" }) }); assert.equal(noCsrf.status, 403);
+      const mutation = await fetch(`${origin}${operatorPath}/api/action`, { method: "POST", headers: { Cookie: cookies, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-Operator-CSRF": unlocked.csrf }, body: JSON.stringify({ action: "database.flush" }) }); assert.equal(mutation.status, 200);
+      assert.equal((await fetch(`${origin}${operatorPath}/api/overview`, { headers: { Cookie: cookies, "User-Agent": "different-browser" } })).status, 401);
+    }, { fetchImpl, client: { guilds: { cache: new Map() } } });
+  } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
+});
+
+test("remote Operator Deck accepts a private path configured without a leading slash", async () => {
+  const keys = ["DUCK_PUBLIC_URL", "DISCORD_OAUTH_REDIRECT_URI", "DUCK_SESSION_SECURE", "DUCK_REMOTE_ADMIN_ENABLED", "DUCK_REMOTE_ADMIN_PATH", "DUCK_ADMIN_OWNER_ID", "DUCK_ADMIN_TOKEN"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { DUCK_PUBLIC_URL: "https://duck.wispbyte.app", DISCORD_OAUTH_REDIRECT_URI: "https://duck.wispbyte.app/auth/discord/callback", DUCK_SESSION_SECURE: "true", DUCK_REMOTE_ADMIN_ENABLED: "true", DUCK_REMOTE_ADMIN_PATH: "pond-without-leading-slash", DUCK_ADMIN_OWNER_ID: "1138897388694687834", DUCK_ADMIN_TOKEN: "c".repeat(64) });
+  try { assert.ok(createDuckWebsiteServer()); }
+  finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });
 
 test("public pages contain no GitHub references", async () => {
