@@ -1,0 +1,8 @@
+[hidden] {
+  display: none !important;
+}
+
+[inert] {
+  pointer-events: none !important;
+  user-select: none !important;
+}

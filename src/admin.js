@@ -15,6 +15,7 @@ const assets = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/admin.css", ["admin.css", "text/css; charset=utf-8"]],
+  ["/admin-guard.css", ["admin-guard.css", "text/css; charset=utf-8"]],
   ["/admin.js", ["admin.js", "text/javascript; charset=utf-8"]],
 ]);
 const assetCache = new Map([...assets.values()].map(([file]) => [file, fs.readFileSync(path.join(adminDirectory, file))]));

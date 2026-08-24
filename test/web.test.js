@@ -148,10 +148,13 @@ test("remote Operator Deck requires Discord owner, token, origin, and CSRF", asy
   try {
     await withWebsite(async (origin) => {
       assert.equal((await fetch(`${origin}${operatorPath}/`)).status, 404);
+      assert.equal((await fetch(`${origin}${operatorPath}/api/session`)).status, 404);
+      assert.equal((await fetch(`${origin}${operatorPath}/api/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 404);
       const strangerCookie = await signIn(origin, "stranger"); assert.equal((await fetch(`${origin}${operatorPath}/`, { headers: { Cookie: strangerCookie } })).status, 404);
       const ownerCookie = await signIn(origin, "owner"); const agent = "duck-operator-security-test";
       const page = await fetch(`${origin}${operatorPath}/`, { headers: { Cookie: ownerCookie, "User-Agent": agent } }); assert.equal(page.status, 200); assert.equal(page.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
       assert.doesNotMatch(page.headers.get("content-security-policy"), /trusted-types/); assert.equal((await fetch(`${origin}${operatorPath}/admin.js`)).status, 404); assert.equal((await fetch(`${origin}${operatorPath}/admin.js`, { headers: { Cookie: ownerCookie, "User-Agent": agent } })).status, 200);
+      const guard = await fetch(`${origin}${operatorPath}/admin-guard.css`, { headers: { Cookie: ownerCookie, "User-Agent": agent } }); assert.equal(guard.status, 200); assert.match(await guard.text(), /\[hidden\][^{]*\{[^}]*display:\s*none\s*!important/);
       const sessionStatus = await (await fetch(`${origin}${operatorPath}/api/session`, { headers: { Cookie: ownerCookie, "User-Agent": agent } })).json(); assert.equal(sessionStatus.authenticated, false); assert.ok(sessionStatus.loginCsrf);
       const wrongOrigin = await fetch(`${origin}${operatorPath}/api/session`, { method: "POST", headers: { Cookie: ownerCookie, Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-CSRF": sessionStatus.loginCsrf }, body: JSON.stringify({ token: operatorToken }) }); assert.equal(wrongOrigin.status, 403);
       const wrongToken = await fetch(`${origin}${operatorPath}/api/session`, { method: "POST", headers: { Cookie: ownerCookie, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-CSRF": sessionStatus.loginCsrf }, body: JSON.stringify({ token: "b".repeat(64) }) }); assert.equal(wrongToken.status, 403);
@@ -160,6 +163,8 @@ test("remote Operator Deck requires Discord owner, token, origin, and CSRF", asy
       const noCsrf = await fetch(`${origin}${operatorPath}/api/action`, { method: "POST", headers: { Cookie: cookies, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json" }, body: JSON.stringify({ action: "database.flush" }) }); assert.equal(noCsrf.status, 403);
       const mutation = await fetch(`${origin}${operatorPath}/api/action`, { method: "POST", headers: { Cookie: cookies, Origin: "https://duck.wispbyte.app", "Sec-Fetch-Site": "same-origin", "User-Agent": agent, "Content-Type": "application/json", "X-Duck-Operator-CSRF": unlocked.csrf }, body: JSON.stringify({ action: "database.flush" }) }); assert.equal(mutation.status, 200);
       assert.equal((await fetch(`${origin}${operatorPath}/api/overview`, { headers: { Cookie: cookies, "User-Agent": "different-browser" } })).status, 401);
+      const logout = await fetch(`${origin}/auth/logout`, { method: "POST", headers: { Cookie: cookies, "X-Duck-CSRF": sessionStatus.loginCsrf } }); assert.equal(logout.status, 200); assert.match(logout.headers.get("set-cookie"), /duck_operator=;/);
+      assert.equal((await fetch(`${origin}${operatorPath}/api/overview`, { headers: { Cookie: cookies, "User-Agent": agent } })).status, 404);
     }, { fetchImpl, client: { guilds: { cache: new Map() } } });
   } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });
