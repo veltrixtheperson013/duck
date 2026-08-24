@@ -5,15 +5,26 @@ import {
   ButtonStyle,
   ChannelType,
   EmbedBuilder,
+  ModalBuilder,
   PermissionsBitField,
   StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
+import { randomBytes, randomInt } from "node:crypto";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
 
 const activity = new Map();
 const ticketLocks = new Set();
 const ticketCloseLocks = new Set();
+const ticketVerificationChallenges = new Map();
+const TICKET_VERIFICATION_TTL_MS = 10 * 60_000;
+const TICKET_VERIFICATION_LIMIT = 2_000;
+const verificationWords = Object.freeze([
+  ["Apple", "Amber", "Cedar", "Copper", "Maple", "Mango", "Orbit", "Puddle", "River", "Velvet"],
+  ["Beacon", "Feather", "Garden", "Honeycomb", "Lantern", "Meadow", "Pebble", "Rocket", "Sunrise", "Willow"],
+]);
 const SELF_ASSIGN_BLOCKED_PERMISSIONS = [
   PermissionsBitField.Flags.Administrator,
   PermissionsBitField.Flags.BanMembers,
@@ -36,6 +47,9 @@ const SELF_ASSIGN_BLOCKED_PERMISSIONS = [
 ];
 
 function clean(value, max = 240) { return String(value || "").replace(/\s+/g, " ").trim().slice(0, max); }
+function normalizeTicketVerificationAnswer(value) { return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US"); }
+function createTicketVerificationPhrase(random = randomInt) { const first = verificationWords[0][random(verificationWords[0].length)]; const second = verificationWords[1][random(verificationWords[1].length)]; const number = random(100_000, 1_000_000).toLocaleString("en-US"); return `${first} ${second} ${number}`; }
+function pruneTicketVerificationChallenges(now = Date.now()) { for (const [token, challenge] of ticketVerificationChallenges) if (challenge.expiresAt <= now) ticketVerificationChallenges.delete(token); while (ticketVerificationChallenges.size >= TICKET_VERIFICATION_LIMIT) ticketVerificationChallenges.delete(ticketVerificationChallenges.keys().next().value); }
 function withSafeEmoji(button, value, fallback) { try { return button.setEmoji(value || fallback); } catch { return button.setEmoji(fallback); } }
 function isSafeSelfAssignableRole(role) { return Boolean(role && !role.managed && role.editable && !role.permissions.any(SELF_ASSIGN_BLOCKED_PERMISSIONS)); }
 function assertCanPublishTo(guild, channel) {
@@ -143,6 +157,7 @@ async function publishTicketPanel(guild, actorId) {
   if (!botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) throw Object.assign(new Error("Duck needs Manage Channels to create tickets from this panel."), { status: 403 });
   const options = settings.ticketOptions;
   if (!options.length) throw Object.assign(new Error("Add at least one ticket option."), { status: 400 });
+  if (options.some(({ type }) => type === "verification") && !botMember.permissions.has(PermissionsBitField.Flags.KickMembers)) throw Object.assign(new Error("Duck needs Kick Members before publishing verification tickets."), { status: 403 });
   const rows = [];
   for (let index = 0; index < options.length; index += 5) rows.push(new ActionRowBuilder().addComponents(...options.slice(index, index + 5).map((option) => withSafeEmoji(new ButtonBuilder().setCustomId(`duck_ticket:${option.id}`).setLabel(option.label).setStyle(ButtonStyle.Primary), option.emoji, "🎫"))));
   const embed = new EmbedBuilder().setColor(0xf2c85b).setTitle(settings.ticketPanelTitle || "Duck Support").setDescription("Choose the kind of ticket you need. A private channel will be created for you and the support team.");
@@ -170,12 +185,23 @@ async function handleReactionRole(interaction, roleId) {
   return interaction.reply({ content: `${removing ? "Removed" : "Added"} **${role.name}**.`, ephemeral: true });
 }
 
-async function handleTicketOpen(interaction, optionId) {
+async function promptTicketVerification(interaction, option) {
+  pruneTicketVerificationChallenges();
+  const token = randomBytes(12).toString("base64url");
+  const phrase = createTicketVerificationPhrase();
+  ticketVerificationChallenges.set(token, { guildId: interaction.guildId, userId: interaction.user.id, optionId: option.id, answer: normalizeTicketVerificationAnswer(phrase), expiresAt: Date.now() + TICKET_VERIFICATION_TTL_MS });
+  const answer = new TextInputBuilder().setCustomId("duck_ticket_verify_answer").setLabel(`Type: ${phrase}`.slice(0, 45)).setPlaceholder(phrase).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(64);
+  const modal = new ModalBuilder().setCustomId(`duck_ticket_verify:${token}`).setTitle(clean(option.verificationLabel, 45) || "Human verification").addComponents(new ActionRowBuilder().addComponents(answer));
+  return interaction.showModal(modal);
+}
+
+async function handleTicketOpen(interaction, optionId, verified = false) {
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
   const option = settings.ticketOptions?.find((item) => item.id === optionId);
   if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That ticket option is no longer available.", ephemeral: true });
   const existing = interaction.guild.channels.cache.find((channel) => !channel.name.startsWith("closed-") && channel.topic?.match(/duck-ticket-owner:(\d{10,})/)?.[1] === interaction.user.id);
   if (existing) return interaction.reply({ content: `You already have an open ticket: ${existing}`, ephemeral: true });
+  if (option.type === "verification" && !verified) return promptTicketVerification(interaction, option);
   const lockKey = `${interaction.guildId}:${interaction.user.id}`;
   if (ticketLocks.has(lockKey)) return interaction.reply({ content: "Your ticket is already being created.", ephemeral: true });
   ticketLocks.add(lockKey);
@@ -190,7 +216,11 @@ async function handleTicketOpen(interaction, optionId) {
     const safeName = `${option.label}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || `ticket-${interaction.user.id}`;
     const channel = await interaction.guild.channels.create({ name: safeName, type: ChannelType.GuildText, parent: settings.ticketCategoryId || null, topic: `duck-ticket-owner:${interaction.user.id};type:${option.id}`, permissionOverwrites: overwrites, reason: `Ticket opened by ${interaction.user.tag}` });
     const close = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("duck_ticket_close").setLabel("Close ticket").setEmoji("🔒").setStyle(ButtonStyle.Danger));
-    await channel.send({ content: `<@${interaction.user.id}>${settings.ticketSupportRoleId ? ` <@&${settings.ticketSupportRoleId}>` : ""}`, embeds: [new EmbedBuilder().setColor(0x16845c).setTitle(option.label).setDescription(option.description || "A support team member will be with you soon.").setFooter({ text: `Opened by ${interaction.user.tag}` }).setTimestamp()], components: [close], allowedMentions: { users: [interaction.user.id], roles: settings.ticketSupportRoleId ? [settings.ticketSupportRoleId] : [] } });
+    const ticketEmbed = new EmbedBuilder().setColor(0x16845c).setTitle(option.label).setDescription(option.description || "A support team member will be with you soon.");
+    if (option.type === "verification") ticketEmbed.addFields({ name: option.verificationLabel || "Verification", value: "Passed before this ticket was opened." });
+    ticketEmbed.setFooter({ text: `Opened by ${interaction.user.tag}` }).setTimestamp();
+    await channel.send({ content: `<@${interaction.user.id}>${settings.ticketSupportRoleId ? ` <@&${settings.ticketSupportRoleId}>` : ""}`, embeds: [ticketEmbed], components: [close], allowedMentions: { users: [interaction.user.id], roles: settings.ticketSupportRoleId ? [settings.ticketSupportRoleId] : [] } });
+    if (option.type === "verification" && option.additionalMessage) await channel.send({ content: option.additionalMessage, allowedMentions: { parse: [] } });
     getActivity(interaction.guildId).ticketsOpened += 1;
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Opened ticket", reason: option.label, source: "discord" });
     return interaction.editReply({ content: `Your ticket is ready: ${channel}` });
@@ -200,6 +230,29 @@ async function handleTicketOpen(interaction, optionId) {
     else await interaction.reply(failure).catch(() => null);
     return null;
   } finally { ticketLocks.delete(lockKey); }
+}
+
+async function handleTicketVerificationModal(interaction) {
+  if (!interaction.customId.startsWith("duck_ticket_verify:")) return false;
+  pruneTicketVerificationChallenges();
+  const token = interaction.customId.slice("duck_ticket_verify:".length);
+  const challenge = ticketVerificationChallenges.get(token);
+  ticketVerificationChallenges.delete(token);
+  if (!challenge || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That verification challenge expired or belongs to another member. Open a new verification ticket and try again.", ephemeral: true });
+  const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
+  const option = settings.ticketOptions?.find((item) => item.id === challenge.optionId && item.type === "verification");
+  if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That verification ticket is no longer available.", ephemeral: true });
+  const submitted = normalizeTicketVerificationAnswer(interaction.fields.getTextInputValue("duck_ticket_verify_answer"));
+  if (submitted !== challenge.answer) {
+    const reason = `Failed Duck ticket verification for ${option.label}`;
+    await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Failed ticket verification", reason: option.label, source: "discord" });
+    if (!interaction.member?.kickable) return interaction.reply({ content: "Verification failed, but Duck cannot kick you because of Discord role hierarchy. Staff have been notified in the audit log.", ephemeral: true });
+    await interaction.reply({ content: "Verification failed. You are being removed from this server.", ephemeral: true });
+    try { await interaction.member.kick(reason); } catch { await interaction.editReply({ content: "Verification failed, but Discord prevented Duck from kicking you. Staff have been notified in the audit log." }).catch(() => null); }
+    return true;
+  }
+  await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Passed ticket verification", reason: option.label, source: "discord" });
+  return handleTicketOpen(interaction, option.id, true);
 }
 
 async function handleTicketClose(interaction) {
@@ -287,4 +340,4 @@ async function handleCommunityButton(interaction) {
   return false;
 }
 
-export { assertCanPublishTo, getGuildInsights, handleAiActionSelection, handleCommunityButton, isSafeSelfAssignableRole, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity, ticketClosePermissionOverwrites };
+export { assertCanPublishTo, createTicketVerificationPhrase, getGuildInsights, handleAiActionSelection, handleCommunityButton, handleTicketVerificationModal, isSafeSelfAssignableRole, normalizeTicketVerificationAnswer, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity, ticketClosePermissionOverwrites };

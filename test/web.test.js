@@ -72,7 +72,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260834/);
+    assert.match(dashboardText, /styles\.css\?v=20260837/);
+    assert.match(dashboardText, /Verification challenge/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
     assert.doesNotMatch(dashboardText, /data-settings-tab="billing"/);

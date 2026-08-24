@@ -146,7 +146,7 @@ test("community modules and rule-aware scanning use bounded server-owned configu
     ticketSupportRoleId: "623456789012345678",
     ticketAdminRoleId: "723456789012345678",
     ticketPanelTitle: "Support pond",
-    ticketOptions: [{ id: "support", label: "Support", description: "Ask for help", emoji: "🎫" }],
+    ticketOptions: [{ id: "verify", label: "Verify", description: "Complete a human check", emoji: "🎫", type: "verification", verificationLabel: "Human verification", additionalMessage: "Thanks for verifying." }],
   };
   const { patch, settings } = makeSettingsPatch({}, input);
   assert.deepEqual(patch.reactionRoleOptions, input.reactionRoleOptions);
@@ -154,6 +154,7 @@ test("community modules and rule-aware scanning use bounded server-owned configu
   assert.equal(settings.aiScanRulesChannelId, input.aiScanRulesChannelId);
   assert.throws(() => makeSettingsPatch({}, { reactionRoleOptions: [{ roleId: "bad", label: "Admin", emoji: "x" }] }), /invalid/i);
   assert.throws(() => makeSettingsPatch({}, { ticketOptions: Array.from({ length: 6 }, (_, index) => ({ id: `x${index}`, label: "x", description: "", emoji: "" })) }), /up to 5/i);
+  assert.throws(() => makeSettingsPatch({}, { ticketOptions: [{ id: "bad", label: "Bad", description: "", emoji: "", type: "execute_code" }] }), /invalid/i);
 });
 
 test("Community Studio keeps useful Free modules and gates advanced controls to Plus", () => {

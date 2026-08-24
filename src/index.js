@@ -7,7 +7,7 @@ import { packageInfo, buildInfo, flushJsonWrites, getQueueMessage, getLegacyComm
 import { claimDiscordEvent, normalizeText, isLikelySpeakRequest, hasExplicitSpeakMessage, summarizeChannel, isLikelyModerationRequest, planLocalModerationTool, rememberMessage, removeCachedMessage, removeCachedMessages, startCacheMaintenance, flushRuntimeStateAndExit, hasConfiguredAi, parseInlineToolCall, generateChatResponse, planModerationRequest, hasPermission, describePermissionRequirement, requesterActionBlockReason, handleCapabilityCommand, handleCapabilityButton, dispatchPlannedAction, approveAction, cancelAction, makeDuckHelp, isNegativeConfirmation, cancelLatestActionFromMessage, wantsRecentHistory, makeRecentHistoryResponse, makeUtilityHelp, queueVoiceMessage, handleExplicitCommand, makeUtilityResponse, makeSlashCommandMessage, slashCommandContent, validateSlashCommandDispatchers, makeSlashDuckResponse, makeDuckChatPayload, sendMessageChunks, makeMessageWithContent, getDuckInvocation, startKeepAliveServer, handleMemberJoin, handleMemberRemove, startInviteCleanupLoop, restoreVoiceQuarantineTimers, handleVoiceQuarantineState, registerCommands } from "./core.js";
 import { handleAutomodAndCustomActions, publishHoneypotCounter } from "./automod.js";
 import { queueAiScan } from "./ai-scan.js";
-import { getGuildInsights, handleAiActionSelection, handleCommunityButton, recordAuditEvent, recordMessageActivity } from "./community.js";
+import { getGuildInsights, handleAiActionSelection, handleCommunityButton, handleTicketVerificationModal, recordAuditEvent, recordMessageActivity } from "./community.js";
 import { applyAutoroles, awardMessageXp, flushLevelProfiles, handleCommunityReaction, handleCommunitySlashCommand, handleSuggestionDecision, startCommunityStudio } from "./community-studio.js";
 import { applyRandomJoinColor, handleColorCommand, handleColorSelect } from "./color-roles.js";
 
@@ -374,6 +374,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ephemeral: true,
       });
       return;
+    }
+
+    if (interaction.isModalSubmit()) {
+      const communityResult = await handleTicketVerificationModal(interaction);
+      if (communityResult !== false) return;
     }
 
     if (interaction.isButton()) {

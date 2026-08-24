@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PermissionsBitField } from "discord.js";
-import { assertCanPublishTo, ticketClosePermissionOverwrites } from "../src/community.js";
+import { assertCanPublishTo, createTicketVerificationPhrase, normalizeTicketVerificationAnswer, ticketClosePermissionOverwrites } from "../src/community.js";
+
+test("ticket verification phrases are human-readable and comparison is forgiving about case and spacing", () => {
+  const values = [0, 3, 164_743];
+  const phrase = createTicketVerificationPhrase(() => values.shift());
+  assert.equal(phrase, "Apple Honeycomb 164,743");
+  assert.equal(normalizeTicketVerificationAnswer("  apple   HONEYCOMB 164,743 "), normalizeTicketVerificationAnswer(phrase));
+});
 
 test("panel publishing reports missing Discord channel permissions", () => {
   const me = { permissions: new PermissionsBitField(PermissionsBitField.Flags.ManageRoles) };
