@@ -1,12 +1,13 @@
 const state = { me: null, guilds: [], catalog: null, activeGuild: null, activePlus: false, isAdministrator: false, loyalty: null, channels: [], categories: [], roles: [], customActions: [], slowmodes: [], branding: { avatar: undefined, banner: undefined }, serverFilter: "all", loading: 0, guildRefreshAttempts: 0, guildRefreshNextAt: 0, guildRefreshPending: false };
 const guildRefreshScheduleMs = [10_000, 30_000, 60_000, 120_000];
+let guildRefreshButtonTimer = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const requestedGuildId = location.pathname.match(/^\/dashboard\/servers\/(\d{10,})\/?$/)?.[1] ?? new URLSearchParams(location.search).get("guild");
 const requestedPlanGuildId = location.pathname.match(/^\/dashboard\/servers\/(\d{10,})\/plan\/?$/)?.[1] ?? null;
 const accountPageRequested = /^\/dashboard\/account\/?$/.test(location.pathname);
 if (requestedGuildId) document.body.classList.add("settings-page-loading");
-const funSettingNames = ["funCommandsEnabled", "funQuackEnabled", "funDuckFactEnabled", "funCoinflipEnabled", "funTruthEnabled", "funDareEnabled", "funTruthOrDareEnabled", "funRpsEnabled", "funFortuneEnabled", "funTopicEnabled", "funJokeEnabled", "funNumberEnabled", "funShipEnabled", "funCurseEnabled", "funSpinwheelEnabled", "funRollEnabled", "funEightballEnabled", "funQuoteEnabled", "funRoastEnabled", "funComplimentEnabled", "funChooseEnabled", "funRateEnabled", "funWouldYouRatherEnabled", "funNeverHaveIEverEnabled", "funHotseatEnabled", "funVibeCheckEnabled", "funBattleEnabled", "funDramaticEnabled", "funConspiracyEnabled", "funChallengeEnabled", "funCaptionEnabled"];
+const funSettingNames = ["funCommandsEnabled", "funQuackEnabled", "funDuckFactEnabled", "funCoinflipEnabled", "funTruthEnabled", "funDareEnabled", "funTruthOrDareEnabled", "funRpsEnabled", "funFortuneEnabled", "funTopicEnabled", "funJokeEnabled", "funNumberEnabled", "funThisOrThatEnabled", "funRandomMemberEnabled", "funShipEnabled", "funCurseEnabled", "funSpinwheelEnabled", "funRollEnabled", "funEightballEnabled", "funQuoteEnabled", "funRoastEnabled", "funComplimentEnabled", "funChooseEnabled", "funRateEnabled", "funWouldYouRatherEnabled", "funNeverHaveIEverEnabled", "funHotseatEnabled", "funVibeCheckEnabled", "funBattleEnabled", "funDramaticEnabled", "funConspiracyEnabled", "funChallengeEnabled", "funCaptionEnabled", "funAlibiEnabled", "funBackstoryEnabled", "funAwardEnabled", "funHeistEnabled"];
 
 function notice(message, error = false) { const element = $("[data-notice]"); element.textContent = message; element.classList.toggle("is-error", error); element.hidden = !message; }
 function setLoading(active) { state.loading = Math.max(0, state.loading + (active ? 1 : -1)); $("[data-route-progress]")?.classList.toggle("is-active", state.loading > 0); document.body.classList.toggle("is-busy", state.loading > 0); }
@@ -56,7 +57,9 @@ function updateGuildRefreshButton() {
   const button = $("[data-refresh-guilds]"); if (!button) return;
   const remaining = Math.max(0, state.guildRefreshNextAt - Date.now());
   button.disabled = remaining > 0 || state.guildRefreshPending;
-  button.textContent = remaining > 0 ? `Refresh servers (${Math.ceil(remaining / 1000)}s)` : state.guildRefreshPending ? "Refreshing…" : "Refresh servers";
+  button.textContent = remaining > 0 ? `↻ Refresh servers (${Math.ceil(remaining / 1000)}s)` : state.guildRefreshPending ? "↻ Refreshing…" : "↻ Refresh servers";
+  clearTimeout(guildRefreshButtonTimer);
+  guildRefreshButtonTimer = remaining > 0 ? setTimeout(updateGuildRefreshButton, Math.min(1_000, remaining) + 25) : null;
 }
 async function refreshGuilds(force = false) {
   const now = Date.now();
@@ -71,10 +74,12 @@ async function refreshGuilds(force = false) {
   try {
     const data = await api(`api/guilds${force ? "?refresh=1" : ""}`);
     state.guilds = Array.isArray(data.guilds) ? data.guilds : [];
-    state.guildRefreshAttempts = 0;
-    state.guildRefreshNextAt = 0;
+    state.guildRefreshAttempts = data.stale ? Math.max(1, state.guildRefreshAttempts || 0) : 0;
+    state.guildRefreshNextAt = data.stale ? Date.now() + Math.max(Number(data.retryAfterMs) || 0, 10_000) : 0;
     renderGuilds();
     updateGuildRefreshButton();
+    if (data.stale) notice("Discord is busy, so Duck is showing your safely cached server list. Refresh will unlock automatically.");
+    else if (force) notice("Server list refreshed.");
     return data;
   } catch (error) {
     const runIndex = Math.min((state.guildRefreshAttempts || 0), guildRefreshScheduleMs.length - 1);
@@ -132,11 +137,13 @@ function updateActionCount() { const count = $("[data-custom-action-list]").chil
 function setAccountAvatar(element, user) { if (!element) return; if (user?.avatar) { element.style.backgroundImage = `url("https://cdn.discordapp.com/avatars/${encodeURIComponent(user.id)}/${encodeURIComponent(user.avatar)}.webp?size=128")`; element.textContent = ""; } else { element.style.backgroundImage = ""; element.textContent = "🦆"; } }
 function fillList(element, values) { element.replaceChildren(...values.map((value) => { const item = document.createElement("li"); item.textContent = value; return item; })); }
 function configureLoyalty(loyalty = { level: "free", progress: 0, customActionLimit: 5 }, subscription = {}) {
-  state.loyalty = loyalty; const plus = loyalty.level !== "free"; const planButton = $("[data-account-plan]"); const planTitle = planButton?.querySelector("strong"); const planCopy = planButton?.querySelector("small"); if (planTitle) planTitle.textContent = plus ? (loyalty.level === "plus_6" ? "Plus Infinity" : loyalty.level === "plus_3" ? "Plus Gold" : "Duck Plus") : "Upgrade to Plus"; if (planCopy) planCopy.textContent = plus ? "Status, loyalty, and billing" : "Compare plans and benefits"; $("[data-loyalty-card]").hidden = !plus;
+  const names = { free: "Duck Free", plus: "Duck Plus", plus_2: "Plus Sprout", plus_3: "Plus Gold", plus_6: "Plus Diamond", plus_12: "Plus Infinity" };
+  state.loyalty = loyalty; const plus = loyalty.level !== "free"; const planButton = $("[data-account-plan]"); const planTitle = planButton?.querySelector("strong"); const planCopy = planButton?.querySelector("small"); if (planTitle) planTitle.textContent = plus ? names[loyalty.level] : "Upgrade to Plus"; if (planCopy) planCopy.textContent = plus ? "Status, loyalty, and billing" : "Compare plans and benefits"; $("[data-loyalty-card]").hidden = !plus;
   const current = plus ? ["Premium AI and ElevenLabs", `${loyalty.customActionLimit === null ? "Unlimited" : loyalty.customActionLimit} custom actions`, `${loyalty.memoryReplies} remembered Duck replies`, "30 Color Dock colors and random join colors", "25 reaction roles and 10 ticket types", "Five join roles and level rewards", "Custom Starboard, anonymous proposals, and scheduled posts"] : ["Core moderation and free AI", "5 custom actions", "6 remembered Duck replies", "12 Color Dock name colors", "Pond Levels, proposals, and Starboard", "10 reaction roles and 5 ticket types"];
-  if (["plus_3", "plus_6"].includes(loyalty.level)) current.push("Custom nickname, avatar, banner, and bio");
-  const next = loyalty.level === "plus" ? ["Server branding", "50 custom actions", "30-reply AI memory"] : loyalty.level === "plus_3" ? ["Unlimited custom actions", "50-reply AI memory", "Highest loyalty priority"] : loyalty.level === "plus_6" ? ["Every loyalty perk unlocked"] : ["Premium models and TTS", "25 custom actions", "16-reply AI memory"];
-  $("[data-loyalty-level]").textContent = loyalty.level === "plus_6" ? "Plus Infinity" : loyalty.level === "plus_3" ? "Plus Gold" : plus ? "Duck Plus" : "Duck Free"; $("[data-loyalty-months]").textContent = subscription.source === "owner" ? "Owner access" : `${loyalty.months || 0} month${loyalty.months === 1 ? "" : "s"}`; const nextDate = formatBillingDate(loyalty.nextAt); $("[data-loyalty-next]").textContent = nextDate ? `Next tier unlocks ${nextDate}` : plus ? "Top loyalty tier reached" : "Upgrade whenever you are ready"; $("[data-loyalty-progress]").style.width = `${Math.round((loyalty.progress || 0) * 100)}%`; fillList($("[data-loyalty-current]"), current); fillList($("[data-loyalty-next-perks]"), next); $("[data-action-limit-title]").textContent = `${loyalty.customActionLimit === null ? "Unlimited" : loyalty.customActionLimit} custom actions`; $("[data-action-limit-copy]").textContent = subscription.source === "owner" ? "Owner Plus unlocks every loyalty perk for this server immediately." : loyalty.level === "plus_6" ? "Six-month Plus loyalty removes the custom-action cap." : loyalty.level === "plus_3" ? "Three-month Plus loyalty unlocks 50 actions." : plus ? "Duck Plus unlocks 25 actions and automated moderation outcomes." : "Free servers can create up to five safe automations.";
+  if (["plus_3", "plus_6", "plus_12"].includes(loyalty.level)) current.push("Custom nickname, avatar, banner, and bio");
+  const nextPerks = { plus: ["35 custom actions", "24-reply AI memory", "Plus Sprout badge"], plus_2: ["Server branding", "50 custom actions", "32-reply AI memory"], plus_3: ["100 custom actions", "64-reply AI memory", "Plus Diamond status"], plus_6: ["Unlimited custom actions", "100-reply AI memory", "Plus Infinity status"], plus_12: ["Every loyalty perk unlocked"] };
+  const next = nextPerks[loyalty.level] || ["Premium models and TTS", "25 custom actions", "16-reply AI memory"];
+  $("[data-loyalty-level]").textContent = names[loyalty.level] || "Duck Plus"; $("[data-loyalty-months]").textContent = subscription.source === "owner" ? "Owner access" : `${loyalty.months || 0} month${loyalty.months === 1 ? "" : "s"}`; const nextDate = formatBillingDate(loyalty.nextAt); $("[data-loyalty-next]").textContent = nextDate ? `Next tier unlocks ${nextDate}` : plus ? "Top loyalty tier reached" : "Upgrade whenever you are ready"; $("[data-loyalty-progress]").style.width = `${Math.round((loyalty.progress || 0) * 100)}%`; fillList($("[data-loyalty-current]"), current); fillList($("[data-loyalty-next-perks]"), next); $("[data-action-limit-title]").textContent = `${loyalty.customActionLimit === null ? "Unlimited" : loyalty.customActionLimit} custom actions`; $("[data-action-limit-copy]").textContent = subscription.source === "owner" ? "Owner Plus unlocks every loyalty perk for this server immediately." : plus ? `${names[loyalty.level]} currently includes ${loyalty.customActionLimit === null ? "unlimited" : loyalty.customActionLimit} custom actions.` : "Free servers can create up to five safe automations.";
 }
 
 function configurePlan(data, settings, subscription, plus, guild) {
@@ -230,6 +237,7 @@ async function initialize() {
 
 $("[data-server-search]").addEventListener("input", (event) => renderGuilds(event.target.value));
 $('[data-refresh-guilds]')?.addEventListener("click", () => refreshGuilds(true));
+updateGuildRefreshButton();
 for (const button of $$("[data-server-filter]")) button.addEventListener("click", () => { state.serverFilter = button.dataset.serverFilter; $$("[data-server-filter]").forEach((item) => item.classList.toggle("is-active", item === button)); renderGuilds(); });
 for (const button of $$("[data-settings-tab]")) button.addEventListener("click", () => selectTab(button.dataset.settingsTab));
 for (const button of $$('[data-cancel], [data-back]')) button.addEventListener("click", () => location.assign("/dashboard")); $("[data-settings-form]").aiModel.addEventListener("change", updateDisclaimers); $("[data-settings-form]").ttsModel.addEventListener("change", updateDisclaimers);

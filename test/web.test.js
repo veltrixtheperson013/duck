@@ -72,7 +72,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /styles\.css\?v=20260837/);
+    assert.match(dashboardText, /styles\.css\?v=20260838/);
     assert.match(dashboardText, /Verification challenge/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
@@ -202,7 +202,7 @@ test("temporary Discord failures retry once and return traceable upstream errors
       const callback = await fetch(`${origin}/auth/discord/callback?code=valid&state=${encodeURIComponent(oauthUrl.searchParams.get("state"))}`, { redirect: "manual", headers: { Cookie: `duck_oauth_state=${stateCookie}` } }); const cookie = callback.headers.get("set-cookie").match(/duck_session=([^;]+)/)[1];
       const guilds = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } });
       assert.equal(guilds.status, 200); assert.equal(guildRequests, 2); assert.match(guilds.headers.get("x-request-id"), /^[a-f0-9]{16}$/); assert.equal(logged.length, 0);
-      rateLimited = true; const limited = await fetch(`${origin}/api/guilds?refresh=1`, { headers: { Cookie: `duck_session=${cookie}` } }); const limitedBody = await limited.json(); assert.equal(limited.status, 503); assert.match(limitedBody.error, /rate limiting/); assert.equal(limitedBody.requestId, limited.headers.get("x-request-id")); assert.equal(logged.length, 1);
+      rateLimited = true; const limited = await fetch(`${origin}/api/guilds?refresh=1`, { headers: { Cookie: `duck_session=${cookie}` } }); const limitedBody = await limited.json(); assert.equal(limited.status, 200); assert.equal(limitedBody.stale, true); assert.deepEqual(limitedBody.guilds, []); assert.equal(logged.length, 0);
     }, { fetchImpl, logErrorImpl: (...args) => logged.push(args) });
   } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });
@@ -232,10 +232,10 @@ test("cached guild refreshes skip fresh Discord reads until forced and 429s back
       assert.equal(second.status, 200); assert.equal(guildRequests, 1);
       shouldRateLimit = true;
       const third = await fetch(`${origin}/api/guilds?refresh=1`, { headers: { Cookie: `duck_session=${cookie}` } });
-      assert.equal(third.status, 503); assert.match((await third.json()).error, /rate limiting/i);
+      assert.equal(third.status, 200); assert.equal((await third.json()).stale, true);
       assert.equal(guildRequests, 2);
       const fourth = await fetch(`${origin}/api/guilds`, { headers: { Cookie: `duck_session=${cookie}` } });
-      assert.equal(fourth.status, 503); assert.match((await fourth.json()).error, /rate limiting/i);
+      assert.equal(fourth.status, 200); assert.equal((await fourth.json()).stale, false); assert.equal(guildRequests, 2);
     }, { fetchImpl });
   } finally { for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value; }
 });

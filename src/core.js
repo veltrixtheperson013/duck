@@ -3343,7 +3343,7 @@ async function makeChatMessages(message, options = {}) {
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
-        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, number, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, and caption. Duck validates the server's plan and command toggle before running it.",
+        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, number, thisorthat, randommember, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, caption, alibi, backstory, award, and heist. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
@@ -3839,7 +3839,7 @@ async function resolveAiFunCall(message, content) {
   const source = String(content || "");
   const match = source.match(/\{\{fun::([a-z]+)(?:::(.{0,300}?))?\}\}/i);
   if (!match) return content;
-  const supported = new Set(["quack", "duckfact", "coinflip", "truth", "dare", "truthordare", "rps", "fortune", "topic", "joke", "number", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "neverhaveiever", "hotseat", "vibecheck", "ship", "curse", "spinwheel", "battle", "dramatic", "conspiracy", "challenge", "caption"]);
+  const supported = new Set(["quack", "duckfact", "coinflip", "truth", "dare", "truthordare", "rps", "fortune", "topic", "joke", "number", "thisorthat", "randommember", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "neverhaveiever", "hotseat", "vibecheck", "ship", "curse", "spinwheel", "battle", "dramatic", "conspiracy", "challenge", "caption", "alibi", "backstory", "award", "heist"]);
   const command = match[1].toLocaleLowerCase("en-US");
   const clean = source.replace(match[0], "").trim();
   if (!supported.has(command)) return clean;
@@ -5946,7 +5946,7 @@ async function makeUtilityResponse(message, text) {
     ["neverhaveiever", /^(neverhaveiever|never have i ever|nhie)\b/],
     ["vibecheck", /^(vibecheck|vibe check)\b/],
     ["rps", /^(rps|rock paper scissors)\b/],
-    ...["fortune", "topic", "joke", "number", "battle", "dramatic", "conspiracy", "challenge", "caption"].map((command) => [command, new RegExp(`^${command}\\b`)]),
+    ...["fortune", "topic", "joke", "number", "thisorthat", "randommember", "battle", "dramatic", "conspiracy", "challenge", "caption", "alibi", "backstory", "award", "heist"].map((command) => [command, new RegExp(`^${command}\\b`)]),
     ...["quack", "ship", "curse", "roll", "quote", "roast", "compliment", "choose", "rate"].map((command) => [command, new RegExp(`^${command}\\b`)]),
     ...["truth", "dare", "hotseat"].map((command) => [command, new RegExp(`^${command}\\b`)]),
   ].find(([, pattern]) => pattern.test(normalized))?.[0];
@@ -6193,6 +6193,16 @@ async function makeUtilityResponse(message, text) {
     if (!Number.isInteger(maximum) || maximum < 2 || maximum > 1_000_000) return "Choose a whole-number maximum from 2 to 1,000,000.";
     return `Duck picked **${1 + Math.floor(Math.random() * maximum)}** from 1–${maximum.toLocaleString()}.`;
   }
+  if (/^thisorthat\b/.test(normalized)) {
+    const choices = ["Movies or games?", "Sunrise or midnight?", "Sweet snacks or salty snacks?", "Voice chat or text chat?", "Perfect Wi-Fi or infinite battery?", "Cozy rain or fresh snow?", "Ducks or geese? Choose carefully."];
+    return `⚖️ **This or that:** ${choices[Math.floor(Math.random() * choices.length)]}`;
+  }
+  if (/^randommember\b/.test(normalized)) {
+    const members = [...message.guild.members.cache.values()].filter((member) => !member.user?.bot);
+    if (!members.length) return "The pond could not find an eligible member.";
+    const member = members[Math.floor(Math.random() * members.length)];
+    return `🎯 The pond selected **${member.displayName}**.`;
+  }
   if (/^battle\b/.test(normalized)) {
     const members = [...message.mentions.members.values()].slice(0, 2);
     if (members.length < 2) return "Mention two members, like `duck battle @person1 @person2`.";
@@ -6221,6 +6231,26 @@ async function makeUtilityResponse(message, text) {
     if (!subject) return "Usage: `duck caption <subject>`";
     const captions = ["Nobody: … Absolutely nobody: …", "Me explaining why this was definitely part of the plan:", "POV: the server has been quiet for twelve seconds.", "The moderators when they open the audit log:", "Task failed successfully:"];
     return `🖼️ **${captions[Math.floor(Math.random() * captions.length)]}** ${subject}`;
+  }
+  if (/^alibi\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^alibi\b/i, ""), true);
+    const alibis = ["was conducting an emergency snack inventory", "was teaching three ducks how to use voice chat", "was nowhere near the missing reaction roles", "was busy rebooting the moon", "was attending a legally distinct goose conference"];
+    return `🥸 **${target.displayName}'s totally believable alibi:** They ${alibis[Math.floor(Math.random() * alibis.length)]}.`;
+  }
+  if (/^backstory\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^backstory\b/i, ""), true);
+    const origins = ["escaped from a secret underwater help desk", "earned their title by defeating a printer in single combat", "was raised by moderators and trained in the ancient art of reading pinned messages", "arrived from the future to prevent one extremely awkward typo", "once guarded the final mozzarella stick"];
+    return `📜 **${target.displayName}'s origin story:** They ${origins[Math.floor(Math.random() * origins.length)]}.`;
+  }
+  if (/^award\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^award\b/i, ""), true);
+    const awards = ["Most Likely to Survive a Group Ping", "Best Use of a Suspicious Emoji", "Fastest Unmute After Talking for Two Minutes", "Outstanding Achievement in Vibe Maintenance", "Pond Employee of the Minute"];
+    return `🏆 **${target.displayName}** wins **${awards[Math.floor(Math.random() * awards.length)]}**!`;
+  }
+  if (/^heist\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^heist\b/i, ""), true);
+    const roles = ["distraction duck", "snack vault specialist", "getaway shopping-cart driver", "laser-pointer negotiator", "person holding the map upside down"];
+    return `🥷 **Imaginary snack heist:** ${target.displayName} is the **${roles[Math.floor(Math.random() * roles.length)]}**. The target is one unattended bag of chips. No real crimes; maximum drama.`;
   }
 
   const truths = [
@@ -6436,11 +6466,17 @@ function slashCommandContent(interaction) {
     case "topic": return "topic";
     case "joke": return "joke";
     case "number": return `number ${interaction.options.getInteger("maximum", false) || 100}`;
+    case "thisorthat": return "thisorthat";
+    case "randommember": return "randommember";
     case "battle": return `battle ${userMention("user1")} ${userMention("user2")}`;
     case "dramatic": return `dramatic ${userMention("user")}`;
     case "conspiracy": return `conspiracy ${interaction.options.getString("subject", true)}`;
     case "challenge": return "challenge";
     case "caption": return `caption ${interaction.options.getString("subject", true)}`;
+    case "alibi": return `alibi ${userMention("user")}`;
+    case "backstory": return `backstory ${userMention("user")}`;
+    case "award": return `award ${userMention("user")}`;
+    case "heist": return `heist ${userMention("user")}`;
     case "remind": return `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`;
     case "join": return "join";
     case "leave": return "leave";
@@ -6527,8 +6563,8 @@ async function makeSlashDuckResponse(interaction, prompt) {
       "- `/clear`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
       "- `/addrole`, `/removerole`, `/tool`",
       "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
-      "- Fun: `/quack`, `/duckfact`, `/coinflip`, `/truth`, `/dare`, `/truthordare`, `/rps`, `/fortune`, `/topic`, `/joke`, `/number`",
-      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/battle`, `/dramatic`, `/conspiracy`, `/challenge`, `/caption`",
+      "- Fun: `/quack`, `/duckfact`, `/coinflip`, `/truth`, `/dare`, `/truthordare`, `/rps`, `/fortune`, `/topic`, `/joke`, `/number`, `/thisorthat`, `/randommember`",
+      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/battle`, `/dramatic`, `/conspiracy`, `/challenge`, `/caption`, `/alibi`, `/backstory`, `/award`, `/heist`",
       "- `/setup`, `/entry-setup`, `/synccommands`, `/duck-tools`",
       "",
       "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
@@ -6956,6 +6992,8 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("joke").setDescription("Receive a certified pond-grade joke."),
     new SlashCommandBuilder().setName("number").setDescription("Pick a random number.")
       .addIntegerOption((option) => option.setName("maximum").setDescription("Highest possible number; defaults to 100.").setMinValue(2).setMaxValue(1_000_000).setRequired(false)),
+    new SlashCommandBuilder().setName("thisorthat").setDescription("Draw a quick this-or-that prompt."),
+    new SlashCommandBuilder().setName("randommember").setDescription("Pick a random non-bot server member."),
     new SlashCommandBuilder().setName("battle").setDescription("Stage an imaginary showdown. Duck Plus command.")
       .addUserOption((option) => option.setName("user1").setDescription("First challenger.").setRequired(true))
       .addUserOption((option) => option.setName("user2").setDescription("Second challenger.").setRequired(true)),
@@ -6966,6 +7004,14 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("challenge").setDescription("Draw a community mini-challenge. Duck Plus command."),
     new SlashCommandBuilder().setName("caption").setDescription("Generate meme copy for a subject. Duck Plus command.")
       .addStringOption((option) => option.setName("subject").setDescription("Thing to caption.").setMaxLength(160).setRequired(true)),
+    new SlashCommandBuilder().setName("alibi").setDescription("Generate an obviously suspicious alibi. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Person needing an alibi; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("backstory").setDescription("Invent an absurd origin story. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Person receiving a backstory; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("award").setDescription("Present a highly specific pond award. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Award recipient; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("heist").setDescription("Plan a harmless imaginary snack heist. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Your imaginary accomplice; defaults to you.").setRequired(false)),
     new SlashCommandBuilder().setName("remind").setDescription("Set a reminder in this channel.")
       .addStringOption((option) => option.setName("time").setDescription("Examples: 30s, 10m, 2h.").setRequired(true))
       .addStringOption((option) => option.setName("text").setDescription("Reminder text.").setRequired(true)),

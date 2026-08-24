@@ -4,8 +4,8 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Sign in with Discord to configure Duck for each server you manage.">
   <meta name="robots" content="noindex, nofollow, noarchive">
-  <title>Dashboard — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="preload" href="/styles.css?v=20260837" as="style"><link rel="stylesheet" href="/styles.css?v=20260837">
-  <link rel="preconnect" href="https://cdn.discordapp.com" crossorigin><script src="/site.js?v=20260834" defer></script><script src="/dashboard.js?v=20260837" defer></script>
+  <title>Dashboard — Duck</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="preload" href="/styles.css?v=20260838" as="style"><link rel="stylesheet" href="/styles.css?v=20260838">
+  <link rel="preconnect" href="https://cdn.discordapp.com" crossorigin><script src="/site.js?v=20260834" defer></script><script src="/dashboard.js?v=20260838" defer></script>
 </head>
 <body>
   <div class="route-progress" data-route-progress aria-hidden="true"><i></i></div>
@@ -162,7 +162,7 @@
             <section class="settings-panel" data-settings-panel="fun" hidden>
               <div class="panel-heading"><span>🎲</span><div><p class="eyebrow">Fun commands</p><h3>Controlled chaos</h3><p>Choose which playful commands are available in this server. Every command is checked again inside Discord.</p></div></div>
               <div class="feature-module"><div class="module-copy"><span class="module-icon">🦆</span><div><strong>Fun command module</strong><small>Turn every fun command off at once without affecting moderation or utilities.</small></div></div><label class="switch-control"><input type="checkbox" name="funCommandsEnabled"><span></span></label></div>
-              <div class="fun-toolbar"><label><span>Find a command</span><input type="search" data-fun-search placeholder="Search fun commands…" autocomplete="off"></label><div><span data-fun-visible-count>30 commands</span><button class="button secondary compact" type="button" data-enable-free-fun>Enable Free set</button><button class="button secondary compact" type="button" data-disable-fun>Turn all off</button></div></div>
+              <div class="fun-toolbar"><label><span>Find a command</span><input type="search" data-fun-search placeholder="Search fun commands…" autocomplete="off"></label><div><span data-fun-visible-count>36 commands</span><button class="button secondary compact" type="button" data-enable-free-fun>Enable Free set</button><button class="button secondary compact" type="button" data-disable-fun>Turn all off</button></div></div>
               <div class="command-tier-heading"><div><span class="plan-pill">Free</span><h4>Pond classics</h4><p>Available to every server.</p></div></div>
               <div class="command-toggle-grid">
                 <label class="command-toggle" data-fun-command><span>🦆</span><div><strong>/quack</strong><small>Expertly calibrated quacking.</small></div><input type="checkbox" name="funQuackEnabled"></label>
@@ -176,6 +176,8 @@
                 <label class="command-toggle"><span>💬</span><div><strong>/topic</strong><small>Get a fresh conversation starter.</small></div><input type="checkbox" name="funTopicEnabled"></label>
                 <label class="command-toggle"><span>🥁</span><div><strong>/joke</strong><small>Receive a certified pond-grade joke.</small></div><input type="checkbox" name="funJokeEnabled"></label>
                 <label class="command-toggle"><span>🔢</span><div><strong>/number</strong><small>Pick a random number without arguing.</small></div><input type="checkbox" name="funNumberEnabled"></label>
+                <label class="command-toggle"><span>⚖️</span><div><strong>/thisorthat</strong><small>Draw a rapid-fire this-or-that prompt.</small></div><input type="checkbox" name="funThisOrThatEnabled"></label>
+                <label class="command-toggle"><span>🎯</span><div><strong>/randommember</strong><small>Pick a random non-bot member.</small></div><input type="checkbox" name="funRandomMemberEnabled"></label>
               </div>
               <div class="command-tier-heading plus-tier"><div><span class="plan-pill is-plus">Plus</span><h4>Premium mischief</h4><p>Plus servers can enable each command independently.</p></div></div>
               <div class="command-toggle-grid plus-command-grid">
@@ -198,6 +200,10 @@
                 <label class="command-toggle"><span>🧵</span><div><strong>/conspiracy</strong><small>Invent a harmless, obviously fake theory.</small></div><input type="checkbox" name="funConspiracyEnabled" data-plus-fun></label>
                 <label class="command-toggle"><span>🏆</span><div><strong>/challenge</strong><small>Draw a quick community mini-challenge.</small></div><input type="checkbox" name="funChallengeEnabled" data-plus-fun></label>
                 <label class="command-toggle"><span>🖼️</span><div><strong>/caption</strong><small>Turn any subject into meme copy.</small></div><input type="checkbox" name="funCaptionEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🥸</span><div><strong>/alibi</strong><small>Generate an obviously suspicious alibi.</small></div><input type="checkbox" name="funAlibiEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>📜</span><div><strong>/backstory</strong><small>Invent an absurd origin story.</small></div><input type="checkbox" name="funBackstoryEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🏆</span><div><strong>/award</strong><small>Present a highly specific pond award.</small></div><input type="checkbox" name="funAwardEnabled" data-plus-fun></label>
+                <label class="command-toggle"><span>🥷</span><div><strong>/heist</strong><small>Plan a harmless imaginary snack heist.</small></div><input type="checkbox" name="funHeistEnabled" data-plus-fun></label>
               </div>
             </section>
           </div>

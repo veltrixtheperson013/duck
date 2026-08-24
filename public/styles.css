@@ -280,6 +280,7 @@ footer p { margin: 0; }
 .settings-panel.is-active { animation-duration: .12s; }
 .server-card.is-entering { animation-duration: .22s; }
 .button, .server-card, .price-card, .donation-grid button, .plan-benefits article, .dashboard-stats article { transition-duration: .14s; }
+[data-refresh-guilds] { min-width: 156px; white-space: nowrap; }
 @media (max-width: 760px) {
   .settings-page-open .settings-dialog .dialog-top { min-height: 78px; }
   .settings-page-open .dialog-top::before, .settings-page-open .dialog-status { display: none; }
@@ -613,4 +614,35 @@ body:not(.settings-page-open) main > section:not(:first-child), body:not(.settin
 @media (min-width: 761px) {
   .settings-page-open .settings-dialog { grid-template-rows: 112px minmax(0,1fr); }
   .settings-page-open .settings-dialog .dialog-top { min-height: 112px; padding-block: 18px; }
+}
+
+/* Contrast and builder alignment pass. */
+.safety-proof { grid-template-columns: minmax(320px,1fr) minmax(440px,1.08fr); gap: clamp(42px,6vw,76px); }
+.safety-proof .eyebrow { color: #ffdc78; }
+.safety-proof h2 { max-width: 590px; font-size: clamp(2.45rem,4vw,3.65rem); line-height: 1.04; text-wrap: balance; }
+.safety-proof > div > p:not(.eyebrow) { color: #d4e7de; }
+.safety-proof li { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.17); }
+.safety-proof li strong { color: #fff; }
+.safety-proof small { color: #c9ddd4; }
+
+.settings-page-open .color-palette-editor { padding: 20px; }
+.settings-page-open .palette-heading { display: grid; grid-template-columns: minmax(260px,1fr) auto; gap: 16px 24px; align-items: center; width: 100%; }
+.settings-page-open .palette-heading > div:first-child,
+.settings-page-open .palette-heading > .palette-presets { min-width: 0; }
+.settings-page-open .palette-heading > div:first-child { display: grid; gap: 5px; }
+.settings-page-open .palette-heading small { display: block; max-width: 680px; color: #586d62; line-height: 1.45; }
+.settings-page-open .palette-heading > .palette-presets { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.settings-page-open .palette-presets .button { flex: 0 1 auto; min-height: 44px; padding-inline: 18px; color: #173e30; background: #f9fcfa; border-color: #c9d8cf; white-space: nowrap; }
+.settings-page-open .palette-presets .button:hover { color: #fff; background: #146f4d; border-color: #146f4d; }
+
+@media (max-width: 980px) {
+  .safety-proof { grid-template-columns: 1fr; }
+  .safety-proof h2 { max-width: 720px; }
+  .settings-page-open .palette-heading { grid-template-columns: 1fr; align-items: stretch; }
+  .settings-page-open .palette-heading > .palette-presets { justify-content: flex-start; }
+}
+@media (max-width: 560px) {
+  .settings-page-open .color-palette-editor { padding: 16px; }
+  .settings-page-open .palette-heading > .palette-presets { display: grid; grid-template-columns: 1fr; }
+  .settings-page-open .palette-presets .button { width: 100%; white-space: normal; }
 }

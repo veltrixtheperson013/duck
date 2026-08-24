@@ -74,6 +74,8 @@ const FUN_COMMANDS = Object.freeze([
   { command: "topic", key: "funTopicEnabled", label: "Conversation topics", tier: "free" },
   { command: "joke", key: "funJokeEnabled", label: "Pond jokes", tier: "free" },
   { command: "number", key: "funNumberEnabled", label: "Random number", tier: "free" },
+  { command: "thisorthat", key: "funThisOrThatEnabled", label: "This or that", tier: "free" },
+  { command: "randommember", key: "funRandomMemberEnabled", label: "Random member", tier: "free" },
   { command: "ship", key: "funShipEnabled", label: "Compatibility", tier: "plus" },
   { command: "curse", key: "funCurseEnabled", label: "Curses and blessings", tier: "plus" },
   { command: "spinwheel", key: "funSpinwheelEnabled", label: "Spin wheel", tier: "plus" },
@@ -93,6 +95,10 @@ const FUN_COMMANDS = Object.freeze([
   { command: "conspiracy", key: "funConspiracyEnabled", label: "Silly conspiracies", tier: "plus" },
   { command: "challenge", key: "funChallengeEnabled", label: "Mini challenges", tier: "plus" },
   { command: "caption", key: "funCaptionEnabled", label: "Caption generator", tier: "plus" },
+  { command: "alibi", key: "funAlibiEnabled", label: "Suspicious alibis", tier: "plus" },
+  { command: "backstory", key: "funBackstoryEnabled", label: "Absurd backstories", tier: "plus" },
+  { command: "award", key: "funAwardEnabled", label: "Pond awards", tier: "plus" },
+  { command: "heist", key: "funHeistEnabled", label: "Imaginary heists", tier: "plus" },
 ]);
 const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
 const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with"]);
@@ -131,17 +137,19 @@ function getPlusLoyalty(settings, now = Date.now()) {
   const owner = plus && subscription.provider === "owner";
   const paid = plus && subscription.provider === "stripe";
   const startedAt = paid ? Date.parse(subscription.startedAt || "") : NaN;
+  const twoAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 2) || "") : NaN;
   const threeAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 3) || "") : NaN;
   const sixAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 6) || "") : NaN;
+  const twelveAt = paid ? Date.parse(addSubscriptionMonths(subscription.startedAt, 12) || "") : NaN;
   const months = Number.isFinite(startedAt) ? Math.max(0, Math.floor((now - startedAt) / (30.4375 * 24 * 60 * 60_000))) : 0;
-  const level = !plus ? "free" : owner || (Number.isFinite(sixAt) && now >= sixAt) ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : "plus";
-  const customActionLimit = level === "plus_6" ? null : level === "plus_3" ? 50 : plus ? 25 : 5;
-  const memoryReplies = level === "plus_6" ? 50 : level === "plus_3" ? 30 : plus ? 16 : 6;
-  const nextAt = level === "plus" && Number.isFinite(threeAt) ? new Date(threeAt).toISOString() : level === "plus_3" && Number.isFinite(sixAt) ? new Date(sixAt).toISOString() : null;
-  const progressStart = level === "plus" ? startedAt : level === "plus_3" ? threeAt : NaN;
-  const progressEnd = level === "plus" ? threeAt : level === "plus_3" ? sixAt : NaN;
-  const progress = Number.isFinite(progressStart) && Number.isFinite(progressEnd) ? Math.max(0, Math.min(1, (now - progressStart) / (progressEnd - progressStart))) : level === "plus_6" ? 1 : 0;
-  return { level, paid, owner, months, startedAt: paid ? subscription.startedAt : null, nextAt, progress, customActionLimit, memoryReplies };
+  const level = !plus ? "free" : owner || (Number.isFinite(twelveAt) && now >= twelveAt) ? "plus_12" : Number.isFinite(sixAt) && now >= sixAt ? "plus_6" : Number.isFinite(threeAt) && now >= threeAt ? "plus_3" : Number.isFinite(twoAt) && now >= twoAt ? "plus_2" : "plus";
+  const limits = { free: [5, 6], plus: [25, 16], plus_2: [35, 24], plus_3: [50, 32], plus_6: [100, 64], plus_12: [null, 100] };
+  const [customActionLimit, memoryReplies] = limits[level];
+  const milestones = { plus: [startedAt, twoAt, "plus_2"], plus_2: [twoAt, threeAt, "plus_3"], plus_3: [threeAt, sixAt, "plus_6"], plus_6: [sixAt, twelveAt, "plus_12"] };
+  const [progressStart, progressEnd, nextLevel] = milestones[level] || [NaN, NaN, null];
+  const nextAt = Number.isFinite(progressEnd) ? new Date(progressEnd).toISOString() : null;
+  const progress = Number.isFinite(progressStart) && Number.isFinite(progressEnd) ? Math.max(0, Math.min(1, (now - progressStart) / (progressEnd - progressStart))) : level === "plus_12" ? 1 : 0;
+  return { level, paid, owner, months, startedAt: paid ? subscription.startedAt : null, nextAt, nextLevel, progress, customActionLimit, memoryReplies };
 }
 
 function hasMaturePlusEntitlement(settings, now = Date.now()) {

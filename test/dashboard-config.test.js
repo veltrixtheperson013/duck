@@ -43,7 +43,7 @@ test("server branding requires three calendar months of paid Plus", () => {
   assert.equal(hasMaturePlusEntitlement({ subscription: { ...paid.subscription, startedAt: "2026-03-01T00:00:00.000Z" } }, now), false);
   const owner = { subscription: { provider: "owner", tier: "plus", status: "active" } };
   assert.equal(hasMaturePlusEntitlement(owner, now), true);
-  assert.equal(getPlusLoyalty(owner, now).level, "plus_6");
+  assert.equal(getPlusLoyalty(owner, now).level, "plus_12");
   assert.equal(getPlusLoyalty(owner, now).customActionLimit, null);
 });
 
@@ -52,18 +52,23 @@ test("fun commands keep a Free set and enforce Plus toggles", () => {
   assert.equal(free.funQuackEnabled, true);
   assert.equal(free.funDuckFactEnabled, true);
   assert.equal(free.funCoinflipEnabled, true);
+  assert.equal(free.funThisOrThatEnabled, true);
+  assert.equal(free.funRandomMemberEnabled, true);
   assert.equal(free.funRpsEnabled, true);
   assert.equal(free.funFortuneEnabled, true);
   assert.equal(free.funRoastEnabled, false);
+  assert.equal(free.funAlibiEnabled, false);
   assert.equal(getFunCommandAccess(free, "quack").allowed, true);
   assert.equal(getFunCommandAccess(free, "roast").reason, "plus_required");
   assert.equal(getFunCommandAccess(free, "battle").reason, "plus_required");
+  assert.equal(getFunCommandAccess(free, "heist").reason, "plus_required");
   assert.throws(() => makeSettingsPatch({}, { funRoastEnabled: true }), /requires Duck Plus/);
 
   const plus = { subscription: { tier: "plus", status: "active" } };
-  const enabled = makeSettingsPatch(plus, { funRoastEnabled: true, funWouldYouRatherEnabled: true });
+  const enabled = makeSettingsPatch(plus, { funRoastEnabled: true, funWouldYouRatherEnabled: true, funAwardEnabled: true });
   assert.equal(enabled.settings.funRoastEnabled, true);
   assert.equal(getFunCommandAccess({ ...plus, ...enabled.patch }, "roast").allowed, true);
+  assert.equal(getFunCommandAccess({ ...plus, ...enabled.patch }, "award").allowed, true);
   assert.equal(getFunCommandAccess({ ...plus, funCommandsEnabled: false, funRoastEnabled: true }, "roast").reason, "disabled");
 });
 
@@ -235,11 +240,16 @@ test("custom actions use safe allowlists and loyalty-based caps", () => {
 
   const now = Date.parse("2026-08-14T00:00:00.000Z");
   const basePlus = { subscription: { provider: "stripe", tier: "plus", status: "active", startedAt: "2026-07-14T00:00:00.000Z" } };
+  const twoMonthPlus = { subscription: { ...basePlus.subscription, startedAt: "2026-06-14T00:00:00.000Z" } };
   const threeMonthPlus = { subscription: { ...basePlus.subscription, startedAt: "2026-05-14T00:00:00.000Z" } };
   const sixMonthPlus = { subscription: { ...basePlus.subscription, startedAt: "2026-02-14T00:00:00.000Z" } };
+  const twelveMonthPlus = { subscription: { ...basePlus.subscription, startedAt: "2025-08-14T00:00:00.000Z" } };
   assert.equal(getPlusLoyalty(basePlus, now).customActionLimit, 25);
+  assert.equal(getPlusLoyalty(twoMonthPlus, now).customActionLimit, 35);
+  assert.equal(getPlusLoyalty(twoMonthPlus, now).memoryReplies, 24);
   assert.equal(getPlusLoyalty(threeMonthPlus, now).customActionLimit, 50);
-  assert.equal(getPlusLoyalty(sixMonthPlus, now).customActionLimit, null);
+  assert.equal(getPlusLoyalty(sixMonthPlus, now).customActionLimit, 100);
+  assert.equal(getPlusLoyalty(twelveMonthPlus, now).customActionLimit, null);
   assert.equal(makeSettingsPatch(basePlus, { customActions: [action(1, "kick")] }, "", now).settings.customActions[0].actionType, "kick");
   assert.deepEqual(getPublicGuildSettings({ customActions: [action(1), action(2, "kick")] }).customActions.map(({ actionType }) => actionType), ["reply"]);
 });
