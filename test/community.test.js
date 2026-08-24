@@ -5,9 +5,11 @@ import { assertCanPublishTo, createTicketVerificationPhrase, normalizeTicketVeri
 
 test("ticket verification phrases are human-readable and comparison is forgiving about case and spacing", () => {
   const values = [0, 3, 164_743];
-  const phrase = createTicketVerificationPhrase(() => values.shift());
+  const ranges = [];
+  const phrase = createTicketVerificationPhrase((...range) => { ranges.push(range); return values.shift(); });
   assert.equal(phrase, "Apple Honeycomb 164,743");
   assert.equal(normalizeTicketVerificationAnswer("  apple   HONEYCOMB 164,743 "), normalizeTicketVerificationAnswer(phrase));
+  assert.deepEqual(ranges[2], [1, 1_000_000]);
 });
 
 test("panel publishing reports missing Discord channel permissions", () => {

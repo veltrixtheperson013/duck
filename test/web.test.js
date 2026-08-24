@@ -80,7 +80,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
     assert.match(dashboardText, /styles\.css\?v=20260842/);
-    assert.match(dashboardText, /Verification challenge/);
+    assert.match(dashboardText, /Word CAPTCHA/);
+    assert.match(dashboardText, /Image CAPTCHA/);
     assert.match(dashboardText, /Account center/);
     assert.match(dashboardText, /data-global-account/);
     assert.doesNotMatch(dashboardText, /data-settings-tab="billing"/);

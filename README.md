@@ -278,6 +278,15 @@ Common tool choices:
 
    You can also copy `.env.template` to `.env` and fill that in instead. `.env` is ignored by Git and should not be uploaded publicly.
 
+   To enable the dashboard's **Image CAPTCHA** ticket type, install KaggleHub and download the complete local dataset once on the Duck host:
+
+   ```bash
+   python3 -m pip install kagglehub
+   npm run setup:captcha
+   ```
+
+   The installer uses `kagglehub.dataset_download("parsasam/captcha-dataset")`, copies the extracted dataset into `data/captcha-dataset`, and builds a bounded server-side manifest. Keep `DUCK_CAPTCHA_DATASET_PATH=data/captcha-dataset` unless persistent storage lives elsewhere. The downloaded images and answers are intentionally ignored by Git. If Kaggle requires authentication on the host, configure KaggleHub there and rerun the installer; never commit a Kaggle token.
+
    AI planner options:
 
    - OpenRouter hosted AI: set `AI_PROVIDER` to `openrouter`, set `OPENROUTER_API_KEY`, and choose an `OPENROUTER_MODEL`.

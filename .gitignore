@@ -5,4 +5,5 @@ data/settings.json
 data/pending-actions.json
 data/warnings.json
 data/quotes.json
+data/captcha-dataset/
 *.log

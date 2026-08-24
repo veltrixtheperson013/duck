@@ -14,6 +14,7 @@ import {
 import { randomBytes, randomInt } from "node:crypto";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
+import { getImageCaptcha, getImageCaptchaStatus, normalizeCaptchaAnswer } from "./captcha.js";
 
 const activity = new Map();
 const ticketLocks = new Set();
@@ -48,7 +49,8 @@ const SELF_ASSIGN_BLOCKED_PERMISSIONS = [
 
 function clean(value, max = 240) { return String(value || "").replace(/\s+/g, " ").trim().slice(0, max); }
 function normalizeTicketVerificationAnswer(value) { return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US"); }
-function createTicketVerificationPhrase(random = randomInt) { const first = verificationWords[0][random(verificationWords[0].length)]; const second = verificationWords[1][random(verificationWords[1].length)]; const number = random(100_000, 1_000_000).toLocaleString("en-US"); return `${first} ${second} ${number}`; }
+function createTicketVerificationPhrase(random = randomInt) { const first = verificationWords[0][random(verificationWords[0].length)]; const second = verificationWords[1][random(verificationWords[1].length)]; const number = random(1, 1_000_000).toLocaleString("en-US"); return `${first} ${second} ${number}`; }
+function isTicketVerificationType(type) { return type === "verification" || type === "image_verification"; }
 function pruneTicketVerificationChallenges(now = Date.now()) { for (const [token, challenge] of ticketVerificationChallenges) if (challenge.expiresAt <= now) ticketVerificationChallenges.delete(token); while (ticketVerificationChallenges.size >= TICKET_VERIFICATION_LIMIT) ticketVerificationChallenges.delete(ticketVerificationChallenges.keys().next().value); }
 function withSafeEmoji(button, value, fallback) { try { return button.setEmoji(value || fallback); } catch { return button.setEmoji(fallback); } }
 function isSafeSelfAssignableRole(role) { return Boolean(role && !role.managed && role.editable && !role.permissions.any(SELF_ASSIGN_BLOCKED_PERMISSIONS)); }
@@ -157,7 +159,11 @@ async function publishTicketPanel(guild, actorId) {
   if (!botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) throw Object.assign(new Error("Duck needs Manage Channels to create tickets from this panel."), { status: 403 });
   const options = settings.ticketOptions;
   if (!options.length) throw Object.assign(new Error("Add at least one ticket option."), { status: 400 });
-  if (options.some(({ type }) => type === "verification") && !botMember.permissions.has(PermissionsBitField.Flags.KickMembers)) throw Object.assign(new Error("Duck needs Kick Members before publishing verification tickets."), { status: 403 });
+  if (options.some(({ type }) => isTicketVerificationType(type)) && !botMember.permissions.has(PermissionsBitField.Flags.KickMembers)) throw Object.assign(new Error("Duck needs Kick Members before publishing verification tickets."), { status: 403 });
+  if (options.some(({ type }) => type === "image_verification")) {
+    const captcha = getImageCaptchaStatus();
+    if (!captcha.ready) throw Object.assign(new Error(`Image CAPTCHA is not installed on this Duck host. ${captcha.error || "Run npm run setup:captcha."}`), { status: 503 });
+  }
   const rows = [];
   for (let index = 0; index < options.length; index += 5) rows.push(new ActionRowBuilder().addComponents(...options.slice(index, index + 5).map((option) => withSafeEmoji(new ButtonBuilder().setCustomId(`duck_ticket:${option.id}`).setLabel(option.label).setStyle(ButtonStyle.Primary), option.emoji, "🎫"))));
   const embed = new EmbedBuilder().setColor(0xf2c85b).setTitle(settings.ticketPanelTitle || "Duck Support").setDescription("Choose the kind of ticket you need. A private channel will be created for you and the support team.");
@@ -189,9 +195,33 @@ async function promptTicketVerification(interaction, option) {
   pruneTicketVerificationChallenges();
   const token = randomBytes(12).toString("base64url");
   const phrase = createTicketVerificationPhrase();
-  ticketVerificationChallenges.set(token, { guildId: interaction.guildId, userId: interaction.user.id, optionId: option.id, answer: normalizeTicketVerificationAnswer(phrase), expiresAt: Date.now() + TICKET_VERIFICATION_TTL_MS });
+  ticketVerificationChallenges.set(token, { guildId: interaction.guildId, userId: interaction.user.id, optionId: option.id, mode: "text", answer: normalizeTicketVerificationAnswer(phrase), expiresAt: Date.now() + TICKET_VERIFICATION_TTL_MS });
   const answer = new TextInputBuilder().setCustomId("duck_ticket_verify_answer").setLabel(`Type: ${phrase}`.slice(0, 45)).setPlaceholder(phrase).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(64);
   const modal = new ModalBuilder().setCustomId(`duck_ticket_verify:${token}`).setTitle(clean(option.verificationLabel, 45) || "Human verification").addComponents(new ActionRowBuilder().addComponents(answer));
+  return interaction.showModal(modal);
+}
+
+async function promptImageTicketVerification(interaction, option) {
+  pruneTicketVerificationChallenges();
+  let sample;
+  try { sample = getImageCaptcha(); } catch (error) {
+    return interaction.reply({ content: `Image verification is temporarily unavailable. A server administrator needs to install the CAPTCHA dataset. (${clean(error?.message, 140)})`, ephemeral: true });
+  }
+  const token = randomBytes(12).toString("base64url");
+  ticketVerificationChallenges.set(token, { guildId: interaction.guildId, userId: interaction.user.id, optionId: option.id, mode: "image", answer: normalizeCaptchaAnswer(sample.answer), expiresAt: Date.now() + TICKET_VERIFICATION_TTL_MS });
+  const filename = `duck-captcha${sample.extension}`;
+  const file = new AttachmentBuilder(sample.buffer, { name: filename, description: "Duck image verification challenge" });
+  const embed = new EmbedBuilder().setColor(0x16845c).setTitle(clean(option.verificationLabel, 80) || "Image verification").setDescription("Read the characters in the image, then press **Enter answer**. This one-time challenge expires in 10 minutes.").setImage(`attachment://${filename}`);
+  const controls = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`duck_ticket_image_answer:${token}`).setLabel("Enter answer").setStyle(ButtonStyle.Primary));
+  return interaction.reply({ embeds: [embed], components: [controls], files: [file], ephemeral: true });
+}
+
+async function promptImageTicketAnswer(interaction, token) {
+  pruneTicketVerificationChallenges();
+  const challenge = ticketVerificationChallenges.get(token);
+  if (!challenge || challenge.mode !== "image" || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That image challenge expired or belongs to another member. Open a new verification ticket and try again.", ephemeral: true });
+  const answer = new TextInputBuilder().setCustomId("duck_ticket_verify_answer").setLabel("Type the characters shown in the image").setPlaceholder("CAPTCHA answer").setStyle(TextInputStyle.Short).setRequired(true).setMinLength(3).setMaxLength(32);
+  const modal = new ModalBuilder().setCustomId(`duck_ticket_verify:${token}`).setTitle("Image verification").addComponents(new ActionRowBuilder().addComponents(answer));
   return interaction.showModal(modal);
 }
 
@@ -202,6 +232,7 @@ async function handleTicketOpen(interaction, optionId, verified = false) {
   const existing = interaction.guild.channels.cache.find((channel) => !channel.name.startsWith("closed-") && channel.topic?.match(/duck-ticket-owner:(\d{10,})/)?.[1] === interaction.user.id);
   if (existing) return interaction.reply({ content: `You already have an open ticket: ${existing}`, ephemeral: true });
   if (option.type === "verification" && !verified) return promptTicketVerification(interaction, option);
+  if (option.type === "image_verification" && !verified) return promptImageTicketVerification(interaction, option);
   const lockKey = `${interaction.guildId}:${interaction.user.id}`;
   if (ticketLocks.has(lockKey)) return interaction.reply({ content: "Your ticket is already being created.", ephemeral: true });
   ticketLocks.add(lockKey);
@@ -217,10 +248,10 @@ async function handleTicketOpen(interaction, optionId, verified = false) {
     const channel = await interaction.guild.channels.create({ name: safeName, type: ChannelType.GuildText, parent: settings.ticketCategoryId || null, topic: `duck-ticket-owner:${interaction.user.id};type:${option.id}`, permissionOverwrites: overwrites, reason: `Ticket opened by ${interaction.user.tag}` });
     const close = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("duck_ticket_close").setLabel("Close ticket").setEmoji("🔒").setStyle(ButtonStyle.Danger));
     const ticketEmbed = new EmbedBuilder().setColor(0x16845c).setTitle(option.label).setDescription(option.description || "A support team member will be with you soon.");
-    if (option.type === "verification") ticketEmbed.addFields({ name: option.verificationLabel || "Verification", value: "Passed before this ticket was opened." });
+    if (isTicketVerificationType(option.type)) ticketEmbed.addFields({ name: option.verificationLabel || "Verification", value: "Passed before this ticket was opened." });
     ticketEmbed.setFooter({ text: `Opened by ${interaction.user.tag}` }).setTimestamp();
     await channel.send({ content: `<@${interaction.user.id}>${settings.ticketSupportRoleId ? ` <@&${settings.ticketSupportRoleId}>` : ""}`, embeds: [ticketEmbed], components: [close], allowedMentions: { users: [interaction.user.id], roles: settings.ticketSupportRoleId ? [settings.ticketSupportRoleId] : [] } });
-    if (option.type === "verification" && option.additionalMessage) await channel.send({ content: option.additionalMessage, allowedMentions: { parse: [] } });
+    if (isTicketVerificationType(option.type) && option.additionalMessage) await channel.send({ content: option.additionalMessage, allowedMentions: { parse: [] } });
     getActivity(interaction.guildId).ticketsOpened += 1;
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Opened ticket", reason: option.label, source: "discord" });
     return interaction.editReply({ content: `Your ticket is ready: ${channel}` });
@@ -240,9 +271,11 @@ async function handleTicketVerificationModal(interaction) {
   ticketVerificationChallenges.delete(token);
   if (!challenge || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That verification challenge expired or belongs to another member. Open a new verification ticket and try again.", ephemeral: true });
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
-  const option = settings.ticketOptions?.find((item) => item.id === challenge.optionId && item.type === "verification");
+  const expectedType = challenge.mode === "image" ? "image_verification" : "verification";
+  const option = settings.ticketOptions?.find((item) => item.id === challenge.optionId && item.type === expectedType);
   if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That verification ticket is no longer available.", ephemeral: true });
-  const submitted = normalizeTicketVerificationAnswer(interaction.fields.getTextInputValue("duck_ticket_verify_answer"));
+  const rawAnswer = interaction.fields.getTextInputValue("duck_ticket_verify_answer");
+  const submitted = challenge.mode === "image" ? normalizeCaptchaAnswer(rawAnswer) : normalizeTicketVerificationAnswer(rawAnswer);
   if (submitted !== challenge.answer) {
     const reason = `Failed Duck ticket verification for ${option.label}`;
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Failed ticket verification", reason: option.label, source: "discord" });
@@ -335,6 +368,7 @@ async function handleAiActionSelection(interaction) {
 async function handleCommunityButton(interaction) {
   if (interaction.customId.startsWith("duck_rr:")) return handleReactionRole(interaction, interaction.customId.slice(8));
   if (interaction.customId === "duck_ticket_close") return handleTicketClose(interaction);
+  if (interaction.customId.startsWith("duck_ticket_image_answer:")) return promptImageTicketAnswer(interaction, interaction.customId.slice("duck_ticket_image_answer:".length));
   if (interaction.customId.startsWith("duck_ticket:")) return handleTicketOpen(interaction, interaction.customId.slice(12));
   if (interaction.customId.startsWith("duck_ai_action:")) return promptAiAction(interaction);
   return false;

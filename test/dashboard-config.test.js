@@ -168,6 +168,8 @@ test("community modules and rule-aware scanning use bounded server-owned configu
   const { patch, settings } = makeSettingsPatch({}, input);
   assert.deepEqual(patch.reactionRoleOptions, input.reactionRoleOptions);
   assert.deepEqual(settings.ticketOptions, input.ticketOptions);
+  const imageTicket = makeSettingsPatch({}, { ticketOptions: [{ id: "image", label: "Image check", description: "Read the image", emoji: "", type: "image_verification", verificationLabel: "Image verification", additionalMessage: "Welcome." }] }).settings.ticketOptions[0];
+  assert.equal(imageTicket.type, "image_verification");
   assert.equal(settings.aiScanRulesChannelId, input.aiScanRulesChannelId);
   assert.throws(() => makeSettingsPatch({}, { reactionRoleOptions: [{ roleId: "bad", label: "Admin", emoji: "x" }] }), /invalid/i);
   assert.throws(() => makeSettingsPatch({}, { ticketOptions: Array.from({ length: 6 }, (_, index) => ({ id: `x${index}`, label: "x", description: "", emoji: "" })) }), /up to 5/i);
