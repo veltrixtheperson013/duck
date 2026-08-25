@@ -79,7 +79,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260842/);
+    assert.match(dashboardText, /styles\.css\?v=20260844/);
     assert.match(dashboardText, /Word CAPTCHA/);
     assert.match(dashboardText, /Image CAPTCHA/);
     assert.match(dashboardText, /Account center/);

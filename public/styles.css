@@ -802,3 +802,95 @@ html[data-theme="windows-xp"] .site-header :is(.brand,.main-nav a) { color:#fff;
 @media (max-width:600px) { .theme-dock { right:12px; bottom:12px; }.settings-page-open .theme-dock { bottom:76px; }.theme-picker-toggle { width:46px; padding:0; overflow:hidden; font-size:0; }.theme-picker-toggle::before { content:"✦"; font-size:1rem; }.theme-grid { grid-template-columns:1fr; }.cluster-hive { padding-inline:8px; }.cluster-hex { width:86px; height:75px; margin-right:-21px; }.cluster-hex:nth-child(even) { transform:translateY(37.5px); }.dashboard-cluster-hex { width:76px; height:66px; margin-right:-19px; }.dashboard-cluster-hex:nth-child(even) { transform:translateY(33px); } }
 @media (prefers-reduced-motion:reduce) { .theme-atmosphere *,.theme-galaxy::before,html[data-theme="gradient"] body { animation:none !important; }.theme-star,.space-dust { opacity:.55; }.theme-panel { animation:none; } }
 .website-banner { position:relative; z-index:100; display:flex; gap:16px; align-items:center; justify-content:center; width:100%; min-height:46px; padding:10px 56px; color:#eafff4; background:#0d5a40; border-bottom:1px solid rgba(255,255,255,.16); box-shadow:0 8px 28px rgba(0,0,0,.14); font-size:.82rem; font-weight:750; text-align:center; }.website-banner a { color:#ffe18b; font-weight:900; }.website-banner button { position:absolute; right:18px; width:30px; height:30px; padding:0; color:inherit; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:50%; cursor:pointer; }.website-banner.is-maintenance { background:#81440d; }.website-banner.is-warning { background:#7d2727; }.website-banner.is-success { background:#176e47; }@media(max-width:600px){.website-banner{align-items:flex-start;flex-direction:column;gap:2px;padding:10px 48px 10px 16px;text-align:left}.website-banner button{right:10px}}
+
+/* Contrast guardrails for themed calls to action and release notes. */
+html[data-theme]:not([data-theme="classic"]) .nav-login {
+  color: #fff !important;
+  background: linear-gradient(135deg, #5865f2, #4049ad);
+  border-color: rgba(255, 255, 255, .28);
+  box-shadow: 0 8px 24px rgba(26, 31, 94, .34);
+}
+html[data-theme]:not([data-theme="classic"]) .nav-login:hover { color: #fff !important; background: linear-gradient(135deg, #6672f5, #4852be); }
+:is(html[data-theme="dark"],html[data-theme="galaxy"],html[data-theme="matrix"],html[data-theme="nebula"],html[data-theme="black-hole"],html[data-theme="gradient"]) :is(.button.primary,.nav-invite) {
+  color: #fff !important;
+  background: linear-gradient(135deg,color-mix(in srgb,var(--theme-accent) 48%,#06120d),color-mix(in srgb,var(--green-dark) 68%,#050706));
+  border-color: color-mix(in srgb,var(--theme-accent) 42%,transparent);
+  text-shadow: 0 1px 2px rgba(0,0,0,.48);
+}
+html[data-theme]:not([data-theme="classic"]) .approval-flow span { color: var(--ink); background: var(--theme-surface-strong); border-color: color-mix(in srgb,var(--theme-line) 78%,var(--theme-accent)); box-shadow: 0 8px 22px rgba(0,0,0,.2); }
+html[data-theme]:not([data-theme="classic"]) .approval-flow i { color: var(--theme-accent); text-shadow: 0 0 12px var(--theme-glow); }
+html[data-theme]:not([data-theme="classic"]) .update-card li { color: var(--theme-muted); }
+html[data-theme]:not([data-theme="classic"]) .update-card li::before { color: var(--theme-accent); }
+html[data-theme]:not([data-theme="classic"]) .update-meta { color: var(--theme-muted); }
+html[data-theme]:not([data-theme="classic"]) .update-meta span { color: var(--ink); background: color-mix(in srgb,var(--theme-surface-strong) 78%,var(--theme-accent)); border: 1px solid var(--theme-line); }
+html[data-theme="windows-xp"] .button.discord {
+  color: #fff;
+  background: linear-gradient(180deg,#6978f5,#4653c4);
+  border: 1px solid #29369b;
+  border-radius: 9px;
+  box-shadow: inset 1px 1px rgba(255,255,255,.5),inset -1px -1px rgba(0,0,0,.25),2px 3px 8px rgba(0,35,100,.28);
+  text-shadow: 1px 1px rgba(25,31,112,.75);
+}
+html[data-theme="windows-xp"] .product-window {
+  color: #1b1b1b;
+  background: #ece9d8;
+  border: 3px solid #0755d9;
+  border-radius: 9px 9px 3px 3px;
+  box-shadow: 4px 5px 18px rgba(0,45,120,.42);
+}
+html[data-theme="windows-xp"] .product-window-bar {
+  min-height: 38px;
+  padding: 3px 4px 3px 9px;
+  color: #fff;
+  background: linear-gradient(180deg,#3b91ff 0,#0867dc 16%,#0052c9 72%,#0646a7 100%);
+  border-bottom: 1px solid #003b92;
+  font-family: Tahoma,"Segoe UI",sans-serif;
+  text-shadow: 1px 1px #163c82;
+}
+html[data-theme="windows-xp"] .product-window-bar strong { order: 1; margin-left: 0; color: #fff; }
+html[data-theme="windows-xp"] .product-window-bar small { order: 2; margin-left: auto; margin-right: 8px; color: #e9f2ff; }
+html[data-theme="windows-xp"] .product-window-bar > span { position: relative; order: 3; width: 23px; height: 21px; background: linear-gradient(#70a9f8,#1d67ce); border: 1px solid #fff; border-radius: 3px; box-shadow: inset 0 0 0 1px #2158a8; }
+html[data-theme="windows-xp"] .product-window-bar > span:nth-child(2) { background: linear-gradient(#70a9f8,#1d67ce); }
+html[data-theme="windows-xp"] .product-window-bar > span:nth-child(3) { background: linear-gradient(#f7a28a,#d63b22); box-shadow: inset 0 0 0 1px #a62418; }
+html[data-theme="windows-xp"] .product-window-bar > span::after { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 900 13px/1 Tahoma,sans-serif; text-shadow: 1px 1px #24508f; }
+html[data-theme="windows-xp"] .product-window-bar > span:nth-child(1)::after { content: "_"; padding-bottom: 5px; }
+html[data-theme="windows-xp"] .product-window-bar > span:nth-child(2)::after { content: "□"; }
+html[data-theme="windows-xp"] .product-window-bar > span:nth-child(3)::after { content: "×"; text-shadow: 1px 1px #8f2118; }
+html[data-theme="windows-xp"] .product-window-body { background: #ece9d8; }
+html[data-theme="windows-xp"] .product-sidebar { background: linear-gradient(180deg,#d6e7ff,#c3d8f5); border-right: 1px solid #7f9db9; }
+html[data-theme="windows-xp"] .product-sidebar b { color: #174a8b; border: 1px solid transparent; border-radius: 3px; }
+html[data-theme="windows-xp"] .product-sidebar .is-active { color: #fff; background: linear-gradient(180deg,#4b98ed,#1767c4); border-color: #0750a8; text-shadow: 1px 1px #174b83; }
+html[data-theme="windows-xp"] .product-panel { background: #fff; }
+html[data-theme="windows-xp"] .product-panel-heading > span { background: #e6f0fb; border-color: #7f9db9; border-radius: 3px; }
+html[data-theme="windows-xp"] .product-panel-heading small { color: #0756a9; }
+html[data-theme="windows-xp"] .product-panel-heading h3 { color: #153e7b; }
+html[data-theme="windows-xp"] .product-panel-heading p { color: #454545; }
+html[data-theme="windows-xp"] .product-panel-heading > i { color: #154b87; background: #e7f0fb; border: 1px solid #7f9db9; border-radius: 3px; }
+html[data-theme="windows-xp"] .product-settings article { color: #222; background: #f7f7f7; border: 1px solid #b5b2a6; border-radius: 3px; box-shadow: inset 1px 1px #fff; }
+html[data-theme="windows-xp"] .product-settings small { color: #555; }
+html[data-theme="windows-xp"] .demo-toggle { border-radius: 3px; box-shadow: inset 1px 1px #777,inset -1px -1px #fff; }
+html[data-theme="windows-xp"] .approval-preview { color: #222; background: #ffffe1; border-color: #7f9db9; border-radius: 3px; box-shadow: 3px 4px 12px rgba(0,45,110,.28); }
+html[data-theme="windows-xp"] .approval-preview span { color: #0756a9; }
+html[data-theme="windows-xp"] .approval-preview p { color: #555; }
+html[data-theme="windows-xp"] .approval-preview button { color: #111; background: #ece9d8; border-color: #003c74; border-radius: 3px; box-shadow: inset 1px 1px #fff,inset -1px -1px #aca899; }
+html[data-theme="windows-xp"] .approval-preview .approve { color: #fff; background: linear-gradient(#4b98ed,#1767c4); border-color: #064b9b; }
+html[data-theme="windows-xp"] .safety-proof,html[data-theme="windows-xp"] .cta {
+  color: #111;
+  background: #ece9d8;
+  border: 2px solid #0755d9;
+  border-radius: 8px;
+  box-shadow: 4px 5px 16px rgba(0,45,120,.34),inset 0 24px #f7f5ed;
+}
+html[data-theme="windows-xp"] .safety-proof::before,html[data-theme="windows-xp"] .cta::after { position: absolute; top: 5px; left: 14px; color: #174a8b; font: 700 11px Tahoma,"Segoe UI",sans-serif; }
+html[data-theme="windows-xp"] .safety-proof::before { content: "Security Center"; }
+html[data-theme="windows-xp"] .cta::after { content: "Duck Setup Wizard"; }
+html[data-theme="windows-xp"] .cta::before { display: none; }
+html[data-theme="windows-xp"] .safety-proof h2,html[data-theme="windows-xp"] .cta h2 { color: #153e7b; }
+html[data-theme="windows-xp"] .safety-proof .eyebrow,html[data-theme="windows-xp"] .cta .eyebrow { color: #0756a9; }
+html[data-theme="windows-xp"] .safety-proof > div > p:not(.eyebrow),html[data-theme="windows-xp"] .cta p:not(.eyebrow) { color: #333; }
+html[data-theme="windows-xp"] .safety-proof a { color: #0645ad; }
+html[data-theme="windows-xp"] .safety-proof li { color: #222; background: #fff; border-color: #b5b2a6; border-radius: 3px; box-shadow: inset 1px 1px #fff; }
+html[data-theme="windows-xp"] .safety-proof li > span { color: #fff; background: linear-gradient(#4b98ed,#1767c4); border-radius: 3px; }
+html[data-theme="windows-xp"] .safety-proof li strong { color: #153e7b; }
+html[data-theme="windows-xp"] .safety-proof small { color: #555; }
+html[data-theme="windows-xp"] .cta .button.light { color: #111; background: #ece9d8; border: 1px solid #003c74; border-radius: 3px; box-shadow: inset 1px 1px #fff,inset -1px -1px #aca899; }
