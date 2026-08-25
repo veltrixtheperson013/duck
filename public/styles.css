@@ -782,7 +782,7 @@ html[data-theme]:not([data-theme="classic"]) .cluster-status-page :is(.cluster-s
 .aurora-orb { position:absolute; width:55vw; aspect-ratio:1; opacity:.42; background:radial-gradient(circle,#795dff,rgba(255,90,190,.58) 30%,transparent 68%); border-radius:50%; filter:blur(60px); animation:aurora-roam 22s -6s ease-in-out infinite alternate; }.aurora-orb:nth-child(even) { background:radial-gradient(circle,#38efd0,rgba(34,121,255,.46) 32%,transparent 68%); animation-duration:29s; } @keyframes aurora-roam { to { transform:translate3d(18vw,12vh,0) scale(1.2) rotate(30deg) } }
 .aurora-orb:nth-child(1) { top:-24%; left:-18%; }.aurora-orb:nth-child(2) { top:42%; left:48%; }.aurora-orb:nth-child(3) { top:9%; left:62%; }.aurora-orb:nth-child(4) { top:57%; left:-12%; }
 html[data-theme="gradient"] body { background:linear-gradient(125deg,#17104a,#6638b9,#ad397f,#087f89); background-size:320% 320%; animation:gradient-shift 18s ease infinite; } @keyframes gradient-shift { 0%,100% { background-position:0 50% } 50% { background-position:100% 50% } }
-.theme-windows-xp::before { position:absolute; inset:0; content:""; background:radial-gradient(ellipse at 18% 80%,#57a82d 0 18%,transparent 18.4%),radial-gradient(ellipse at 72% 92%,#4da52a 0 33%,transparent 33.4%),linear-gradient(#57b3fc 0 66%,#66b63b 66%); }.xp-cloud { position:absolute; left:-20%; width:130px; height:34px; opacity:.82; background:#fff; border-radius:999px; filter:blur(1px); animation:xp-clouds 42s -12s linear infinite; }.xp-cloud:nth-child(3n+1) { top:9%; }.xp-cloud:nth-child(3n+2) { top:22%; animation-duration:51s; }.xp-cloud:nth-child(3n) { top:35%; animation-duration:58s; animation-delay:-28s; }.xp-cloud::before,.xp-cloud::after { position:absolute; content:""; background:#fff; border-radius:50%; }.xp-cloud::before { left:25px; bottom:5px; width:48px; height:48px; }.xp-cloud::after { right:22px; bottom:3px; width:62px; height:62px; } @keyframes xp-clouds { to { transform:translateX(140vw) } }
+.theme-windows-xp::before { position:absolute; inset:0; content:""; background-image:linear-gradient(rgba(16,83,167,.04),rgba(23,91,21,.08)),url("xp-background.jpg"); background-position:center; background-size:cover; }.xp-cloud { position:absolute; left:-20%; width:130px; height:34px; opacity:.2; background:#fff; border-radius:999px; filter:blur(2px); animation:xp-clouds 42s -12s linear infinite; }.xp-cloud:nth-child(3n+1) { top:9%; }.xp-cloud:nth-child(3n+2) { top:22%; animation-duration:51s; }.xp-cloud:nth-child(3n) { top:35%; animation-duration:58s; animation-delay:-28s; }.xp-cloud::before,.xp-cloud::after { position:absolute; content:""; background:#fff; border-radius:50%; }.xp-cloud::before { left:25px; bottom:5px; width:48px; height:48px; }.xp-cloud::after { right:22px; bottom:3px; width:62px; height:62px; } @keyframes xp-clouds { to { transform:translateX(140vw) } }
 html[data-theme="matrix"] :is(h1,h2,h3,.brand,.button) { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; text-shadow:0 0 12px rgba(33,250,114,.12); }
 html[data-theme="galaxy"] :is(h1,h2,.brand) { text-shadow:0 0 28px rgba(116,220,255,.15); }
 html[data-theme="windows-xp"] :is(.guide-document,.policy-document,.legal-document,.price-card:not(.featured),.donation-panel,.login-card,.server-card,.dashboard-stats article,.settings-group,.feature-module,.update-card) { border-radius:3px !important; box-shadow:inset 1px 1px #fff,inset -1px -1px #aca899,2px 3px 8px rgba(0,41,110,.22); }
@@ -894,3 +894,93 @@ html[data-theme="windows-xp"] .safety-proof li > span { color: #fff; background:
 html[data-theme="windows-xp"] .safety-proof li strong { color: #153e7b; }
 html[data-theme="windows-xp"] .safety-proof small { color: #555; }
 html[data-theme="windows-xp"] .cta .button.light { color: #111; background: #ece9d8; border: 1px solid #003c74; border-radius: 3px; box-shadow: inset 1px 1px #fff,inset -1px -1px #aca899; }
+
+/* Theme polish: readable glass, richer atmospheres, and responsive navigation. */
+.site-header { gap: 24px; }
+.site-header .brand { flex: 0 0 auto; }
+.site-header > .main-nav { min-width: 0; gap: clamp(14px,1.8vw,28px); }
+html[data-theme]:not([data-theme="classic"]) .site-header {
+  margin-top: 12px;
+  padding-inline: 18px;
+  background: color-mix(in srgb,var(--theme-surface) 82%,transparent);
+  border: 1px solid color-mix(in srgb,var(--theme-line) 82%,transparent);
+  border-radius: 20px;
+  box-shadow: 0 16px 45px rgba(0,0,0,.16),inset 0 1px rgba(255,255,255,.08);
+  backdrop-filter: blur(18px) saturate(135%);
+}
+html[data-theme]:not([data-theme="classic"]) :is(.duck-card,.feature-grid article,.price-card,.server-card,.dashboard-stats article,.update-card) {
+  backdrop-filter: blur(18px) saturate(125%);
+}
+html[data-theme]:not([data-theme="classic"]) :is(.feature-grid article,.price-card,.server-card,.update-card) {
+  transition: transform .2s ease,border-color .2s ease,box-shadow .2s ease;
+}
+html[data-theme]:not([data-theme="classic"]) :is(.feature-grid article,.price-card,.server-card,.update-card):hover {
+  border-color: color-mix(in srgb,var(--theme-accent) 55%,var(--theme-line));
+  box-shadow: 0 22px 60px rgba(0,0,0,.3),0 0 28px var(--theme-glow);
+  transform: translateY(-3px);
+}
+
+html[data-theme="dark"] body { background-image: radial-gradient(circle at 82% 4%,rgba(66,214,157,.13),transparent 28rem),radial-gradient(circle at 8% 78%,rgba(242,200,91,.06),transparent 24rem),linear-gradient(155deg,#080b09,#141b17); }
+html[data-theme="galaxy"] body { background-image: radial-gradient(circle at 78% 12%,rgba(33,112,255,.28),transparent 31rem),radial-gradient(circle at 18% 70%,rgba(217,68,255,.2),transparent 28rem),linear-gradient(155deg,#030413,#111740); }
+html[data-theme="matrix"] body { background-image: radial-gradient(circle at 82% 15%,rgba(28,255,112,.11),transparent 25rem),linear-gradient(155deg,#010302,#07130a); }
+html[data-theme="nebula"] body { background-image: radial-gradient(circle at 76% 12%,rgba(255,72,211,.22),transparent 30rem),radial-gradient(circle at 14% 72%,rgba(50,225,238,.19),transparent 28rem),linear-gradient(155deg,#09030f,#241031); }
+html[data-theme="black-hole"] body { background-image: radial-gradient(circle at 18% 22%,rgba(255,128,48,.09),transparent 26rem),radial-gradient(circle at 78% 76%,rgba(75,104,255,.08),transparent 30rem),linear-gradient(155deg,#010102,#0b0809); }
+html[data-theme="windows-xp"] body { background-color:#2f7ed0; background-image:linear-gradient(rgba(15,79,160,.03),rgba(24,93,20,.06)),url("xp-background.jpg"); background-position:center; background-size:cover; background-attachment:fixed; }
+html[data-theme="windows-xp"] body::before { opacity:.08; }
+
+.theme-galaxy::before {
+  top:-2%; left:-24%; width:154%; height:64%; opacity:.95;
+  background:linear-gradient(105deg,transparent 12%,rgba(39,73,210,.2) 26%,rgba(124,81,255,.5) 38%,rgba(255,102,224,.48) 47%,rgba(91,224,255,.46) 57%,rgba(72,112,242,.24) 67%,transparent 82%);
+  filter:blur(28px) saturate(145%);
+}
+.theme-galaxy::after { position:absolute; top:5%; left:-12%; width:125%; height:55%; content:""; opacity:.75; background:radial-gradient(ellipse at 50% 50%,rgba(255,255,255,.26) 0 1%,rgba(115,220,255,.16) 4%,rgba(194,105,255,.12) 16%,transparent 58%); filter:blur(12px); transform:rotate(-12deg); animation:galaxy-band 30s -8s ease-in-out infinite alternate-reverse; }
+.theme-star { width:2px; height:2px; opacity:.88; box-shadow:0 0 7px 1px rgba(130,225,255,.82); }
+.theme-star:nth-child(5n) { width:3px; height:3px; background:#ffd5fb; box-shadow:0 0 10px 2px rgba(255,105,226,.7); }
+.theme-star:nth-child(7n) { width:1px; height:1px; opacity:.55; }
+
+.black-hole-core { top:10%; right:auto; left:clamp(2%,6vw,9%); width:clamp(210px,31vw,430px); background:radial-gradient(circle,rgba(0,0,0,1) 0 28%,#05070d 29% 33%,rgba(72,108,190,.36) 34%,transparent 38%); box-shadow:0 0 75px rgba(255,104,39,.18); animation:black-hole-breathe 8s ease-in-out infinite alternate; isolation:isolate; }
+.black-hole-core::before { position:absolute; z-index:-1; top:41%; left:-25%; width:150%; height:19%; content:""; background:linear-gradient(90deg,transparent 2%,#e84820 16%,#ff9a3d 29%,#fff1c4 46%,#fff 50%,#ffe29a 55%,#ff7a31 72%,#9d251d 86%,transparent 98%); border-radius:50%; box-shadow:0 0 18px #ff742d,0 0 52px rgba(255,86,33,.55); filter:blur(1px); transform:rotate(-13deg); }
+.black-hole-core::after { inset:33%; background:#000; border:1px solid rgba(92,130,205,.2); box-shadow:0 0 25px 12px #000,0 0 48px rgba(93,123,220,.22); }
+@keyframes black-hole-breathe { to { filter:brightness(1.12); transform:translateY(8px) scale(1.025); } }
+.space-dust:nth-child(4n) { width:3px; height:3px; background:#a9c4ff; box-shadow:0 0 9px #668fff; }
+
+.swatch-galaxy { background:radial-gradient(circle at 22% 30%,#fff 0 2%,transparent 3%),radial-gradient(circle at 72% 65%,#8aeaff 0 2%,transparent 3%),linear-gradient(145deg,#e35bd5 0 12%,#4c55c8 34%,#080a26 70%); }
+.swatch-black-hole { background:radial-gradient(ellipse,#000 0 17%,#fff1bd 19%,#ff7c32 24%,transparent 29%),linear-gradient(145deg,#11162b,#020203); }
+.swatch-windows-xp { background-image:url("xp-background.jpg"); background-position:center; background-size:cover; border-color:#1758bd; }
+
+@media (max-width:1080px) {
+  .site-header { min-height:68px; }
+  .menu-button { display:block; flex:0 0 auto; }
+  .site-header > .main-nav { position:absolute; z-index:40; top:calc(100% + 10px); right:0; display:grid; width:min(310px,calc(100vw - 24px)); max-height:calc(100dvh - 100px); overflow:auto; padding:12px; opacity:0; visibility:hidden; background:color-mix(in srgb,var(--theme-surface-strong,#fffdf7) 96%,transparent); border:1px solid var(--theme-line,var(--line)); border-radius:16px; box-shadow:0 24px 65px rgba(0,0,0,.28); backdrop-filter:blur(22px); transform:translateY(-8px); transition:opacity .18s ease,transform .18s ease,visibility .18s; }
+  .site-header > .main-nav.is-open { opacity:1; visibility:visible; transform:translateY(0); }
+  .site-header > .main-nav a { display:block; padding:10px 12px; color:var(--ink); border-radius:9px; }
+  .site-header > .main-nav a:hover { background:var(--mint); }
+  .site-header > .main-nav :is(.nav-login,.nav-invite) { margin:4px 0 0; color:#fff !important; text-align:center; }
+  html[data-theme="windows-xp"] .site-header > .main-nav a:not(.nav-login):not(.nav-invite) { color:#111; text-shadow:none; }
+}
+
+@media (max-width:600px) {
+  html[data-theme]:not([data-theme="classic"]) .site-header { width:min(100% - 16px,1180px); margin-top:8px; padding-inline:11px; border-radius:14px; }
+  .theme-panel { padding:14px; }
+  .theme-option { min-height:58px; }
+  .black-hole-core { top:16%; left:-18%; width:280px; opacity:.68; }
+}
+
+/* Windows XP gets complete, self-contained windows instead of inherited dark modules. */
+html[data-theme="windows-xp"] .site-header { color:#fff; background:linear-gradient(180deg,#3b91ff 0,#0867dc 16%,#0052c9 72%,#0646a7 100%); border-color:#003c91; border-radius:8px 8px 0 0; box-shadow:inset 0 1px #71b6ff,3px 4px 12px rgba(0,35,100,.28); backdrop-filter:none; }
+html[data-theme="windows-xp"] .site-header :is(.brand,.main-nav a) { color:#fff; text-shadow:1px 1px #17437d; }
+html[data-theme="windows-xp"] .hero-copy { position:relative; padding:48px 30px 30px; color:#111; background:rgba(236,233,216,.96); border:2px solid #0755d9; border-radius:8px; box-shadow:4px 5px 18px rgba(0,45,120,.36),inset 0 27px #f7f5ed; }
+html[data-theme="windows-xp"] .hero-copy::before { position:absolute; top:6px; left:13px; content:"Duck — Discord moderation"; color:#174a8b; font:700 11px Tahoma,"Segoe UI",sans-serif; }
+html[data-theme="windows-xp"] .hero-copy :is(h1,.lede,.microcopy,.hero-proof,.hero-proof span) { color:#172231; text-shadow:none; }
+html[data-theme="windows-xp"] .hero-kicker { color:#0756a9; background:#fff; border-color:#7f9db9; box-shadow:inset 1px 1px #fff; }
+html[data-theme="windows-xp"] .product-window { color:#1b1b1b !important; background:#ece9d8 !important; border:3px solid #0755d9 !important; }
+html[data-theme="windows-xp"] .product-window-body { background:#ece9d8 !important; }
+html[data-theme="windows-xp"] .product-sidebar { background:linear-gradient(180deg,#d6e7ff,#c3d8f5) !important; border-color:#7f9db9 !important; }
+html[data-theme="windows-xp"] .product-panel { color:#222; background:#fff !important; }
+html[data-theme="windows-xp"] .product-settings article { color:#222 !important; background:#f7f7f7 !important; border-color:#b5b2a6 !important; }
+html[data-theme="windows-xp"] .product-settings article strong { color:#222; }
+html[data-theme="windows-xp"] .approval-preview { color:#222 !important; background:#ffffe1 !important; border-color:#7f9db9 !important; }
+html[data-theme="windows-xp"] footer { width:min(100% - 20px,1180px); min-height:62px; margin-bottom:10px; padding:10px 14px; color:#fff; background:linear-gradient(180deg,#2477dc,#0754bc); border:1px solid #003c91; border-radius:0 0 8px 8px; box-shadow:inset 0 1px #71b6ff,3px 4px 12px rgba(0,35,100,.28); text-shadow:1px 1px #17437d; }
+html[data-theme="windows-xp"] footer :is(.brand,.footer-links a,p) { color:#fff; }
+html[data-theme="windows-xp"] footer .brand span { color:#111; text-shadow:none; }
+@media (max-width:600px) { html[data-theme="windows-xp"] .hero-copy { padding:44px 20px 24px; } html[data-theme="windows-xp"] footer { width:min(100% - 16px,1180px); padding:18px 14px; } }

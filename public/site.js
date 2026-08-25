@@ -3,10 +3,10 @@ const duckThemes = [
   { id: "classic", name: "Classic Duck", icon: "🦆", copy: "Warm paper and pond green." },
   { id: "light", name: "Daylight", icon: "☀️", copy: "Bright, crisp, and quiet." },
   { id: "dark", name: "Midnight", icon: "🌙", copy: "Low-glare charcoal and mint." },
-  { id: "galaxy", name: "Milky Way", icon: "🌌", copy: "Moving stars and a galactic band." },
+  { id: "galaxy", name: "Milky Way", icon: "🌌", copy: "Vivid starlight, cosmic dust, and a living galactic band." },
   { id: "matrix", name: "Matrix Rain", icon: "⌨️", copy: "Terminal glass and falling code." },
   { id: "nebula", name: "Nebula", icon: "🔮", copy: "Slow violet and cyan gas clouds." },
-  { id: "black-hole", name: "Black Hole", icon: "🕳️", copy: "Deep space with an accretion glow." },
+  { id: "black-hole", name: "Black Hole", icon: "🕳️", copy: "A cinematic event horizon with a bright accretion disc." },
   { id: "gradient", name: "Aurora", icon: "🌈", copy: "A living, luminous gradient." },
   { id: "windows-xp", name: "Windows XP", icon: "🖥️", copy: "Blue chrome, green hills, pure nostalgia." },
 ];
@@ -19,7 +19,7 @@ function buildAtmosphere(theme) {
   if (!["galaxy", "matrix", "nebula", "black-hole", "gradient", "windows-xp"].includes(theme)) return;
   const atmosphere = document.createElement("div"); atmosphere.className = `theme-atmosphere theme-${theme}`; atmosphere.dataset.themeAtmosphere = ""; atmosphere.setAttribute("aria-hidden", "true"); const fragment = document.createDocumentFragment();
   const appendParticles = (count, className, content = "") => { for (let index = 0; index < count; index += 1) { const particle = document.createElement("i"); particle.className = className; particle.textContent = content; fragment.append(particle); } };
-  if (theme === "galaxy") appendParticles(64, "theme-star");
+  if (theme === "galaxy") appendParticles(96, "theme-star");
   if (theme === "matrix") { const glyphs = "01DUCKｱｲｳｴｵｶｷｸｹｺ"; for (let index = 0; index < 18; index += 1) { const column = document.createElement("i"); column.className = "matrix-column"; column.textContent = Array.from({ length: 18 }, (_, row) => glyphs[(index * 7 + row * 3) % glyphs.length]).join("\n"); fragment.append(column); } }
   if (theme === "nebula") appendParticles(5, "nebula-cloud");
   if (theme === "black-hole") { const core = document.createElement("i"); core.className = "black-hole-core"; fragment.append(core); appendParticles(30, "space-dust"); }

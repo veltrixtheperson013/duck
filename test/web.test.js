@@ -67,6 +67,11 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(themeInit.status, 200);
     assert.match(await themeInit.text(), /duck-theme/);
 
+    const xpBackground = await fetch(`${origin}/xp-background.jpg`);
+    assert.equal(xpBackground.status, 200);
+    assert.match(xpBackground.headers.get("content-type"), /^image\/jpeg/);
+    assert.ok((await xpBackground.arrayBuffer()).byteLength > 1_000_000);
+
     const dashboard = await fetch(`${origin}/dashboard`);
     assert.equal(dashboard.status, 200);
     assert.equal(dashboard.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
@@ -79,7 +84,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260844/);
+    assert.match(dashboardText, /styles\.css\?v=20260845/);
     assert.match(dashboardText, /Word CAPTCHA/);
     assert.match(dashboardText, /Image CAPTCHA/);
     assert.match(dashboardText, /Account center/);
