@@ -46,6 +46,8 @@ If either Operator Deck is enabled with incomplete security settings, Duck logs 
 
 Sign in to Duck's normal dashboard with that Discord account first, then manually open `https://duck.wispbyte.app/<your-private-path>/`. The private path is not linked or advertised. Duck returns a normal 404 to other Discord accounts and signed-out visitors. Unlocking additionally requires the 64-or-more-character `DUCK_ADMIN_TOKEN`; Duck exchanges it for a short-lived HttpOnly, Secure, SameSite=Strict session bound to the current Discord session, client address, and browser. Every mutation requires a separate CSRF token and same-origin HTTPS request. Unlock attempts and operator changes have dedicated strict rate limits. `DUCK_ADMIN_ALLOWED_IPS` optionally accepts exact comma-separated client IPs, but should stay empty when the host's reverse proxy hides the real visitor IP.
 
+The Operator Deck can stage a gradual release from GitHub when `DUCK_ADMIN_DEPLOY_ENABLED=true`. It accepts only the configured remote and branch, refuses tracked local changes and non-fast-forward history, notifies each server's configured log channel cluster-by-cluster, and records every stage in the admin audit log. Duck's current clusters are logical queues inside one Node process, so the release is applied once after cluster notifications and requires one process restart. Leave `DUCK_ADMIN_DEPLOY_AUTO_RESTART=false` unless Wispbyte is configured to restart Duck automatically after `SIGTERM`; otherwise restart from the Wispbyte panel when the Deck reports `restart required`.
+
 ## Features
 
 - `/setup channel:#channel` chooses the channel where Duck listens. `/setup quarantine-channel:<voice channel>` configures the Administrator-only voice quarantine destination.

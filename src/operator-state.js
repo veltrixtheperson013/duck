@@ -10,7 +10,7 @@ function cleanText(value, maximum = 240) {
 }
 
 function freshState() {
-  return { version: 1, blockedUsers: {}, clusterStatuses: {}, clusterAssignments: {}, websiteBanner: null, maintenance: [], auditLog: [] };
+  return { version: 1, blockedUsers: {}, clusterStatuses: {}, clusterAssignments: {}, websiteBanner: null, maintenance: [], deployment: null, auditLog: [] };
 }
 
 function getOperatorState() {
@@ -20,6 +20,7 @@ function getOperatorState() {
   state.clusterStatuses = state.clusterStatuses && typeof state.clusterStatuses === "object" && !Array.isArray(state.clusterStatuses) ? state.clusterStatuses : {};
   state.clusterAssignments = state.clusterAssignments && typeof state.clusterAssignments === "object" && !Array.isArray(state.clusterAssignments) ? state.clusterAssignments : {};
   state.maintenance = Array.isArray(state.maintenance) ? state.maintenance.slice(0, 100) : [];
+  state.deployment = state.deployment && typeof state.deployment === "object" && !Array.isArray(state.deployment) ? state.deployment : null;
   state.auditLog = Array.isArray(state.auditLog) ? state.auditLog.slice(0, MAX_AUDIT) : [];
   return state;
 }
@@ -34,6 +35,24 @@ function recordOperatorAction(action, details = {}) {
   state.auditLog = [{ id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, action: cleanText(action, 80), details: safeDetails, at: new Date().toISOString() }, ...state.auditLog].slice(0, MAX_AUDIT);
   saveOperatorState(state);
   return state.auditLog[0];
+}
+
+function setDeploymentState(input) {
+  const state = getOperatorState();
+  if (input == null) state.deployment = null;
+  else {
+    const status = ["preflight", "staging", "updating", "restart_required", "restarting", "completed", "failed"].includes(input.status) ? input.status : "failed";
+    state.deployment = {
+      id: cleanText(input.id, 80), status, actorId: /^\d{10,20}$/.test(String(input.actorId || "")) ? String(input.actorId) : cleanText(input.actorId, 80),
+      startedAt: cleanText(input.startedAt, 40), updatedAt: new Date().toISOString(), completedAt: cleanText(input.completedAt, 40) || null,
+      currentCluster: /^cluster-\d{2}$/.test(String(input.currentCluster || "")) ? String(input.currentCluster) : null,
+      completedClusters: Math.max(0, Math.min(Number(input.completedClusters) || 0, 32)), totalClusters: Math.max(0, Math.min(Number(input.totalClusters) || 0, 32)),
+      fromCommit: /^[a-f0-9]{40}$/.test(String(input.fromCommit || "")) ? String(input.fromCommit) : null, toCommit: /^[a-f0-9]{40}$/.test(String(input.toCommit || "")) ? String(input.toCommit) : null,
+      message: cleanText(input.message, 300), restartMode: input.restartMode === "automatic" ? "automatic" : "manual",
+    };
+  }
+  saveOperatorState(state);
+  return state.deployment;
 }
 
 function isPlatformBlocked(userId) {
@@ -128,4 +147,4 @@ function setClusterAssignmentOverride(guildId, clusterId) {
   saveOperatorState(state);
 }
 
-export { clearWebsiteBanner, getActiveWebsiteBanner, getOperatorState, isPlatformBlocked, recordOperatorAction, removePlatformBlock, scheduleMaintenance, setClusterAssignmentOverride, setClusterStatusOverride, setPlatformBlock, setWebsiteBanner, updateMaintenance };
+export { clearWebsiteBanner, getActiveWebsiteBanner, getOperatorState, isPlatformBlocked, recordOperatorAction, removePlatformBlock, scheduleMaintenance, setClusterAssignmentOverride, setClusterStatusOverride, setDeploymentState, setPlatformBlock, setWebsiteBanner, updateMaintenance };

@@ -19,12 +19,13 @@ import { createDuckOperatorController } from "./admin.js";
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 const adminDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "admin-public");
 const operatorAssets = new Map([
-  ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/admin.css", { file: "admin.css", type: "text/css; charset=utf-8" }],
+  ["/admin-tools.css", { file: "admin-tools.css", type: "text/css; charset=utf-8" }],
   ["/admin-guard.css", { file: "admin-guard.css", type: "text/css; charset=utf-8" }],
   ["/admin.js", { file: "admin.js", type: "text/javascript; charset=utf-8" }],
+  ["/unlock.js", { file: "unlock.js", type: "text/javascript; charset=utf-8" }],
 ]);
-const operatorAssetCache = new Map([...operatorAssets.values()].map(({ file }) => [file, fs.readFileSync(path.join(adminDirectory, file))]));
+const operatorAssetCache = new Map([...new Set(["index.html", "unlock.html", ...[...operatorAssets.values()].map(({ file }) => file)])].map((file) => [file, fs.readFileSync(path.join(adminDirectory, file))]));
 const pages = new Map([
   ["/", { file: "index.html", type: "text/html; charset=utf-8" }], ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/features", { file: "features.html", type: "text/html; charset=utf-8" }], ["/features/", { file: "features.html", type: "text/html; charset=utf-8" }], ["/features.html", { file: "features.html", type: "text/html; charset=utf-8" }],
@@ -50,8 +51,11 @@ const ADMINISTRATOR = 1n << 3n;
 const DUCK_OWNER_USER_ID = "1138897388694687834";
 
 function securityHeaders(contentType) { return { "Content-Type": contentType, "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data: https://cdn.discordapp.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin", "Origin-Agent-Cluster": "?1", "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()", "Referrer-Policy": "no-referrer", "Strict-Transport-Security": "max-age=31536000; includeSubDomains", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "X-Permitted-Cross-Domain-Policies": "none" }; }
-function send(res, status, contentType, body, method = "GET", extraHeaders = {}) { const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body)); res.writeHead(status, { ...securityHeaders(contentType), "Cache-Control": "no-store", "Content-Length": payload.length, ...extraHeaders }); res.end(method === "HEAD" ? undefined : payload); }
-function json(res, status, body, method = "GET", headers = {}) { send(res, status, "application/json; charset=utf-8", JSON.stringify(body), method, headers); }
+function sendBuffer(res, status, contentType, payload, method = "GET", extraHeaders = {}) { if (!Buffer.isBuffer(payload)) throw new TypeError("Buffered responses require a Buffer payload."); res.writeHead(status, { ...securityHeaders(contentType), "Cache-Control": "no-store", "Content-Length": payload.length, ...extraHeaders }); res.end(method === "HEAD" ? undefined : payload); }
+function text(res, status, body, method = "GET", headers = {}) { sendBuffer(res, status, "text/plain; charset=utf-8", Buffer.from(String(body)), method, headers); }
+function safeJson(body) { return JSON.stringify(body).replace(/[<>&\u2028\u2029]/g, (character) => ({ "<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029" })[character]); }
+function json(res, status, body, method = "GET", headers = {}) { sendBuffer(res, status, "application/json; charset=utf-8", Buffer.from(safeJson(body)), method, headers); }
+function send(res, status, contentType, body, method = "GET", headers = {}) { if (Buffer.isBuffer(body)) return sendBuffer(res, status, contentType, body, method, headers); if (contentType !== "text/plain; charset=utf-8") throw new TypeError("Dynamic response text can only be emitted as text/plain."); return text(res, status, body, method, headers); }
 function redirect(res, location, headers = {}) { res.writeHead(302, { ...securityHeaders("text/plain; charset=utf-8"), "Cache-Control": "no-store", Location: location, ...headers }); res.end(); }
 function sendAsset(req, res, page, method, extraHeaders = {}) { const asset = assetCache.get(page.file); if (!asset) return send(res, 500, "text/plain; charset=utf-8", "Duck could not load this page.", method); const isHtml = page.type.startsWith("text/html"); const cacheControl = isHtml ? "no-cache" : page.type.startsWith("image/") ? "public, max-age=604800, stale-while-revalidate=86400" : "public, max-age=3600, stale-while-revalidate=86400"; const zipped = Boolean(asset.gzip) && /(?:^|,)\s*gzip\s*(?:,|$)/i.test(req.headers["accept-encoding"] || ""); const etag = zipped ? asset.gzipEtag : asset.etag; const common = { ...securityHeaders(page.type), "Cache-Control": cacheControl, ETag: etag, Vary: "Accept-Encoding", ...(zipped ? { "Content-Encoding": "gzip" } : {}), ...extraHeaders }; if (req.headers["if-none-match"] === etag) { res.writeHead(304, common); return res.end(); } const body = zipped ? asset.gzip : asset.body; res.writeHead(200, { ...common, "Content-Length": body.length }); res.end(method === "HEAD" ? undefined : body); }
 function parseCookies(req) { const cookies = Object.create(null); for (const part of String(req.headers.cookie || "").split(";")) { const [key, value] = part.trim().split(/=(.*)/s); if (!key) continue; try { cookies[key] = decodeURIComponent(value || ""); } catch { /* Ignore malformed attacker-controlled cookies. */ } } return cookies; }
@@ -279,15 +283,17 @@ function createDuckWebsiteServer(options = {}) {
     const discordAuth = operatorDiscordAuth(req);
     if (!discordAuth) { send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method); return; }
     const subpath = pathname.slice(remoteOperatorPath.length) || "/";
+    const operatorAuth = getOperatorSession(req, discordAuth);
     if (subpath === "" || subpath === "/") {
       if (pathname !== `${remoteOperatorPath}/`) { redirect(res, `${remoteOperatorPath}/`, { "X-Robots-Tag": "noindex, nofollow, noarchive" }); return; }
-      return send(res, 200, "text/html; charset=utf-8", operatorAssetCache.get("index.html"), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
+      return send(res, 200, "text/html; charset=utf-8", operatorAssetCache.get(operatorAuth ? "index.html" : "unlock.html"), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
     }
     const asset = operatorAssets.get(subpath);
-    if (asset && ["GET", "HEAD"].includes(method)) return send(res, 200, asset.type, operatorAssetCache.get(asset.file), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
+    const isUnlockAsset = subpath === "/unlock.js" || subpath === "/admin.css";
+    if (asset && ["GET", "HEAD"].includes(method) && (operatorAuth || isUnlockAsset)) return send(res, 200, asset.type, operatorAssetCache.get(asset.file), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
+    if (asset && !operatorAuth) return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
     if (!subpath.startsWith("/api/")) return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
 
-    const operatorAuth = getOperatorSession(req, discordAuth);
     if (subpath === "/api/session" && method === "GET") return json(res, 200, { authenticated: Boolean(operatorAuth), csrf: operatorAuth?.session.csrf || null, loginCsrf: operatorAuth ? null : discordAuth.session.csrf, expiresAt: operatorAuth ? new Date(operatorAuth.session.expiresAt).toISOString() : null, user: discordAuth.session.user }, method);
     if (subpath === "/api/session" && method === "POST") {
       if (!allowRequest(req, "operator-unlock", 5, 15 * 60_000)) return json(res, 429, { error: "Too many unlock attempts. Wait 15 minutes." }, method, { "Retry-After": "900" });
@@ -314,7 +320,7 @@ function createDuckWebsiteServer(options = {}) {
     if (subpath === "/api/action" && method === "POST") {
       if (!allowRequest(req, "operator-mutation", 12, 60_000)) return json(res, 429, { error: "Operator change limit reached. Wait before changing more settings." }, method, { "Retry-After": "60" });
       if (!requireOperatorOrigin(req) || !requireOperatorCsrf(req, operatorAuth)) return json(res, 403, { error: "Operator request verification failed." });
-      const result = operatorController.action(await readJsonBody(req, 64 * 1024));
+      const result = operatorController.action(await readJsonBody(req, 64 * 1024), { actorId: discordAuth.session.user.id });
       return json(res, 200, { ok: true, result }, method);
     }
     return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD, POST, DELETE" });

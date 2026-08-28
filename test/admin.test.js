@@ -16,10 +16,14 @@ async function withOperator(run) {
 test("operator deck requires a strong token and protects every API", async () => {
   assert.throws(() => createDuckOperatorServer({ token: "too-short" }), /32 characters/);
   await withOperator(async (origin, token) => {
-    const page = await fetch(origin); assert.equal(page.status, 200); assert.match(await page.text(), /Duck Operator Deck/);
+    const page = await fetch(origin); assert.equal(page.status, 200); assert.match(await page.text(), /Duck Operator Deck/); assert.equal((await fetch(`${origin}/admin-tools.css`)).status, 200);
     assert.equal((await fetch(`${origin}/api/overview`)).status, 401);
     const overview = await fetch(`${origin}/api/overview`, { headers: { Authorization: `Bearer ${token}` } });
     assert.equal(overview.status, 200); const body = await overview.json(); assert.equal(body.guilds[0].id, "123456789012345678"); assert.equal(body.guilds[0].cluster.id.startsWith("cluster-"), true);
+    const runbook = await fetch(`${origin}/api/action`, { method: "POST", headers: { Authorization: `Bearer ${token}`, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ action: "runbook.execute", clusterId: body.guilds[0].cluster.id, job: "health" }) });
+    assert.equal(runbook.status, 200); const runbookBody = await runbook.json(); assert.equal(runbookBody.result.job, "health"); assert.match(runbookBody.result.summary, /servers are assigned/);
+    const shellAttempt = await fetch(`${origin}/api/action`, { method: "POST", headers: { Authorization: `Bearer ${token}`, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ action: "runbook.execute", clusterId: body.guilds[0].cluster.id, job: "health", command: "id" }) });
+    assert.equal(shellAttempt.status, 400);
   });
 });
 

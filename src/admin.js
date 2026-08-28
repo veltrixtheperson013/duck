@@ -5,6 +5,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { deleteGuildSettings, flushJsonWrites, getGuildSettings, loadSettings, updateGuildSettings } from "./config.js";
 import { getClusterManager } from "./clusters.js";
+import { getDeploymentManager } from "./deployments.js";
 import { clearWebsiteBanner, getOperatorState, recordOperatorAction, removePlatformBlock, scheduleMaintenance, setClusterAssignmentOverride, setClusterStatusOverride, setPlatformBlock, setWebsiteBanner, updateMaintenance } from "./operator-state.js";
 import { logError, logInfo, logWarn } from "./logging.js";
 
@@ -15,6 +16,7 @@ const assets = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/admin.css", ["admin.css", "text/css; charset=utf-8"]],
+  ["/admin-tools.css", ["admin-tools.css", "text/css; charset=utf-8"]],
   ["/admin-guard.css", ["admin-guard.css", "text/css; charset=utf-8"]],
   ["/admin.js", ["admin.js", "text/javascript; charset=utf-8"]],
 ]);
@@ -45,7 +47,7 @@ async function readJson(req, maximum = 64 * 1024) {
 }
 
 function publicOperatorState(state) {
-  return { blockedUsers: state.blockedUsers, clusterStatuses: state.clusterStatuses, clusterAssignments: state.clusterAssignments, websiteBanner: state.websiteBanner, maintenance: state.maintenance, auditLog: state.auditLog.slice(0, 100) };
+  return { blockedUsers: state.blockedUsers, clusterStatuses: state.clusterStatuses, clusterAssignments: state.clusterAssignments, websiteBanner: state.websiteBanner, maintenance: state.maintenance, deployment: state.deployment, auditLog: state.auditLog.slice(0, 100) };
 }
 
 function grantPlus(guildId, level, expiresAt, getSettings, updateSettings) {
@@ -58,6 +60,52 @@ function grantPlus(guildId, level, expiresAt, getSettings, updateSettings) {
   const subscription = { provider: "operator", tier: "plus", status: "active", levelOverride: level, startedAt: new Date().toISOString(), expiresAt: normalizedExpiry, grantedAt: new Date().toISOString() };
   updateSettings(guildId, { subscription });
   return subscription;
+}
+
+function runClusterRunbook(input, { client, clusterManager, getSettings }) {
+  const allowedKeys = new Set(["action", "clusterId", "job"]);
+  if (Object.keys(input).some((key) => !allowedKeys.has(key))) throw new TypeError("Runbooks accept only a cluster ID and a fixed diagnostic name.");
+  const clusterId = String(input.clusterId || "");
+  const job = String(input.job || "");
+  const allowedJobs = new Set(["health", "capacity", "configuration", "permissions", "subscriptions", "runtime"]);
+  if (!allowedJobs.has(job)) throw new TypeError("Choose an available cluster runbook.");
+  clusterManager.describeCluster(clusterId);
+  const allGuilds = client?.guilds?.cache ? [...client.guilds.cache.values()] : [];
+  const guilds = allGuilds.filter((guild) => clusterManager.clusterIdForGuild(guild.id) === clusterId);
+  const cluster = clusterManager.describeCluster(clusterId, guilds.length);
+  const memory = process.memoryUsage();
+  const settingsRoot = loadSettings().guilds || {};
+  const lines = [];
+  let summary = "Runbook completed.";
+  if (job === "health") {
+    summary = `${cluster.statusLabel}: ${guilds.length} servers are assigned to ${clusterId}.`;
+    lines.push(`Cluster status: ${cluster.statusLabel}`, `Cluster uptime: ${cluster.uptimeSeconds}s`, `Discord gateway: ${client?.isReady?.() ? "Ready" : "Not ready"}`, `Gateway latency: ${Math.max(0, Number(client?.ws?.ping) || 0)}ms`, `Last heartbeat: ${cluster.lastHeartbeatAt || "None"}`);
+  } else if (job === "capacity") {
+    const members = guilds.reduce((total, guild) => total + (Number(guild.memberCount) || 0), 0);
+    summary = `${guilds.length} servers and ${members.toLocaleString()} members are mapped to ${clusterId}.`;
+    lines.push(`Servers: ${guilds.length}`, `Members: ${members}`, `Average members/server: ${guilds.length ? Math.round(members / guilds.length) : 0}`, `Process RSS: ${Math.round(memory.rss / 1024 / 1024)} MB`, `Heap used: ${Math.round(memory.heapUsed / 1024 / 1024)} MB`);
+  } else if (job === "configuration") {
+    const configured = guilds.filter((guild) => Object.hasOwn(settingsRoot, guild.id)).length;
+    summary = `${configured} of ${guilds.length} servers have stored configuration profiles.`;
+    lines.push(`Configured profiles: ${configured}`, `Default-only profiles: ${guilds.length - configured}`, `Orphaned profiles are not counted here.`, `No profile contents were changed.`);
+  } else if (job === "permissions") {
+    const unavailable = guilds.filter((guild) => !guild.members?.me).map((guild) => guild.id);
+    const limited = guilds.filter((guild) => guild.members?.me && !guild.members.me.permissions?.has?.("ManageGuild")).map((guild) => guild.id);
+    summary = unavailable.length || limited.length ? `${unavailable.length + limited.length} servers need a bot-access review.` : `Duck's member record and Manage Server permission are available in every server on ${clusterId}.`;
+    lines.push(`Member record unavailable: ${unavailable.length}`, `Manage Server unavailable: ${limited.length}`, ...(unavailable.slice(0, 10).map((id) => `Missing member: ${id}`)), ...(limited.slice(0, 10).map((id) => `Limited permissions: ${id}`)));
+  } else if (job === "subscriptions") {
+    const subscriptions = guilds.map((guild) => getSettings(guild.id)?.subscription).filter(Boolean);
+    const active = subscriptions.filter((item) => ["active", "trialing"].includes(item.status)).length;
+    const stripe = subscriptions.filter((item) => item.provider === "stripe" && ["active", "trialing"].includes(item.status)).length;
+    const operator = subscriptions.filter((item) => item.provider === "operator" && item.status === "active").length;
+    summary = `${active} active Plus entitlements are attached to servers in ${clusterId}.`;
+    lines.push(`Active entitlements: ${active}`, `Stripe managed: ${stripe}`, `Operator grants: ${operator}`, `Free or inactive: ${Math.max(0, guilds.length - active)}`);
+  } else {
+    const usage = process.resourceUsage();
+    summary = `Duck runtime diagnostics captured without shell or filesystem access.`;
+    lines.push(`Node: ${process.version}`, `Process uptime: ${Math.floor(process.uptime())}s`, `RSS: ${Math.round(memory.rss / 1024 / 1024)} MB`, `Heap: ${Math.round(memory.heapUsed / 1024 / 1024)} / ${Math.round(memory.heapTotal / 1024 / 1024)} MB`, `CPU user: ${Math.round(usage.userCPUTime / 1000)}ms`, `CPU system: ${Math.round(usage.systemCPUTime / 1000)}ms`);
+  }
+  return { generatedAt: new Date().toISOString(), clusterId, job, summary, lines: lines.slice(0, 24) };
 }
 
 function startOperatorMaintenance(clusterManager) {
@@ -82,14 +130,16 @@ function createDuckOperatorController(options = {}) {
   const getSettings = options.getGuildSettings || getGuildSettings;
   const updateSettings = options.updateGuildSettings || updateGuildSettings;
   const deleteSettings = options.deleteGuildSettings || deleteGuildSettings;
+  const deploymentManager = options.deploymentManager || getDeploymentManager({ client, clusterManager, getSettings });
   return {
     overview() {
       const guilds = client?.guilds?.cache ? [...client.guilds.cache.values()].map((guild) => ({ id: guild.id, name: String(guild.name || "Unknown server").slice(0, 100), members: Number(guild.memberCount) || 0, cluster: clusterManager.describeGuild(guild.id) })) : [];
-      return { service: { startedAt: new Date(Date.now() - Math.max(0, Number(process.uptime()) * 1000)).toISOString(), uptimeSeconds: Math.floor(process.uptime()), memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024), node: process.version }, guilds, clusters: clusterManager.list(guilds.map(({ id }) => id)), operator: publicOperatorState(getOperatorState()), database: { guildProfiles: Object.keys(loadSettings().guilds || {}).length } };
+      const memory = process.memoryUsage();
+      return { service: { startedAt: new Date(Date.now() - Math.max(0, Number(process.uptime()) * 1000)).toISOString(), uptimeSeconds: Math.floor(process.uptime()), memoryMb: Math.round(memory.rss / 1024 / 1024), heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024), heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024), gatewayLatencyMs: Math.max(0, Number(client?.ws?.ping) || 0), gatewayReady: Boolean(client?.isReady?.()), node: process.version }, guilds, clusters: clusterManager.list(guilds.map(({ id }) => id)), operator: publicOperatorState(getOperatorState()), database: { guildProfiles: Object.keys(loadSettings().guilds || {}).length } };
     },
     inspectGuild(guildId) { const id = validId(guildId, "Server ID"); return { guildId: id, settings: getSettings(id) }; },
     exportDatabase() { return { exportedAt: new Date().toISOString(), settings: loadSettings(), operator: publicOperatorState(getOperatorState()) }; },
-    action(input) {
+    action(input, context = {}) {
       if (!safeObject(input)) throw new TypeError("Request must be a safe JSON object.");
       const action = String(input.action || ""); let result;
       if (action === "cluster.status") { result = clusterManager.setStatus(String(input.clusterId), String(input.status)); setClusterStatusOverride(String(input.clusterId), String(input.status)); }
@@ -104,8 +154,13 @@ function createDuckOperatorController(options = {}) {
       else if (action === "banner.clear") { clearWebsiteBanner(); result = { cleared: true }; }
       else if (action === "database.flush") { flushJsonWrites(); result = { flushed: true }; }
       else if (action === "database.delete-guild") { const guildId = validId(input.guildId, "Server ID"); if (String(input.confirmation) !== guildId) throw new TypeError("Type the exact server ID to confirm deletion."); result = { deleted: deleteSettings(guildId) }; }
+      else if (action === "runbook.execute") result = runClusterRunbook(input, { client, clusterManager, getSettings });
+      else if (action === "deployment.start") {
+        if (Object.keys(input).some((key) => !["action", "confirmation"].includes(key)) || input.confirmation !== "ROLL OUT DUCK") throw new TypeError("Type ROLL OUT DUCK to confirm the deployment.");
+        result = deploymentManager.start(context.actorId || "local-operator");
+      }
       else throw Object.assign(new Error("Unknown operator action."), { status: 400 });
-      recordOperatorAction(action, { target: input.guildId || input.userId || input.clusterId || "Duck", reason: input.reason || "Operator request" });
+      recordOperatorAction(action, { actorId: context.actorId || "local-operator", target: input.guildId || input.userId || input.clusterId || "Duck", reason: input.reason || "Operator request" });
       return result;
     },
   };
@@ -134,7 +189,7 @@ function createDuckOperatorServer(options = {}) {
       if (guildMatch && method === "GET") return json(res, 200, controller.inspectGuild(guildMatch[1]), method);
       if (pathname === "/api/database/export" && method === "GET") return json(res, 200, controller.exportDatabase(), method);
       if (pathname === "/api/action" && method === "POST") {
-        const input = await readJson(req); const result = controller.action(input);
+        const input = await readJson(req); const result = controller.action(input, { actorId: "local-operator" });
         return json(res, 200, { ok: true, result }, method);
       }
       return json(res, 405, { error: "Method not allowed." }, method);
