@@ -130,6 +130,11 @@ function customActionMatches(action, message) {
   if (action.triggerType === "message") return true;
   if (action.triggerType === "contains") return Boolean(trigger && content.includes(trigger));
   if (action.triggerType === "starts_with") return Boolean(trigger && content.startsWith(trigger));
+  if (action.triggerType === "equals") return Boolean(trigger && content === trigger);
+  if (action.triggerType === "ends_with") return Boolean(trigger && content.endsWith(trigger));
+  if (action.triggerType === "has_link") return /https?:\/\/|www\./i.test(String(message.content || ""));
+  if (action.triggerType === "has_attachment") return Number(message.attachments?.size || 0) > 0;
+  if (action.triggerType === "mentions_duck") return Boolean(message.client?.user?.id && message.mentions?.users?.has?.(message.client.user.id));
   return false;
 }
 
@@ -137,6 +142,8 @@ async function executeCustomAction(action, message) {
   const member = message.member;
   const reason = `Duck custom action: ${action.name}`;
   if (action.actionType === "reply") return message.reply({ content: templateText(action.response, message), allowedMentions: { repliedUser: false, users: [message.author.id] } });
+  if (action.actionType === "send") return message.channel.send({ content: templateText(action.response, message), allowedMentions: { users: [message.author.id] } });
+  if (action.actionType === "dm") return message.author.send({ content: templateText(action.response, message), allowedMentions: { parse: [] } }).catch(() => null);
   if (action.actionType === "react") return message.react(action.response || "🦆");
   if (action.actionType === "delete") return message.delete();
   if (!member || member.id === message.guild.ownerId) return null;
@@ -146,6 +153,9 @@ async function executeCustomAction(action, message) {
     return null;
   }
   if (action.actionType === "timeout" && member.moderatable) return member.timeout(5 * 60_000, reason);
+  if (action.actionType === "timeout_hour" && member.moderatable) return member.timeout(60 * 60_000, reason);
+  if (action.actionType === "add_role" && action.roleId && member.manageable) return member.roles.add(action.roleId, reason);
+  if (action.actionType === "remove_role" && action.roleId && member.manageable) return member.roles.remove(action.roleId, reason);
   if (action.actionType === "kick" && member.kickable) return member.kick(reason);
   if (action.actionType === "softban" && member.bannable) {
     await message.guild.members.ban(member.id, { deleteMessageSeconds: 86_400, reason });
@@ -164,7 +174,7 @@ async function handleCustomActions(message, settings, now = Date.now()) {
     actionCooldowns.set(key, now + 5_000);
     await executeCustomAction(action, message).catch(() => null);
     executed += 1;
-    if (["delete", "timeout", "kick", "softban"].includes(action.actionType)) return true;
+    if (["delete", "timeout", "timeout_hour", "kick", "softban"].includes(action.actionType)) return true;
   }
   return false;
 }

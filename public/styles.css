@@ -984,3 +984,81 @@ html[data-theme="windows-xp"] footer { width:min(100% - 20px,1180px); min-height
 html[data-theme="windows-xp"] footer :is(.brand,.footer-links a,p) { color:#fff; }
 html[data-theme="windows-xp"] footer .brand span { color:#111; text-shadow:none; }
 @media (max-width:600px) { html[data-theme="windows-xp"] .hero-copy { padding:44px 20px 24px; } html[data-theme="windows-xp"] footer { width:min(100% - 16px,1180px); padding:18px 14px; } }
+
+/* Dashboard builders use the same visual language across every theme. */
+.custom-action-card { color:var(--ink); background:var(--theme-surface,#fff); border-color:var(--theme-line,var(--line)); }
+.custom-action-card > header { background:color-mix(in srgb,var(--theme-surface-strong,#fff) 88%,var(--mint)); border-color:var(--theme-line,var(--line)); }
+.custom-action-card > footer { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px 18px; padding:11px 15px 14px; color:var(--muted); background:color-mix(in srgb,var(--theme-surface-strong,#fff) 76%,transparent); border-top:1px solid var(--theme-line,var(--line)); font-size:.68rem; }
+.custom-action-card > footer code { color:var(--green); font-weight:900; }
+.action-sentence { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:13px 15px 0; color:var(--muted); font-size:.72rem; }
+.action-sentence span,.action-sentence i { padding:4px 8px; color:#fff; background:var(--green); border-radius:999px; font-size:.62rem; font-style:normal; font-weight:950; letter-spacing:.08em; }
+.action-sentence i { color:#5b4300; background:var(--yellow); }
+.action-sentence b { color:var(--ink); font-size:.76rem; }
+.rule-builder > label[hidden] { display:none; }
+.custom-action-card:has([data-action-enabled]:not(:checked)) .rule-builder,
+.custom-action-card:has([data-action-enabled]:not(:checked)) .action-sentence { opacity:.58; }
+
+/* Duck color picker: consistent, compact, and independent of browser chrome. */
+.color-role-row { position:relative; grid-template-columns:112px minmax(150px,.8fr) minmax(210px,1.25fr) 40px; overflow:visible; color:var(--ink); background:var(--theme-surface-strong,#fff); border-color:var(--theme-line,var(--line)); }
+.color-picker-cell { position:relative; z-index:2; align-self:end; min-width:0; }
+.color-picker-cell:has(.duck-color-panel:not([hidden])) { z-index:25; }
+.color-chip { display:grid; grid-template-columns:36px 1fr; gap:8px; align-items:center; width:100%; height:43px; padding:4px 8px 4px 4px; color:var(--ink); background:var(--theme-surface-strong,#fff); border:1px solid var(--theme-line,var(--line)); border-radius:11px; box-shadow:0 4px 12px rgba(18,57,40,.09); cursor:pointer; }
+.color-chip:hover,.color-chip[aria-expanded="true"] { border-color:var(--theme-accent,var(--green)); box-shadow:0 0 0 3px var(--theme-glow,rgba(18,107,75,.13)); }
+.color-chip > span { width:34px; height:33px; border:2px solid rgba(255,255,255,.9); border-radius:8px; box-shadow:0 0 0 1px rgba(18,28,23,.18); }
+.color-chip > small { overflow:hidden; color:var(--ink); font:850 .66rem var(--mono); text-overflow:ellipsis; }
+.duck-color-panel { position:absolute; z-index:40; top:calc(100% + 9px); left:0; display:grid; gap:12px; width:min(310px,calc(100vw - 64px)); padding:15px; color:var(--ink); background:var(--theme-surface-strong,#fff); border:1px solid var(--theme-line,var(--line)); border-radius:16px; box-shadow:0 22px 55px rgba(9,35,25,.28); }
+.duck-color-panel[hidden] { display:none; }
+.duck-color-panel-head { display:grid; grid-template-columns:42px 1fr; gap:10px; align-items:center; }
+.duck-color-panel-head > span { width:42px; height:42px; border:3px solid #fff; border-radius:11px; box-shadow:0 0 0 1px rgba(0,0,0,.18); }
+.duck-color-panel-head > div { display:grid; }
+.duck-color-panel-head small { color:var(--muted); font:750 .7rem var(--mono); }
+.duck-color-panel > label { display:grid; grid-template-columns:72px 1fr; gap:9px; align-items:center; color:var(--muted); font-size:.7rem; font-weight:850; }
+.duck-color-panel input[type="text"] { width:100%; min-height:36px; padding:7px 9px; text-transform:uppercase; }
+.duck-color-panel input[type="range"] { width:100%; height:18px; padding:0; appearance:none; background:transparent !important; border:0 !important; box-shadow:none !important; cursor:pointer; }
+.duck-color-panel input[type="range"]::-webkit-slider-runnable-track { height:9px; border:1px solid rgba(0,0,0,.18); border-radius:999px; }
+.duck-color-panel [data-color-hue]::-webkit-slider-runnable-track { background:linear-gradient(90deg,#f33,#ff0,#0f5,#0ef,#25f,#c2f,#f33); }
+.duck-color-panel [data-color-saturation]::-webkit-slider-runnable-track { background:linear-gradient(90deg,#9aa,var(--picker-color,#7c68ee)); }
+.duck-color-panel [data-color-lightness]::-webkit-slider-runnable-track { background:linear-gradient(90deg,#090909,var(--picker-color,#7c68ee),#fff); }
+.duck-color-panel input[type="range"]::-webkit-slider-thumb { width:18px; height:18px; margin-top:-5px; appearance:none; background:#fff; border:2px solid #17251f; border-radius:50%; box-shadow:0 2px 6px rgba(0,0,0,.3); }
+.color-quick-picks { display:grid; grid-template-columns:repeat(8,1fr); gap:6px; }
+.color-quick-picks button { aspect-ratio:1; padding:0; border:2px solid var(--theme-surface-strong,#fff); border-radius:7px; box-shadow:0 0 0 1px var(--theme-line,var(--line)); cursor:pointer; transition:transform .12s ease; }
+.color-quick-picks button:hover { transform:translateY(-2px) scale(1.06); }
+
+/* XP dashboard: Luna chrome with deliberate contrast instead of theme blending. */
+html[data-theme="windows-xp"] .settings-page-open :is(.settings-content,.settings-panel) { color:#111; background:rgba(236,233,216,.97); }
+html[data-theme="windows-xp"] .settings-page-open .settings-tabs { color:#fff; background:linear-gradient(180deg,#2f7cc5,#1663ae); border-color:#0b4e94; }
+html[data-theme="windows-xp"] .settings-page-open .settings-tabs button { color:#eef7ff; text-shadow:1px 1px #174b83; }
+html[data-theme="windows-xp"] .settings-page-open .settings-tabs button:hover { color:#fff; background:rgba(255,255,255,.14); }
+html[data-theme="windows-xp"] .settings-page-open .settings-tabs button.is-active { color:#111; background:#fff; border:1px solid #7f9db9; box-shadow:inset 1px 1px #fff,inset -1px -1px #aca899; text-shadow:none; }
+html[data-theme="windows-xp"] .settings-page-open .settings-tabs small { color:inherit; opacity:.82; }
+html[data-theme="windows-xp"] .settings-page-open .panel-heading :is(h3,p),
+html[data-theme="windows-xp"] .settings-page-open .settings-group :is(strong,small,label,p),
+html[data-theme="windows-xp"] .settings-page-open .color-dock-preview :is(strong,small,p),
+html[data-theme="windows-xp"] .settings-page-open .palette-heading :is(strong,small) { color:#172231; text-shadow:none; }
+html[data-theme="windows-xp"] .settings-page-open .panel-heading .eyebrow { color:#0756a9; }
+html[data-theme="windows-xp"] .settings-page-open :is(.settings-group,.feature-module,.builder-row,.color-role-row,.color-palette-editor,.custom-action-card,.color-dock-preview) { color:#111; background:#ece9d8; border-color:#7f9db9; border-radius:3px; box-shadow:inset 1px 1px #fff,inset -1px -1px #aca899; }
+html[data-theme="windows-xp"] .settings-page-open :is(input:not([type="checkbox"]),textarea,select,.custom-select-trigger,.color-chip,.duck-color-panel) { color:#111; background:#fff; border-color:#7f9db9; text-shadow:none; }
+html[data-theme="windows-xp"] .settings-page-open .custom-select-option { color:#111; background:#fff; }
+html[data-theme="windows-xp"] .settings-page-open .custom-select-option:hover { color:#fff; background:#316ac5; }
+html[data-theme="windows-xp"] .settings-page-open .form-actions { color:#111; background:#ece9d8; border-top:1px solid #7f9db9; }
+html[data-theme="windows-xp"] .settings-page-open .button { color:#111; background:linear-gradient(#fff,#ece9d8); border:1px solid #003c74; text-shadow:none; }
+html[data-theme="windows-xp"] .settings-page-open .button.primary { color:#fff; background:linear-gradient(#60b94d,#2f8a26); border-color:#1f6819; }
+
+/* A real XP switch: obvious state, focus, and thumb movement. */
+html[data-theme="windows-xp"] .settings-group input[type="checkbox"],
+html[data-theme="windows-xp"] .custom-action-card .mini-switch span { width:48px; height:25px; appearance:none; background:linear-gradient(#f8f8f8,#d9e6f2); border:2px solid #7f9db9; border-radius:12px; box-shadow:inset 1px 1px #fff,inset -1px -1px #9c9c9c; }
+html[data-theme="windows-xp"] .settings-group input[type="checkbox"]::after,
+html[data-theme="windows-xp"] .custom-action-card .mini-switch span::after { top:2px; left:2px; width:17px; height:17px; background:linear-gradient(#fff,#e8e8e8); border:1px solid #7f9db9; border-radius:50%; box-shadow:1px 1px 2px rgba(0,0,0,.24); }
+html[data-theme="windows-xp"] .settings-group input[type="checkbox"]:checked,
+html[data-theme="windows-xp"] .custom-action-card .mini-switch input:checked + span { background:linear-gradient(#52adff,#1667ce); border-color:#064b9b; }
+html[data-theme="windows-xp"] .settings-group input[type="checkbox"]:checked::after,
+html[data-theme="windows-xp"] .custom-action-card .mini-switch input:checked + span::after { transform:translateX(23px); }
+html[data-theme="windows-xp"] .settings-group input[type="checkbox"]:focus-visible { outline:2px dotted #111; outline-offset:3px; }
+html[data-theme="windows-xp"] .settings-group input[type="checkbox"]:disabled { filter:grayscale(1); cursor:not-allowed; opacity:.58; }
+
+@media (max-width:760px) {
+  .color-role-row { grid-template-columns:1fr; padding-right:58px; }
+  .color-picker-cell { width:min(150px,100%); }
+  .duck-color-panel { position:fixed; z-index:140; top:50%; left:50%; width:min(340px,calc(100vw - 28px)); max-height:calc(100dvh - 28px); overflow:auto; transform:translate(-50%,-50%); }
+  .custom-action-card > footer { flex-direction:column; }
+}

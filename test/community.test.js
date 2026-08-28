@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PermissionsBitField } from "discord.js";
-import { assertCanPublishTo, createTicketVerificationPhrase, normalizeTicketVerificationAnswer, ticketClosePermissionOverwrites } from "../src/community.js";
+import { assertCanPublishTo, createTicketVerificationPhrase, isTicketStaff, normalizeTicketVerificationAnswer, ticketClosePermissionOverwrites } from "../src/community.js";
 
 test("ticket verification phrases are human-readable and comparison is forgiving about case and spacing", () => {
   const values = [0, 3, 164_743];
@@ -10,6 +10,16 @@ test("ticket verification phrases are human-readable and comparison is forgiving
   assert.equal(phrase, "Apple Honeycomb 164,743");
   assert.equal(normalizeTicketVerificationAnswer("  apple   HONEYCOMB 164,743 "), normalizeTicketVerificationAnswer(phrase));
   assert.deepEqual(ranges[2], [1, 1_000_000]);
+});
+
+test("ticket CAPTCHA enforcement exempts owners, permission staff, and configured support roles", () => {
+  const ownerId = "1138897388694687834";
+  const supportRoleId = "223456789012345678";
+  const interaction = (userId, permissions = [], roles = []) => ({ user: { id: userId }, guild: { ownerId }, memberPermissions: { has: (permission) => permissions.includes(permission) }, member: { roles: { cache: new Map(roles.map((id) => [id, {}])) } } });
+  assert.equal(isTicketStaff(interaction(ownerId), {}), true);
+  assert.equal(isTicketStaff(interaction("323456789012345678", [PermissionsBitField.Flags.ManageMessages]), {}), true);
+  assert.equal(isTicketStaff(interaction("323456789012345678", [], [supportRoleId]), { ticketSupportRoleId: supportRoleId }), true);
+  assert.equal(isTicketStaff(interaction("323456789012345678"), { ticketSupportRoleId: supportRoleId }), false);
 });
 
 test("panel publishing reports missing Discord channel permissions", () => {

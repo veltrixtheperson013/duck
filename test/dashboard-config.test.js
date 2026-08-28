@@ -235,6 +235,7 @@ test("custom actions use safe allowlists and loyalty-based caps", () => {
     userId: null,
     actionType,
     response: actionType === "reply" ? "Hi {user}" : "",
+    roleId: null,
   });
   assert.equal(makeSettingsPatch({}, { customActions: Array.from({ length: 5 }, (_, index) => action(index)) }).settings.customActions.length, 5);
   assert.throws(() => makeSettingsPatch({}, { customActions: Array.from({ length: 6 }, (_, index) => action(index)) }), /up to 5/);
@@ -257,5 +258,8 @@ test("custom actions use safe allowlists and loyalty-based caps", () => {
   assert.equal(getPlusLoyalty(sixMonthPlus, now).customActionLimit, 100);
   assert.equal(getPlusLoyalty(twelveMonthPlus, now).customActionLimit, null);
   assert.equal(makeSettingsPatch(basePlus, { customActions: [action(1, "kick")] }, "", now).settings.customActions[0].actionType, "kick");
+  assert.equal(makeSettingsPatch(basePlus, { customActions: [{ ...action(2, "add_role"), roleId: "323456789012345678" }] }, "", now).settings.customActions[0].roleId, "323456789012345678");
+  assert.throws(() => makeSettingsPatch(basePlus, { customActions: [action(2, "add_role")] }, "", now), /safe role/);
+  assert.throws(() => makeSettingsPatch(basePlus, { customActions: [{ ...action(2, "add_role"), roleId: "not-a-role" }] }, "", now), /role ID/);
   assert.deepEqual(getPublicGuildSettings({ customActions: [action(1), action(2, "kick")] }).customActions.map(({ actionType }) => actionType), ["reply"]);
 });

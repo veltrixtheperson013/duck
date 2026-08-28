@@ -51,6 +51,14 @@ function clean(value, max = 240) { return String(value || "").replace(/\s+/g, " 
 function normalizeTicketVerificationAnswer(value) { return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US"); }
 function createTicketVerificationPhrase(random = randomInt) { const first = verificationWords[0][random(verificationWords[0].length)]; const second = verificationWords[1][random(verificationWords[1].length)]; const number = random(1, 1_000_000).toLocaleString("en-US"); return `${first} ${second} ${number}`; }
 function isTicketVerificationType(type) { return type === "verification" || type === "image_verification"; }
+function isTicketStaff(interaction, settings = {}) {
+  if (interaction?.user?.id && interaction.user.id === interaction.guild?.ownerId) return true;
+  const permissions = interaction?.memberPermissions ?? interaction?.member?.permissions;
+  const staffPermissions = [PermissionsBitField.Flags.Administrator, PermissionsBitField.Flags.ManageGuild, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageMessages, PermissionsBitField.Flags.ModerateMembers, PermissionsBitField.Flags.KickMembers, PermissionsBitField.Flags.BanMembers];
+  if (staffPermissions.some((permission) => permissions?.has?.(permission))) return true;
+  const roles = interaction?.member?.roles;
+  return [settings.ticketSupportRoleId, settings.ticketAdminRoleId].some((roleId) => roleId && (roles?.cache?.has?.(roleId) || (Array.isArray(roles) && roles.includes(roleId))));
+}
 function pruneTicketVerificationChallenges(now = Date.now()) { for (const [token, challenge] of ticketVerificationChallenges) if (challenge.expiresAt <= now) ticketVerificationChallenges.delete(token); while (ticketVerificationChallenges.size >= TICKET_VERIFICATION_LIMIT) ticketVerificationChallenges.delete(ticketVerificationChallenges.keys().next().value); }
 function withSafeEmoji(button, value, fallback) { try { return button.setEmoji(value || fallback); } catch { return button.setEmoji(fallback); } }
 function isSafeSelfAssignableRole(role) { return Boolean(role && !role.managed && role.editable && !role.permissions.any(SELF_ASSIGN_BLOCKED_PERMISSIONS)); }
@@ -279,6 +287,7 @@ async function handleTicketVerificationModal(interaction) {
   if (submitted !== challenge.answer) {
     const reason = `Failed Duck ticket verification for ${option.label}`;
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Failed ticket verification", reason: option.label, source: "discord" });
+    if (isTicketStaff(interaction, settings)) return interaction.reply({ content: "Verification failed. Duck never removes server staff for a failed challenge; open the ticket again to retry.", ephemeral: true });
     if (!interaction.member?.kickable) return interaction.reply({ content: "Verification failed, but Duck cannot kick you because of Discord role hierarchy. Staff have been notified in the audit log.", ephemeral: true });
     await interaction.reply({ content: "Verification failed. You are being removed from this server.", ephemeral: true });
     try { await interaction.member.kick(reason); } catch { await interaction.editReply({ content: "Verification failed, but Discord prevented Duck from kicking you. Staff have been notified in the audit log." }).catch(() => null); }
@@ -374,4 +383,4 @@ async function handleCommunityButton(interaction) {
   return false;
 }
 
-export { assertCanPublishTo, createTicketVerificationPhrase, getGuildInsights, handleAiActionSelection, handleCommunityButton, handleTicketVerificationModal, isSafeSelfAssignableRole, normalizeTicketVerificationAnswer, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity, ticketClosePermissionOverwrites };
+export { assertCanPublishTo, createTicketVerificationPhrase, getGuildInsights, handleAiActionSelection, handleCommunityButton, handleTicketVerificationModal, isSafeSelfAssignableRole, isTicketStaff, normalizeTicketVerificationAnswer, publishReactionRolePanel, publishTicketPanel, recordAiFlag, recordAuditEvent, recordMessageActivity, ticketClosePermissionOverwrites };

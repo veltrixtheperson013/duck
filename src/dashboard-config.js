@@ -101,8 +101,9 @@ const FUN_COMMANDS = Object.freeze([
   { command: "heist", key: "funHeistEnabled", label: "Imaginary heists", tier: "plus" },
 ]);
 const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
-const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with"]);
-const CUSTOM_ACTION_TYPES = new Set(["reply", "react", "delete", "warn", "timeout", "kick", "softban"]);
+const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with", "equals", "ends_with", "has_link", "has_attachment", "mentions_duck"]);
+const CUSTOM_ACTION_TYPES = new Set(["reply", "send", "dm", "react", "delete", "warn", "timeout", "timeout_hour", "kick", "softban", "add_role", "remove_role"]);
+const CUSTOM_ACTION_PLUS_TYPES = new Set(["warn", "timeout", "timeout_hour", "kick", "softban", "add_role", "remove_role"]);
 
 function getAiModelDefinition(id) {
   return AI_MODELS.find((model) => model.id === id) ?? null;
@@ -188,7 +189,7 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
   const loyalty = getPlusLoyalty(settings, now);
   const customActions = Array.isArray(settings.customActions)
     ? settings.customActions
-      .filter((action) => plus || !["warn", "timeout", "kick", "softban"].includes(action?.actionType))
+      .filter((action) => plus || !CUSTOM_ACTION_PLUS_TYPES.has(action?.actionType))
       .slice(0, loyalty.customActionLimit ?? settings.customActions.length)
     : [];
   return {
@@ -353,20 +354,22 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
     const loyalty = getPlusLoyalty(current, now); if (loyalty.customActionLimit !== null && input.customActions.length > loyalty.customActionLimit) throw new TypeError(`This server can have up to ${loyalty.customActionLimit} custom actions.`);
     patch.customActions = input.customActions.map((item, index) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new TypeError(`Custom action ${index + 1} is invalid.`);
-      const actionKeys = new Set(["id", "name", "enabled", "triggerType", "triggerValue", "channelId", "userId", "actionType", "response"]); if (Object.keys(item).some((key) => !actionKeys.has(key))) throw new TypeError(`Custom action ${index + 1} has an unknown field.`);
+      const actionKeys = new Set(["id", "name", "enabled", "triggerType", "triggerValue", "channelId", "userId", "actionType", "response", "roleId"]); if (Object.keys(item).some((key) => !actionKeys.has(key))) throw new TypeError(`Custom action ${index + 1} has an unknown field.`);
       if (typeof item.id !== "string" || !/^[a-zA-Z0-9_-]{1,36}$/.test(item.id)) throw new TypeError(`Custom action ${index + 1} needs a valid ID.`);
       if (typeof item.name !== "string" || ("enabled" in item && typeof item.enabled !== "boolean")) throw new TypeError(`Custom action ${index + 1} has invalid types.`);
       const name = item.name.trim(); if (!name || name.length > 40) throw new TypeError(`Custom action ${index + 1} needs a 1-40 character name.`);
       if (!CUSTOM_ACTION_TRIGGERS.has(item.triggerType) || !CUSTOM_ACTION_TYPES.has(item.actionType)) throw new TypeError(`Custom action ${index + 1} has an unsupported trigger or action.`);
-      if (["warn", "timeout", "kick", "softban"].includes(item.actionType) && !hasPlusEntitlement(current, now)) { const error = new Error("Automated moderation actions require Duck Plus."); error.code = "plus_required"; throw error; }
+      if (CUSTOM_ACTION_PLUS_TYPES.has(item.actionType) && !hasPlusEntitlement(current, now)) { const error = new Error("Automated moderation and role actions require Duck Plus."); error.code = "plus_required"; throw error; }
       if (typeof item.triggerValue !== "string" || typeof item.response !== "string") throw new TypeError(`Custom action ${index + 1} trigger and response must be text.`);
-      const triggerValue = item.triggerValue.trim(); if (item.triggerType !== "message" && (!triggerValue || triggerValue.length > 80)) throw new TypeError(`Custom action ${index + 1} needs a 1-80 character trigger.`);
-      const response = item.response.trim(); if (["reply", "react"].includes(item.actionType) && (!response || response.length > 500)) throw new TypeError(`Custom action ${index + 1} needs a bounded response.`);
+      const triggerValue = item.triggerValue.trim(); if (!["message", "has_link", "has_attachment", "mentions_duck"].includes(item.triggerType) && (!triggerValue || triggerValue.length > 80)) throw new TypeError(`Custom action ${index + 1} needs a 1-80 character trigger.`);
+      const response = item.response.trim(); if (["reply", "send", "dm", "react"].includes(item.actionType) && (!response || response.length > 500)) throw new TypeError(`Custom action ${index + 1} needs a bounded response.`);
       if ((item.channelId != null && typeof item.channelId !== "string") || (item.userId != null && typeof item.userId !== "string")) throw new TypeError(`Custom action ${index + 1} channel and user IDs must be text.`);
-      const channelId = item.channelId || null; const userId = item.userId || null;
+      const channelId = item.channelId || null; const userId = item.userId || null; const roleId = item.roleId || null;
       if (channelId && !/^\d{10,}$/.test(channelId)) throw new TypeError(`Custom action ${index + 1} has an invalid channel.`);
       if (userId && !/^\d{10,}$/.test(userId)) throw new TypeError(`Custom action ${index + 1} has an invalid user.`);
-      return { id: item.id, name, enabled: item.enabled !== false, triggerType: item.triggerType, triggerValue, channelId, userId, actionType: item.actionType, response };
+      if (roleId && !/^\d{10,}$/.test(roleId)) throw new TypeError(`Custom action ${index + 1} has an invalid role ID.`);
+      if (["add_role", "remove_role"].includes(item.actionType) && !roleId) throw new TypeError(`Custom action ${index + 1} needs a safe role.`);
+      return { id: item.id, name, enabled: item.enabled !== false, triggerType: item.triggerType, triggerValue, channelId, userId, actionType: item.actionType, response, roleId };
     });
     if (new Set(patch.customActions.map(({ id }) => id)).size !== patch.customActions.length) throw new TypeError("Custom action IDs must be unique.");
   }

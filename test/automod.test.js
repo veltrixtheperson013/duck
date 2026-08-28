@@ -25,12 +25,18 @@ test("AutoMod detects invite links, mention spam, and excessive caps locally", (
 });
 
 test("custom actions match only allowlisted server-side conditions", () => {
-  const message = { content: "Hello Duck!", channelId: "123456789012345678", author: { id: "223456789012345678" } };
+  const botId = "323456789012345678";
+  const message = { content: "Hello Duck! https://duck.example", channelId: "123456789012345678", author: { id: "223456789012345678" }, attachments: new Map([["1", {}]]), client: { user: { id: botId } }, mentions: { users: new Map([[botId, {}]]) } };
   const base = { enabled: true, channelId: null, userId: null, triggerType: "contains", triggerValue: "hello duck" };
   assert.equal(customActionMatches(base, message), true);
   assert.equal(customActionMatches({ ...base, channelId: "999999999999999999" }, message), false);
   assert.equal(customActionMatches({ ...base, userId: "999999999999999999" }, message), false);
   assert.equal(customActionMatches({ ...base, triggerType: "starts_with", triggerValue: "duck" }, message), false);
+  assert.equal(customActionMatches({ ...base, triggerType: "ends_with", triggerValue: "duck.example" }, message), true);
+  assert.equal(customActionMatches({ ...base, triggerType: "equals", triggerValue: message.content }, message), true);
+  assert.equal(customActionMatches({ ...base, triggerType: "has_link" }, message), true);
+  assert.equal(customActionMatches({ ...base, triggerType: "has_attachment" }, message), true);
+  assert.equal(customActionMatches({ ...base, triggerType: "mentions_duck" }, message), true);
   assert.equal(customActionMatches({ ...base, triggerType: "unknown" }, message), false);
 });
 
