@@ -143,6 +143,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (colorResult !== false) return;
       const studioResult = await handleCommunitySlashCommand(interaction);
       if (studioResult !== false) return;
+      if (interaction.commandName === "clean") {
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", ephemeral: true });
+        const channelPermissions = interaction.channel?.permissionsFor?.(interaction.guild.members.me);
+        if (!channelPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Duck needs Manage Messages in this channel.", ephemeral: true });
+        const type = interaction.options.getString("type", true); const count = interaction.options.getInteger("count", true);
+        const matchers = {
+          bots: (item) => item.author?.bot,
+          links: (item) => /\b(?:https?:\/\/|www\.)\S+/i.test(item.content || ""),
+          attachments: (item) => Number(item.attachments?.size || 0) > 0,
+          embeds: (item) => Number(item.embeds?.length || 0) > 0,
+        };
+        if (!matchers[type]) return interaction.reply({ content: "Choose a supported cleanup type.", ephemeral: true });
+        await interaction.deferReply({ ephemeral: true });
+        const recent = await interaction.channel.messages.fetch({ limit: 100 });
+        const matches = recent.filter((item) => !item.pinned && matchers[type](item)).first(count);
+        const removed = matches.length ? await interaction.channel.bulkDelete(matches, true) : null;
+        const removedCount = removed?.size || 0;
+        await recordAuditEvent(interaction.guild, { userId: interaction.user.id, action: `Cleaned ${type} messages`, reason: `${removedCount} recent message(s) removed from #${interaction.channel.name}`, source: "discord" });
+        await interaction.editReply(`Removed **${removedCount}** recent ${type} message${removedCount === 1 ? "" : "s"}. Pinned messages and messages older than Discord's two-week limit stay untouched.`);
+        return;
+      }
       if (interaction.commandName === "purgeuser") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", ephemeral: true });
         const channelPermissions = interaction.channel?.permissionsFor?.(interaction.guild.members.me);

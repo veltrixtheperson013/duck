@@ -24,6 +24,15 @@ test("AutoMod detects invite links, mention spam, and excessive caps locally", (
   assert.equal(detectViolation({ ...base, content: "THIS MESSAGE IS VERY LOUD" }, { automodCapsFilter: true }), "Excessive capital letters");
 });
 
+test("AutoMod blocks common raid payloads without an AI provider", () => {
+  const base = { content: "ordinary message", attachments: new Map(), mentions: { users: new Map() } };
+  assert.equal(detectViolation({ ...base, content: "visit https://example.com" }, { automodLinkFilter: true }), "Links are not allowed here");
+  assert.equal(detectViolation({ ...base, attachments: new Map([["1", { name: "totally-safe.exe" }]]) }, { automodDangerousFileFilter: true }), "Potentially dangerous attachment");
+  assert.equal(detectViolation({ ...base, content: "aaaaaaaaaaaa" }, { automodRepeatedTextFilter: true }), "Repeated-character spam");
+  assert.match(detectViolation({ ...base, content: "\u{1f986}\u{1f986}\u{1f986}" }, { automodEmojiLimit: 2 }), /Too many emoji/);
+  assert.match(detectViolation({ ...base, content: "one\ntwo\nthree" }, { automodLineLimit: 2 }), /Too many lines/);
+});
+
 test("custom actions match only allowlisted server-side conditions", () => {
   const botId = "323456789012345678";
   const message = { content: "Hello Duck! https://duck.example", channelId: "123456789012345678", author: { id: "223456789012345678" }, attachments: new Map([["1", {}]]), client: { user: { id: botId } }, mentions: { users: new Map([[botId, {}]]) } };

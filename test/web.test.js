@@ -84,8 +84,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260846/);
-    assert.match(dashboardText, /dashboard\.js\?v=20260846/);
+    assert.match(dashboardText, /styles\.css\?v=20260847/);
+    assert.match(dashboardText, /dashboard\.js\?v=20260847/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
     assert.match(dashboardText, /data-color-panel/);
@@ -97,6 +97,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /data-back/);
     assert.match(dashboardText, /Back to servers/);
     assert.match(dashboardText, /Controlled chaos/);
+    assert.match(dashboardText, /Search settings/);
     assert.match(dashboardText, /funRoastEnabled/);
     assert.match(dashboardText, /Server identity/);
     assert.match(dashboardText, /data-route-progress/);

@@ -6,6 +6,8 @@ import { assertCanPublishTo, recordAuditEvent } from "./community.js";
 const SWEAR_WORDS = ["fuck", "shit", "bitch", "cunt", "nigger", "nigga", "faggot", "retard"];
 const SEXUAL_TERMS = ["porn", "hentai", "nudes", "nude", "onlyfans", "sex tape", "rule34", "r34", "xxx"];
 const DISCORD_INVITE_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/[a-z0-9-]+/i;
+const URL_PATTERN = /\b(?:https?:\/\/|www\.)\S+/i;
+const DANGEROUS_ATTACHMENT_PATTERN = /\.(?:exe|scr|bat|cmd|com|msi|msp|jar|vbs|vbe|jse?|wsf|wsh|ps1|reg|lnk)(?:$|[?#])/i;
 const violationCounts = new Map();
 const messageCooldowns = new Map();
 const actionCooldowns = new Map();
@@ -75,12 +77,23 @@ async function handleRateGuard(message, settings, now = Date.now()) {
 }
 
 function detectViolation(message, settings) {
-  const attachmentNames = [...(message.attachments?.values?.() || [])].map((item) => item.name || "").join(" ");
-  if (settings.automodSwearFilter && includesTerm(message.content, SWEAR_WORDS)) return "Blocked language";
-  if (settings.automodNsfwFilter && includesTerm(`${message.content} ${attachmentNames}`, SEXUAL_TERMS)) return "Sexual or NSFW content";
-  if (settings.automodInviteFilter && DISCORD_INVITE_PATTERN.test(message.content || "")) return "Discord invite link";
+  const content = String(message.content || "");
+  const attachmentNameList = [...(message.attachments?.values?.() || [])].map((item) => item.name || "");
+  const attachmentNames = attachmentNameList.join(" ");
+  if (settings.automodSwearFilter && includesTerm(content, SWEAR_WORDS)) return "Blocked language";
+  if (settings.automodNsfwFilter && includesTerm(`${content} ${attachmentNames}`, SEXUAL_TERMS)) return "Sexual or NSFW content";
+  if (settings.automodInviteFilter && DISCORD_INVITE_PATTERN.test(content)) return "Discord invite link";
+  if (settings.automodLinkFilter && URL_PATTERN.test(content)) return "Links are not allowed here";
+  if (settings.automodDangerousFileFilter && attachmentNameList.some((name) => DANGEROUS_ATTACHMENT_PATTERN.test(name))) return "Potentially dangerous attachment";
+  if (settings.automodRepeatedTextFilter && /(.)\1{11,}/u.test(normalizedText(content).replace(/\s+/g, ""))) return "Repeated-character spam";
+  const combiningMarks = content.match(/\p{M}/gu)?.length || 0;
+  if (settings.automodZalgoFilter && combiningMarks >= 8 && combiningMarks / Math.max(1, [...content].length) >= 0.15) return "Excessive combining characters";
   const mentionLimit = Number(settings.automodMentionLimit) || 0;
   if (mentionLimit > 0 && (message.mentions?.users?.size || 0) > mentionLimit) return `Too many user mentions (limit ${mentionLimit})`;
+  const emojiLimit = Number(settings.automodEmojiLimit) || 0;
+  if (emojiLimit > 0 && (content.match(/\p{Extended_Pictographic}/gu)?.length || 0) > emojiLimit) return `Too many emoji (limit ${emojiLimit})`;
+  const lineLimit = Number(settings.automodLineLimit) || 0;
+  if (lineLimit > 0 && content.split(/\r?\n/).length > lineLimit) return `Too many lines (limit ${lineLimit})`;
   if (settings.automodCapsFilter) {
     const letters = String(message.content || "").match(/\p{L}/gu) || [];
     const uppercase = String(message.content || "").match(/\p{Lu}/gu) || [];
@@ -147,6 +160,7 @@ async function executeCustomAction(action, message) {
   if (action.actionType === "react") return message.react(action.response || "🦆");
   if (action.actionType === "delete") return message.delete();
   if (!member || member.id === message.guild.ownerId) return null;
+  if (["warn", "timeout", "timeout_hour", "kick", "softban", "add_role", "remove_role"].includes(action.actionType) && member.permissions?.has(PermissionsBitField.Flags.ManageMessages)) return null;
   if (action.actionType === "warn") {
     addMemberWarning(message.guildId, member.id, { id: `${Date.now()}_${action.id}`, createdAt: new Date().toISOString(), moderatorId: message.client.user.id, moderatorTag: message.client.user.tag, reason });
     await member.send(`You were warned in ${message.guild.name}: ${reason}`).catch(() => null);
@@ -273,7 +287,8 @@ async function handleAutomodAndCustomActions(message) {
   if (await handleHoneypot(message, settings, storedSettings)) return true;
   if (await handleRateGuard(message, settings)) return true;
   if (settings.automodEnabled) {
-    const violation = detectViolation(message, settings);
+    const staffExempt = message.member?.permissions?.has(PermissionsBitField.Flags.ManageMessages);
+    const violation = staffExempt ? null : detectViolation(message, settings);
     if (violation) {
       await message.delete().catch(() => null);
       await escalateViolation(message, settings, violation);

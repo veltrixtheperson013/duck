@@ -76,6 +76,9 @@ const FUN_COMMANDS = Object.freeze([
   { command: "number", key: "funNumberEnabled", label: "Random number", tier: "free" },
   { command: "thisorthat", key: "funThisOrThatEnabled", label: "This or that", tier: "free" },
   { command: "randommember", key: "funRandomMemberEnabled", label: "Random member", tier: "free" },
+  { command: "dadjoke", key: "funDadJokeEnabled", label: "Dad jokes", tier: "free" },
+  { command: "mood", key: "funMoodEnabled", label: "Mood scanner", tier: "free" },
+  { command: "highfive", key: "funHighFiveEnabled", label: "High five", tier: "free" },
   { command: "ship", key: "funShipEnabled", label: "Compatibility", tier: "plus" },
   { command: "curse", key: "funCurseEnabled", label: "Curses and blessings", tier: "plus" },
   { command: "spinwheel", key: "funSpinwheelEnabled", label: "Spin wheel", tier: "plus" },
@@ -99,6 +102,9 @@ const FUN_COMMANDS = Object.freeze([
   { command: "backstory", key: "funBackstoryEnabled", label: "Absurd backstories", tier: "plus" },
   { command: "award", key: "funAwardEnabled", label: "Pond awards", tier: "plus" },
   { command: "heist", key: "funHeistEnabled", label: "Imaginary heists", tier: "plus" },
+  { command: "superlative", key: "funSuperlativeEnabled", label: "Pond superlatives", tier: "plus" },
+  { command: "plot", key: "funPlotEnabled", label: "Plot generator", tier: "plus" },
+  { command: "confession", key: "funConfessionEnabled", label: "Harmless confessions", tier: "plus" },
 ]);
 const FUN_COMMAND_BY_NAME = new Map(FUN_COMMANDS.map((command) => [command.command, command]));
 const CUSTOM_ACTION_TRIGGERS = new Set(["message", "contains", "starts_with", "equals", "ends_with", "has_link", "has_attachment", "mentions_duck"]);
@@ -225,7 +231,13 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     automodNsfwFilter: settings.automodNsfwFilter === true,
     automodInviteFilter: settings.automodInviteFilter === true,
     automodCapsFilter: settings.automodCapsFilter === true,
+    automodLinkFilter: settings.automodLinkFilter === true,
+    automodRepeatedTextFilter: settings.automodRepeatedTextFilter === true,
+    automodDangerousFileFilter: settings.automodDangerousFileFilter === true,
+    automodZalgoFilter: settings.automodZalgoFilter === true,
     automodMentionLimit: Number.isInteger(settings.automodMentionLimit) ? settings.automodMentionLimit : 0,
+    automodEmojiLimit: Number.isInteger(settings.automodEmojiLimit) ? settings.automodEmojiLimit : 0,
+    automodLineLimit: Number.isInteger(settings.automodLineLimit) ? settings.automodLineLimit : 0,
     automodCustomWords: plus && Array.isArray(settings.automodCustomWords) ? settings.automodCustomWords : [],
     automodViolationsBeforeWarn: Number.isInteger(settings.automodViolationsBeforeWarn) ? settings.automodViolationsBeforeWarn : 3,
     automodWarningsBeforeAction: Number.isInteger(settings.automodWarningsBeforeAction) ? settings.automodWarningsBeforeAction : 3,
@@ -292,11 +304,11 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
 
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleMode", "reactionRoleLimit", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ticketTranscriptsEnabled", "autorolesEnabled", "autoroleRoleIds", "levelsEnabled", "levelAnnouncementChannelId", "levelIgnoredChannelIds", "levelRewards", "suggestionsEnabled", "suggestionChannelId", "suggestionAnonymousEnabled", "starboardEnabled", "starboardChannelId", "starboardThreshold", "starboardEmoji", "starboardColor", "starboardAllowNsfw", "scheduledPosts", "colorRolesEnabled", "colorRoleChannelId", "colorRoleRequiredRoleId", "colorRoleTitle", "colorRoleDescription", "colorRoleAccent", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "colorRoleOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodMentionLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = new Set(["aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleMode", "reactionRoleLimit", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ticketTranscriptsEnabled", "autorolesEnabled", "autoroleRoleIds", "levelsEnabled", "levelAnnouncementChannelId", "levelIgnoredChannelIds", "levelRewards", "suggestionsEnabled", "suggestionChannelId", "suggestionAnonymousEnabled", "starboardEnabled", "starboardChannelId", "starboardThreshold", "starboardEmoji", "starboardColor", "starboardAllowNsfw", "scheduledPosts", "colorRolesEnabled", "colorRoleChannelId", "colorRoleRequiredRoleId", "colorRoleTitle", "colorRoleDescription", "colorRoleAccent", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "colorRoleOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodLinkFilter", "automodRepeatedTextFilter", "automodDangerousFileFilter", "automodZalgoFilter", "automodMentionLimit", "automodEmojiLimit", "automodLineLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
   const plus = hasPlusEntitlement(current, now);
-  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "reactionRolesEnabled", "ticketsEnabled", "ticketTranscriptsEnabled", "autorolesEnabled", "levelsEnabled", "suggestionsEnabled", "suggestionAnonymousEnabled", "starboardEnabled", "starboardAllowNsfw", "colorRolesEnabled", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
+  for (const key of ["aiChatEnabled", "aiVisionEnabled", "aiScanEnabled", "reactionRolesEnabled", "ticketsEnabled", "ticketTranscriptsEnabled", "autorolesEnabled", "levelsEnabled", "suggestionsEnabled", "suggestionAnonymousEnabled", "starboardEnabled", "starboardAllowNsfw", "colorRolesEnabled", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "ttsEnabled", "ttsAnnounceNames", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodLinkFilter", "automodRepeatedTextFilter", "automodDangerousFileFilter", "automodZalgoFilter", ...FUN_COMMANDS.map(({ key }) => key)]) {
     if (key in input) {
       if (typeof input[key] !== "boolean") throw new TypeError(`${key} must be true or false.`);
       patch[key] = input[key];
@@ -304,6 +316,8 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
   }
   if ("automodHoneypotChannelId" in input) { if (input.automodHoneypotChannelId !== null && (typeof input.automodHoneypotChannelId !== "string" || !/^\d{10,}$/.test(input.automodHoneypotChannelId))) throw new TypeError("Honeypot channel must be a valid Discord channel or null."); patch.automodHoneypotChannelId = input.automodHoneypotChannelId; }
   if ("automodMentionLimit" in input) { if (!Number.isInteger(input.automodMentionLimit) || input.automodMentionLimit < 0 || input.automodMentionLimit > 20) throw new TypeError("Mention limit must be an integer from 0 to 20."); patch.automodMentionLimit = input.automodMentionLimit; }
+  if ("automodEmojiLimit" in input) { if (!Number.isInteger(input.automodEmojiLimit) || input.automodEmojiLimit < 0 || input.automodEmojiLimit > 50) throw new TypeError("Emoji limit must be an integer from 0 to 50."); patch.automodEmojiLimit = input.automodEmojiLimit; }
+  if ("automodLineLimit" in input) { if (!Number.isInteger(input.automodLineLimit) || input.automodLineLimit < 0 || input.automodLineLimit > 50) throw new TypeError("Line limit must be an integer from 0 to 50."); patch.automodLineLimit = input.automodLineLimit; }
   if ("aiScanChannelIds" in input) { if (!Array.isArray(input.aiScanChannelIds) || input.aiScanChannelIds.length > 25 || input.aiScanChannelIds.some((id) => typeof id !== "string" || !/^\d{10,}$/.test(id))) throw new TypeError("AI scan channels must be a list of up to 25 Discord channels."); patch.aiScanChannelIds = [...new Set(input.aiScanChannelIds)]; }
   if ("aiScanFlagChannelId" in input) { if (input.aiScanFlagChannelId !== null && (typeof input.aiScanFlagChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanFlagChannelId))) throw new TypeError("AI review channel must be a Discord channel or null."); patch.aiScanFlagChannelId = input.aiScanFlagChannelId; }
   if ("aiScanRulesChannelId" in input) { if (input.aiScanRulesChannelId !== null && (typeof input.aiScanRulesChannelId !== "string" || !/^\d{10,}$/.test(input.aiScanRulesChannelId))) throw new TypeError("AI rules channel must be a Discord channel or null."); patch.aiScanRulesChannelId = input.aiScanRulesChannelId; }

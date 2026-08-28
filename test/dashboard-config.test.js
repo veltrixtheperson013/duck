@@ -123,6 +123,10 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
     automodEnabled: true,
     automodSwearFilter: true,
     automodNsfwFilter: true,
+    automodDangerousFileFilter: true,
+    automodRepeatedTextFilter: true,
+    automodEmojiLimit: 18,
+    automodLineLimit: 24,
     automodGlobalSlowmodeSeconds: 12,
     automodChannelSlowmodes: [{ channelId: "123456789012345678", seconds: 30 }],
     automodViolationsBeforeWarn: 2,
@@ -130,6 +134,8 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
     automodEscalation: "softban",
   });
   assert.equal(basic.settings.automodEnabled, true);
+  assert.equal(basic.settings.automodDangerousFileFilter, true);
+  assert.equal(basic.settings.automodEmojiLimit, 18);
   assert.equal(basic.settings.automodChannelSlowmodes[0].seconds, 30);
   const honeypot = makeSettingsPatch({}, { automodHoneypotEnabled: true, automodHoneypotChannelId: "123456789012345678" });
   assert.equal(honeypot.settings.automodHoneypotEnabled, true); assert.equal(honeypot.settings.automodHoneypotChannelId, "123456789012345678");
@@ -138,6 +144,8 @@ test("AutoMod settings are bounded and server custom words require Plus", () => 
   assert.throws(() => makeSettingsPatch({}, { automodChannelSlowmodes: [{ channelId: 123456789012345678, seconds: 30 }] }), /valid channel/);
   assert.throws(() => makeSettingsPatch({}, { automodGlobalSlowmodeSeconds: 21_601 }), /0-21600/);
   assert.throws(() => makeSettingsPatch({}, { automodViolationsBeforeWarn: 0 }), /1 to 20/);
+  assert.throws(() => makeSettingsPatch({}, { automodEmojiLimit: 51 }), /0 to 50/);
+  assert.throws(() => makeSettingsPatch({}, { automodLineLimit: -1 }), /0 to 50/);
 
   assert.deepEqual(makeSettingsPatch(plus, { automodCustomWords: [" Spoiler ", "spoiler"] }).settings.automodCustomWords, ["spoiler"]);
 });

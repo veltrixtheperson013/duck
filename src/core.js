@@ -3348,7 +3348,7 @@ async function makeChatMessages(message, options = {}) {
         "Use serverContext.channelMessages to answer questions about recent messages in specific channels. It groups readable recent messages by channel.",
         "Use the wider server context to answer questions about members, channels, roles, and what has been happening across the server when you can.",
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
-        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, number, thisorthat, randommember, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, caption, alibi, backstory, award, and heist. Duck validates the server's plan and command toggle before running it.",
+        "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, dadjoke, mood, highfive, number, thisorthat, randommember, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, caption, alibi, backstory, award, heist, superlative, plot, and confession. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
         "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
@@ -3844,7 +3844,7 @@ async function resolveAiFunCall(message, content) {
   const source = String(content || "");
   const match = source.match(/\{\{fun::([a-z]+)(?:::(.{0,300}?))?\}\}/i);
   if (!match) return content;
-  const supported = new Set(["quack", "duckfact", "coinflip", "truth", "dare", "truthordare", "rps", "fortune", "topic", "joke", "number", "thisorthat", "randommember", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "neverhaveiever", "hotseat", "vibecheck", "ship", "curse", "spinwheel", "battle", "dramatic", "conspiracy", "challenge", "caption", "alibi", "backstory", "award", "heist"]);
+  const supported = new Set(["quack", "duckfact", "coinflip", "truth", "dare", "truthordare", "rps", "fortune", "topic", "joke", "dadjoke", "mood", "highfive", "number", "thisorthat", "randommember", "eightball", "roll", "choose", "rate", "compliment", "roast", "wouldyourather", "neverhaveiever", "hotseat", "vibecheck", "ship", "curse", "spinwheel", "battle", "dramatic", "conspiracy", "challenge", "caption", "alibi", "backstory", "award", "heist", "superlative", "plot", "confession"]);
   const command = match[1].toLocaleLowerCase("en-US");
   const clean = source.replace(match[0], "").trim();
   if (!supported.has(command)) return clean;
@@ -5960,7 +5960,7 @@ async function makeUtilityResponse(message, text) {
     ["neverhaveiever", /^(neverhaveiever|never have i ever|nhie)\b/],
     ["vibecheck", /^(vibecheck|vibe check)\b/],
     ["rps", /^(rps|rock paper scissors)\b/],
-    ...["fortune", "topic", "joke", "number", "thisorthat", "randommember", "battle", "dramatic", "conspiracy", "challenge", "caption", "alibi", "backstory", "award", "heist"].map((command) => [command, new RegExp(`^${command}\\b`)]),
+    ...["fortune", "topic", "joke", "dadjoke", "mood", "highfive", "number", "thisorthat", "randommember", "battle", "dramatic", "conspiracy", "challenge", "caption", "alibi", "backstory", "award", "heist", "superlative", "plot", "confession"].map((command) => [command, new RegExp(`^${command}\\b`)]),
     ...["quack", "ship", "curse", "roll", "quote", "roast", "compliment", "choose", "rate"].map((command) => [command, new RegExp(`^${command}\\b`)]),
     ...["truth", "dare", "hotseat"].map((command) => [command, new RegExp(`^${command}\\b`)]),
   ].find(([, pattern]) => pattern.test(normalized))?.[0];
@@ -6202,6 +6202,21 @@ async function makeUtilityResponse(message, text) {
     const jokes = ["Why did the duck become a moderator? It was excellent at handling fowl language.", "A duck walked into a server. It left because everyone kept asking for its bill.", "Why are ducks good developers? They already know how to quack bugs.", "What is a duck's favorite debugging method? Rubber ducking, obviously.", "Why was the pond so calm? All the drama was stuck in the queue."];
     return jokes[Math.floor(Math.random() * jokes.length)];
   }
+  if (/^dadjoke\b/.test(normalized)) {
+    const jokes = ["I only know 25 letters of the alphabet. I don't know y.", "Why did the moderator bring a ladder? The chat had reached another level.", "What do you call a duck that gets good grades? A wise quacker.", "I used to hate facial hair, but then it grew on me."];
+    return `ðŸ‘¨â€ðŸ³ ${jokes[Math.floor(Math.random() * jokes.length)]}`;
+  }
+  if (/^mood\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^mood\b/i, ""), true);
+    const moods = ["quietly thriving", "one ping from becoming a pond cryptid", "powered by snacks", "suspiciously productive", "radiating main-character duck energy"];
+    const score = createHash("sha256").update(`${message.guildId}:${target.id}:mood:${new Date().toISOString().slice(0, 10)}`).digest()[0];
+    return `ðŸŒ¡ï¸ **${target.displayName}** is **${moods[score % moods.length]}** today (${score % 101}% calibrated).`;
+  }
+  if (/^highfive\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^highfive\b/i, ""), false);
+    if (!target) return "Mention someone, like `duck highfive @friend`.";
+    return `ðŸ™Œ <@${message.author.id}> gives **${target.displayName}** a high five so powerful the pond briefly buffers.`;
+  }
   if (/^number\b/.test(normalized)) {
     const maximum = Number(text.replace(/^number\b/i, "").trim() || 100);
     if (!Number.isInteger(maximum) || maximum < 2 || maximum > 1_000_000) return "Choose a whole-number maximum from 2 to 1,000,000.";
@@ -6265,6 +6280,20 @@ async function makeUtilityResponse(message, text) {
     const target = findUtilityMemberTarget(message, text.replace(/^heist\b/i, ""), true);
     const roles = ["distraction duck", "snack vault specialist", "getaway shopping-cart driver", "laser-pointer negotiator", "person holding the map upside down"];
     return `🥷 **Imaginary snack heist:** ${target.displayName} is the **${roles[Math.floor(Math.random() * roles.length)]}**. The target is one unattended bag of chips. No real crimes; maximum drama.`;
+  }
+  if (/^superlative\b/.test(normalized)) {
+    const target = findUtilityMemberTarget(message, text.replace(/^superlative\b/i, ""), true);
+    const titles = ["Most Likely to Read the Pinned Message", "Best Emergency Snack Coordinator", "Strongest Unexplained Online Presence", "Most Waterproof Vibes", "Fastest Recovery from an Accidental @everyone"];
+    return `ðŸ‘‘ **${target.displayName}** wins **${titles[Math.floor(Math.random() * titles.length)]}**.`;
+  }
+  if (/^plot\b/.test(normalized)) {
+    const subject = limitDiscordContent(text.replace(/^plot\b/i, "").trim(), 160) || "this server";
+    const plots = ["must save the last snack before a suspicious goose reaches it", "discovers the audit log predicts the future", "forms an unlikely alliance with three bots in a trench coat", "has one night to repair the Wi-Fi and the timeline"];
+    return `ðŸŽ¬ **Coming soon:** ${subject} ${plots[Math.floor(Math.random() * plots.length)]}. Rated Q for quackery.`;
+  }
+  if (/^confession\b/.test(normalized)) {
+    const prompts = ["What harmless snack do you hide from everyone else?", "Which song do you know every word to but pretend not to?", "What tiny chore have you been avoiding?", "Which fictional character would you trust with your server password? (Do not post the password.)", "What is your most unnecessary strong opinion?"];
+    return `ðŸ¤« **Harmless confession:** ${prompts[Math.floor(Math.random() * prompts.length)]}`;
   }
 
   const truths = [
@@ -6482,6 +6511,9 @@ function slashCommandContent(interaction) {
     case "number": return `number ${interaction.options.getInteger("maximum", false) || 100}`;
     case "thisorthat": return "thisorthat";
     case "randommember": return "randommember";
+    case "dadjoke": return "dadjoke";
+    case "mood": return `mood ${userMention("user")}`;
+    case "highfive": return `highfive ${userMention("user")}`;
     case "battle": return `battle ${userMention("user1")} ${userMention("user2")}`;
     case "dramatic": return `dramatic ${userMention("user")}`;
     case "conspiracy": return `conspiracy ${interaction.options.getString("subject", true)}`;
@@ -6491,6 +6523,9 @@ function slashCommandContent(interaction) {
     case "backstory": return `backstory ${userMention("user")}`;
     case "award": return `award ${userMention("user")}`;
     case "heist": return `heist ${userMention("user")}`;
+    case "superlative": return `superlative ${userMention("user")}`;
+    case "plot": return `plot ${interaction.options.getString("subject", false) || ""}`;
+    case "confession": return "confession";
     case "remind": return `remind ${interaction.options.getString("time", true)} ${interaction.options.getString("text", true)}`;
     case "join": return "join";
     case "leave": return "leave";
@@ -6531,7 +6566,7 @@ function slashCommandContent(interaction) {
 }
 
 function validateSlashCommandDispatchers(commandBodies) {
-  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capability", "capibility", "synccommands", "suggest", "rank", "leaderboard", "color", "colors", "purgeuser", "modlog"]);
+  const separatelyHandled = new Set(["duck", "setup", "duck-tools", "entry-setup", "announce", "prefix", "capability", "capibility", "synccommands", "suggest", "rank", "leaderboard", "color", "colors", "clean", "purgeuser", "modlog"]);
   const setupCommand = commandBodies.find((command) => command.name === "setup");
   const setupOptions = new Map((setupCommand?.options || []).map((option) => [option.name, option]));
   if (!setupOptions.has("channel") || !setupOptions.has("quarantine-channel")) {
@@ -6574,11 +6609,11 @@ async function makeSlashDuckResponse(interaction, prompt) {
       "Slash commands:",
       "- `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`",
       "- `/ban`, `/unban`, `/kick`, `/timeout`, `/warn`, `/warnings`",
-      "- `/clear`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
+      "- `/clear`, `/clean`, `/purgeuser`, `/clearwarnings`, `/voicequarantine`, `/voicerelease`",
       "- `/addrole`, `/removerole`, `/tool`",
       "- `/announce`, `/sendrules`, `/bulk`, `/prefix`, `/join`, `/leave`",
-      "- Fun: `/quack`, `/duckfact`, `/coinflip`, `/truth`, `/dare`, `/truthordare`, `/rps`, `/fortune`, `/topic`, `/joke`, `/number`, `/thisorthat`, `/randommember`",
-      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/battle`, `/dramatic`, `/conspiracy`, `/challenge`, `/caption`, `/alibi`, `/backstory`, `/award`, `/heist`",
+      "- Fun: `/quack`, `/duckfact`, `/coinflip`, `/truth`, `/dare`, `/truthordare`, `/rps`, `/fortune`, `/topic`, `/joke`, `/dadjoke`, `/mood`, `/highfive`, `/number`, `/thisorthat`, `/randommember`",
+      "- Plus fun: `/ship`, `/curse`, `/roll`, `/eightball`, `/roast`, `/compliment`, `/choose`, `/rate`, `/wouldyourather`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/battle`, `/dramatic`, `/conspiracy`, `/challenge`, `/caption`, `/alibi`, `/backstory`, `/award`, `/heist`, `/superlative`, `/plot`, `/confession`",
       "- `/setup`, `/entry-setup`, `/synccommands`, `/duck-tools`",
       "",
       "For AI chat and moderation, use normal messages like `duck warn @user spam` or `hey duck show me commands`.",
@@ -7008,6 +7043,11 @@ async function registerCommands(client, options = {}) {
       .addIntegerOption((option) => option.setName("maximum").setDescription("Highest possible number; defaults to 100.").setMinValue(2).setMaxValue(1_000_000).setRequired(false)),
     new SlashCommandBuilder().setName("thisorthat").setDescription("Draw a quick this-or-that prompt."),
     new SlashCommandBuilder().setName("randommember").setDescription("Pick a random non-bot server member."),
+    new SlashCommandBuilder().setName("dadjoke").setDescription("Deploy a painfully dependable dad joke."),
+    new SlashCommandBuilder().setName("mood").setDescription("Run Duck's extremely scientific mood scanner.")
+      .addUserOption((option) => option.setName("user").setDescription("Person to scan; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("highfive").setDescription("Give another member a dramatic high five.")
+      .addUserOption((option) => option.setName("user").setDescription("High-five recipient.").setRequired(true)),
     new SlashCommandBuilder().setName("battle").setDescription("Stage an imaginary showdown. Duck Plus command.")
       .addUserOption((option) => option.setName("user1").setDescription("First challenger.").setRequired(true))
       .addUserOption((option) => option.setName("user2").setDescription("Second challenger.").setRequired(true)),
@@ -7026,6 +7066,11 @@ async function registerCommands(client, options = {}) {
       .addUserOption((option) => option.setName("user").setDescription("Award recipient; defaults to you.").setRequired(false)),
     new SlashCommandBuilder().setName("heist").setDescription("Plan a harmless imaginary snack heist. Duck Plus command.")
       .addUserOption((option) => option.setName("user").setDescription("Your imaginary accomplice; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("superlative").setDescription("Award a suspiciously specific title. Duck Plus command.")
+      .addUserOption((option) => option.setName("user").setDescription("Award recipient; defaults to you.").setRequired(false)),
+    new SlashCommandBuilder().setName("plot").setDescription("Generate a chaotic pond movie plot. Duck Plus command.")
+      .addStringOption((option) => option.setName("subject").setDescription("Optional star or subject.").setMaxLength(160).setRequired(false)),
+    new SlashCommandBuilder().setName("confession").setDescription("Draw a harmless confession prompt. Duck Plus command."),
     new SlashCommandBuilder().setName("remind").setDescription("Set a reminder in this channel.")
       .addStringOption((option) => option.setName("time").setDescription("Examples: 30s, 10m, 2h.").setRequired(true))
       .addStringOption((option) => option.setName("text").setDescription("Reminder text.").setRequired(true)),
@@ -7076,6 +7121,10 @@ async function registerCommands(client, options = {}) {
     new SlashCommandBuilder().setName("purgeuser").setDescription("Remove a member's recent messages from this channel.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
       .addUserOption((option) => option.setName("member").setDescription("Member whose recent messages should be removed.").setRequired(true))
+      .addIntegerOption((option) => option.setName("count").setDescription("Maximum matching messages to remove.").setMinValue(1).setMaxValue(100).setRequired(true)),
+    new SlashCommandBuilder().setName("clean").setDescription("Quickly remove one kind of recent message.")
+      .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
+      .addStringOption((option) => option.setName("type").setDescription("Messages to remove.").setRequired(true).addChoices({ name: "Bot messages", value: "bots" }, { name: "Messages with links", value: "links" }, { name: "Messages with attachments", value: "attachments" }, { name: "Messages with embeds", value: "embeds" }))
       .addIntegerOption((option) => option.setName("count").setDescription("Maximum matching messages to remove.").setMinValue(1).setMaxValue(100).setRequired(true)),
     new SlashCommandBuilder().setName("modlog").setDescription("View Duck's latest server moderation audit entries.")
       .setDefaultMemberPermissions(PermissionsBitField.Flags.ViewAuditLog)

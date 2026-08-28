@@ -240,6 +240,24 @@ footer p { margin: 0; }
   .duck-card { transition: none; }
 }
 
+/* Dashboard navigation and moderation presets */
+.settings-nav-search { display: grid; gap: .35rem; margin: .15rem .25rem .75rem; color: var(--muted); font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.settings-nav-search input { width: 100%; min-width: 0; padding: .72rem .8rem; border: 1px solid var(--line); border-radius: .8rem; background: var(--surface); color: var(--ink); font: inherit; letter-spacing: normal; text-transform: none; box-shadow: none; }
+.settings-nav-search input:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent); }
+.settings-tabs > button[hidden] { display: none !important; }
+.automod-presets { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; margin: 1rem 0 1.25rem; padding: 1rem; border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line)); border-radius: 1rem; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--ink); }
+.automod-presets > div:first-child { display: grid; gap: .28rem; }
+.automod-presets small { color: var(--muted); line-height: 1.45; }
+.preset-grid { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .45rem; }
+.preset-grid button { min-height: 2.45rem; padding: .55rem .8rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); color: var(--ink); font: inherit; font-weight: 800; cursor: pointer; transition: transform 140ms ease, border-color 140ms ease, background 140ms ease; }
+.preset-grid button:hover { transform: translateY(-1px); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.preset-grid button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent); outline-offset: 2px; }
+@media (max-width: 850px) { .automod-presets { grid-template-columns: 1fr; } .preset-grid { justify-content: flex-start; } }
+[data-theme="windows-xp"] .settings-nav-search input,
+[data-theme="windows-xp"] .preset-grid button { border-radius: 3px; border-color: #7f9db9; background: #fff; color: #111; box-shadow: inset 1px 1px #fff, inset -1px -1px #d6d3ce; }
+[data-theme="windows-xp"] .automod-presets { border-radius: 5px; border-color: #7f9db9; background: #ece9d8; color: #111; box-shadow: inset 1px 1px #fff; }
+[data-theme="windows-xp"] .automod-presets small { color: #3f4d5a; }
+
 /* Full-screen server workspace: a dedicated route-like view, not a floating modal. */
 .settings-page-loading, .settings-page-open { overflow: hidden; background: #eef3ef; }
 .settings-page-loading > .site-header, .settings-page-loading > footer, .settings-page-open > .site-header, .settings-page-open > footer { display: none; }
