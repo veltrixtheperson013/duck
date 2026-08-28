@@ -11,6 +11,7 @@ import { ClusteredGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, 
 import { createDuckWebsiteServer } from "./web.js";
 import { getAiModelDefinition, getDefaultAiModel, getFunCommandAccess, getPlusLoyalty, hasPlusEntitlement } from "./dashboard-config.js";
 import { getClusterManager } from "./clusters.js";
+import { getChildControl } from "./child-control.js";
 
 let cacheMaintenanceTimer = null;
 let cacheRefreshTimer = null;
@@ -5386,6 +5387,15 @@ async function synthesizeVoiceAudio(text, guildId = null) {
   if (guildSettings.ttsEnabled === false) throw new Error("TTS is disabled for this server.");
   const useElevenLabs = guildSettings.ttsModel === "elevenlabs/default" && hasPlusEntitlement(guildSettings);
   if (!useElevenLabs) {
+    if (guildId) {
+      try {
+        const delegated = await getChildControl({ client }).dispatchGuild(guildId, "tts.flux", { text: String(text).slice(0, 200) }, { timeoutMs: 20_000 });
+        if (delegated?.contentType === "audio/mpeg" && typeof delegated.audio === "string" && delegated.audio.length <= 5_600_000) {
+          const audio = Buffer.from(delegated.audio, "base64");
+          if (audio.length && audio.length <= 4 * 1024 * 1024) return audio;
+        }
+      } catch (error) { logWarn("voice.child-tts-fallback", { guildId, error: error?.message || String(error) }); }
+    }
     const apiKey = String(process.env.OPENROUTER_API_KEY || "").trim();
     if (!apiKey) throw new Error("Flux TTS is not configured. Set OPENROUTER_API_KEY.");
     let finalError;

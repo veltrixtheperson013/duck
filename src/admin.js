@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { deleteGuildSettings, flushJsonWrites, getGuildSettings, loadSettings, updateGuildSettings } from "./config.js";
 import { getClusterManager } from "./clusters.js";
 import { getDeploymentManager } from "./deployments.js";
+import { getChildControl } from "./child-control.js";
 import { clearWebsiteBanner, getOperatorState, recordOperatorAction, removePlatformBlock, scheduleMaintenance, setClusterAssignmentOverride, setClusterStatusOverride, setPlatformBlock, setWebsiteBanner, updateMaintenance } from "./operator-state.js";
 import { logError, logInfo, logWarn } from "./logging.js";
 
@@ -131,11 +132,13 @@ function createDuckOperatorController(options = {}) {
   const updateSettings = options.updateGuildSettings || updateGuildSettings;
   const deleteSettings = options.deleteGuildSettings || deleteGuildSettings;
   const deploymentManager = options.deploymentManager || getDeploymentManager({ client, clusterManager, getSettings });
+  const childControl = options.childControl || getChildControl({ client, clusterManager });
+  childControl.start();
   return {
     overview() {
       const guilds = client?.guilds?.cache ? [...client.guilds.cache.values()].map((guild) => ({ id: guild.id, name: String(guild.name || "Unknown server").slice(0, 100), members: Number(guild.memberCount) || 0, cluster: clusterManager.describeGuild(guild.id) })) : [];
       const memory = process.memoryUsage();
-      return { service: { startedAt: new Date(Date.now() - Math.max(0, Number(process.uptime()) * 1000)).toISOString(), uptimeSeconds: Math.floor(process.uptime()), memoryMb: Math.round(memory.rss / 1024 / 1024), heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024), heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024), gatewayLatencyMs: Math.max(0, Number(client?.ws?.ping) || 0), gatewayReady: Boolean(client?.isReady?.()), node: process.version }, guilds, clusters: clusterManager.list(guilds.map(({ id }) => id)), operator: publicOperatorState(getOperatorState()), database: { guildProfiles: Object.keys(loadSettings().guilds || {}).length } };
+      return { service: { startedAt: new Date(Date.now() - Math.max(0, Number(process.uptime()) * 1000)).toISOString(), uptimeSeconds: Math.floor(process.uptime()), memoryMb: Math.round(memory.rss / 1024 / 1024), heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024), heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024), gatewayLatencyMs: Math.max(0, Number(client?.ws?.ping) || 0), gatewayReady: Boolean(client?.isReady?.()), node: process.version }, guilds, clusters: clusterManager.list(guilds.map(({ id }) => id)), children: childControl.overview(), operator: publicOperatorState(getOperatorState()), database: { guildProfiles: Object.keys(loadSettings().guilds || {}).length } };
     },
     inspectGuild(guildId) { const id = validId(guildId, "Server ID"); return { guildId: id, settings: getSettings(id) }; },
     exportDatabase() { return { exportedAt: new Date().toISOString(), settings: loadSettings(), operator: publicOperatorState(getOperatorState()) }; },
@@ -155,6 +158,22 @@ function createDuckOperatorController(options = {}) {
       else if (action === "database.flush") { flushJsonWrites(); result = { flushed: true }; }
       else if (action === "database.delete-guild") { const guildId = validId(input.guildId, "Server ID"); if (String(input.confirmation) !== guildId) throw new TypeError("Type the exact server ID to confirm deletion."); result = { deleted: deleteSettings(guildId) }; }
       else if (action === "runbook.execute") result = runClusterRunbook(input, { client, clusterManager, getSettings });
+      else if (action === "child.enrollment.create") result = childControl.createEnrollment({ label: input.label, expiresMinutes: input.expiresMinutes });
+      else if (action === "child.assign") result = childControl.assign(String(input.clusterId), String(input.workerId));
+      else if (action === "child.unassign") result = childControl.unassign(String(input.clusterId));
+      else if (action === "child.quarantine") result = childControl.quarantine(String(input.workerId), input.reason);
+      else if (action === "child.revoke") { if (input.confirmation !== input.workerId) throw new TypeError("Type the worker ID to revoke it."); result = childControl.revoke(String(input.workerId), input.reason); }
+      else if (action === "cluster.diagnostic.run") result = childControl.runDiagnostics(String(input.clusterId));
+      else if (action === "cluster.drain") result = childControl.drain(String(input.clusterId));
+      else if (action === "cluster.resume") result = childControl.resume(String(input.clusterId));
+      else if (action === "cluster.jobs.cancel-expired") result = childControl.cancelExpired(String(input.clusterId));
+      else if (action === "cluster.jobs.retry") result = childControl.retryFailed(String(input.clusterId));
+      else if (["cluster.cache.clear", "cluster.cache.warm", "cluster.config.sync", "cluster.config.validate", "cluster.logs.snapshot"].includes(action)) {
+        const jobType = ({ "cluster.cache.clear": "cache.clear", "cluster.cache.warm": "cache.warm", "cluster.config.sync": "config.sync", "cluster.config.validate": "config.validate", "cluster.logs.snapshot": "logs.snapshot" })[action];
+        result = childControl.createJob(String(input.clusterId), jobType, {}, { timeoutMs: 60_000 });
+        if (!result) throw Object.assign(new Error("No online child worker is assigned to that cluster."), { status: 409 });
+      }
+      else if (action === "cluster.worker.restart") { if (input.confirmation !== "RESTART CHILD") throw new TypeError("Type RESTART CHILD to confirm."); result = childControl.createJob(String(input.clusterId), "worker.restart", {}, { timeoutMs: 30_000 }); if (!result) throw Object.assign(new Error("No online child worker is assigned to that cluster."), { status: 409 }); }
       else if (action === "deployment.start") {
         if (Object.keys(input).some((key) => !["action", "confirmation"].includes(key)) || input.confirmation !== "ROLL OUT DUCK") throw new TypeError("Type ROLL OUT DUCK to confirm the deployment.");
         result = deploymentManager.start(context.actorId || "local-operator");

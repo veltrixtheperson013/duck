@@ -6,4 +6,7 @@ data/pending-actions.json
 data/warnings.json
 data/quotes.json
 data/captcha-dataset/
+data/children.json
+child-data/
+child/child-data/
 *.log

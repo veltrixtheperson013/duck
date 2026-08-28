@@ -1,0 +1,24 @@
+[Unit]
+Description=Duck allowlisted child worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=duck-child
+Group=duck-child
+WorkingDirectory=/opt/duck-child
+EnvironmentFile=/etc/duck-child.env
+ExecStart=/usr/bin/node /opt/duck-child/src/agent.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/duck-child/child-data
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

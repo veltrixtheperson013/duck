@@ -4,6 +4,7 @@ import { getAiModelDefinition, getPublicGuildSettings } from "./dashboard-config
 import { ClusteredGuildScheduler, QueueCapacityError, fetchWithTimeoutAndRetry, readBoundedJson, readBoundedText } from "./runtime.js";
 import { recordAiFlag } from "./community.js";
 import { getClusterManager } from "./clusters.js";
+import { getChildControl } from "./child-control.js";
 
 const CATEGORIES = new Set(["harassment", "hate", "sexual", "violence", "self_harm", "scam", "spam", "other"]);
 const thresholds = { low: 0.9, balanced: 0.75, high: 0.6 };
@@ -30,7 +31,7 @@ function parseScanResult(value) {
 function shouldQueueScan(message, settings, now = Date.now()) {
   if (!settings.aiScanEnabled || !settings.aiScanFlagChannelId || !settings.aiScanChannelIds.includes(message.channelId)) return false;
   const content = String(message.content || "").trim();
-  if (content.length < 4 || !process.env.OPENROUTER_API_KEY) return false;
+  if (content.length < 4) return false;
   const key = `${message.guildId}:${message.channelId}:${message.author.id}`;
   if ((recentScans.get(key) || 0) > now - 4_000) return false;
   recentScans.set(key, now);
@@ -38,9 +39,16 @@ function shouldQueueScan(message, settings, now = Date.now()) {
   return true;
 }
 
-async function requestSuggestion(content, { rules = "No server-specific rules were supplied.", model, fetchImpl = fetch } = {}) {
+async function requestSuggestion(content, { rules = "No server-specific rules were supplied.", model, guildId = null, fetchImpl = fetch } = {}) {
   const selectedModel = getAiModelDefinition(model);
   if (!selectedModel) throw new TypeError("AI scanning requires a server-selected model from Duck's allowlist.");
+  const system = `You are an advisory-only Discord safety classifier. Never recommend or perform an action. Compare the message against the supplied server rules as well as credible harassment, hate, sexual content, violence, self-harm risk, scams, or spam. Consider context uncertainty and avoid flagging quoted discussion. Server rules:\n${String(rules).slice(0, 5_000)}\nReturn only JSON: {"flag":boolean,"category":"harassment|hate|sexual|violence|self_harm|scam|spam|other","confidence":0.0,"reason":"short neutral explanation naming the relevant rule when possible"}.`;
+  if (guildId) {
+    try {
+      const delegated = await getChildControl().dispatchGuild(guildId, "ai.scan", { model: selectedModel.id, system, content: String(content).slice(0, 1_500) }, { timeoutMs: 15_000 });
+      if (delegated?.content) return parseScanResult(delegated.content);
+    } catch { /* The manager remains the reliable fallback. */ }
+  }
   const response = await fetchWithTimeoutAndRetry("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -55,7 +63,7 @@ async function requestSuggestion(content, { rules = "No server-specific rules we
       temperature: 0,
       max_tokens: 160,
       messages: [
-        { role: "system", content: `You are an advisory-only Discord safety classifier. Never recommend or perform an action. Compare the message against the supplied server rules as well as credible harassment, hate, sexual content, violence, self-harm risk, scams, or spam. Consider context uncertainty and avoid flagging quoted discussion. Server rules:\n${String(rules).slice(0, 5_000)}\nReturn only JSON: {"flag":boolean,"category":"harassment|hate|sexual|violence|self_harm|scam|spam|other","confidence":0.0,"reason":"short neutral explanation naming the relevant rule when possible"}.` },
+        { role: "system", content: system },
         { role: "user", content: String(content).slice(0, 1_500) },
       ],
     }),
@@ -79,7 +87,7 @@ async function getServerRules(message, settings, now = Date.now()) {
 }
 
 async function scanMessage(message, settings) {
-  const result = await requestSuggestion(message.content, { rules: await getServerRules(message, settings), model: settings.aiModel });
+  const result = await requestSuggestion(message.content, { rules: await getServerRules(message, settings), model: settings.aiModel, guildId: message.guildId });
   if (!result || result.confidence < thresholds[settings.aiScanSensitivity]) return null;
   const channel = message.guild.channels.cache.get(settings.aiScanFlagChannelId)
     ?? await message.guild.channels.fetch(settings.aiScanFlagChannelId).catch(() => null);

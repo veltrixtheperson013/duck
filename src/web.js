@@ -15,6 +15,7 @@ import { publishColorDock } from "./color-roles.js";
 import { getClusterManager } from "./clusters.js";
 import { getActiveWebsiteBanner, isPlatformBlocked, recordOperatorAction } from "./operator-state.js";
 import { createDuckOperatorController } from "./admin.js";
+import { getChildControl } from "./child-control.js";
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 const adminDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "admin-public");
@@ -170,6 +171,8 @@ function createDuckWebsiteServer(options = {}) {
   const reportWarn = options.logWarnImpl || logWarn;
   const stripe = options.stripeClient ?? getStripeClient();
   const clusterManager = options.clusterManager || getClusterManager();
+  const childControl = options.childControl || getChildControl({ client, diagnosticIntervalMs: Number(process.env.DUCK_CHILD_DIAGNOSTIC_INTERVAL_MS) || 30 * 60_000 });
+  childControl.start();
   const sessions = new Map(); const operatorSessions = new Map(); const webhookEvents = new Map();
   const oauthStateSecret = randomBytes(32);
   const requestRates = new Map(); const globalRates = new Map(); const billingCheckoutLocks = new Set();
@@ -198,7 +201,7 @@ function createDuckWebsiteServer(options = {}) {
       reportWarn("remote-operator.disabled-invalid-config", { invalid, impact: "Operator Deck disabled; Duck remains online." });
     }
   }
-  const operatorController = createDuckOperatorController({ client, clusterManager, getGuildSettings, updateGuildSettings, deleteGuildSettings: options.deleteGuildSettings });
+  const operatorController = createDuckOperatorController({ client, clusterManager, childControl, getGuildSettings, updateGuildSettings, deleteGuildSettings: options.deleteGuildSettings });
   const cookie = (name, value, maxAge) => `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
   const operatorCookie = (value, maxAge) => `duck_operator=${encodeURIComponent(value)}; Path=${remoteOperatorPath || "/"}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie() ? "; Secure" : ""}`;
   const prune = (force = false) => { const now = Date.now(); if (!force && now - lastPruneAt < 30_000 && sessions.size <= 5_000 && operatorSessions.size <= 8 && webhookEvents.size <= 10_000 && requestRates.size <= 10_000) return; lastPruneAt = now; for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key); for (const [key, value] of operatorSessions) if (value.expiresAt <= now || !sessions.has(value.discordSessionId)) operatorSessions.delete(key); for (const [key, value] of webhookEvents) if (value <= now) webhookEvents.delete(key); for (const [key, value] of requestRates) if (value.resetAt <= now) requestRates.delete(key); for (const [key, value] of globalRates) if (value.resetAt <= now) globalRates.delete(key); while (sessions.size > 5_000) sessions.delete(sessions.keys().next().value); while (operatorSessions.size > 8) operatorSessions.delete(operatorSessions.keys().next().value); while (webhookEvents.size > 10_000) webhookEvents.delete(webhookEvents.keys().next().value); while (requestRates.size > 10_000) requestRates.delete(requestRates.keys().next().value); };
@@ -331,6 +334,18 @@ function createDuckWebsiteServer(options = {}) {
     try { pathname = new URL(req.url || "/", "http://duck.local").pathname; } catch { return send(res, 400, "text/plain; charset=utf-8", "Bad request.", method); }
     try {
       prune();
+      if (pathname.startsWith("/internal/children/")) {
+        if (method !== "POST") return json(res, 405, { error: "Method not allowed." }, method, { Allow: "POST" });
+        const isEnrollment = pathname === "/internal/children/enroll";
+        if (!allowRequest(req, isEnrollment ? "child-enroll" : "child-control", isEnrollment ? 5 : 240, 60_000)) return json(res, 429, { error: "Child control rate limit reached." }, method, { "Retry-After": "60" });
+        const body = await readJsonBody(req, isEnrollment ? 4 * 1024 : 320 * 1024);
+        if (isEnrollment) return json(res, 201, childControl.enroll(body, normalizeRemoteAddress(req.socket.remoteAddress)), method);
+        const worker = childControl.verifyRequest({ method, pathname, headers: req.headers, body });
+        if (pathname === "/internal/children/heartbeat") return json(res, 200, childControl.heartbeat(worker, body), method);
+        if (pathname === "/internal/children/jobs/next") return json(res, 200, { job: childControl.nextJob(worker), managerTime: Date.now() }, method);
+        if (pathname === "/internal/children/jobs/result") return json(res, 200, childControl.submitResult(worker, body), method);
+        return json(res, 404, { error: "Child control endpoint not found." }, method);
+      }
       if (remoteOperatorEnabled && (pathname === remoteOperatorPath || pathname.startsWith(`${remoteOperatorPath}/`))) { await handleRemoteOperator(req, res, pathname, method); return; }
       const rate = pathname.startsWith("/auth/") ? ["auth", 30, 10 * 60_000] : pathname === "/api/clusters/lookup" ? ["cluster-lookup", 30, 60_000] : pathname === "/api/billing/webhook" ? ["billing-webhook", 120, 60_000] : pathname === "/donate/checkout" ? ["billing-donation", 10, 60_000] : pathname.endsWith("/branding") ? ["branding", 6, 60_000] : pathname.includes("/billing/") ? ["billing-user", 20, 60_000] : ["web", 300, 60_000];
       if (!allowRequest(req, ...rate)) return json(res, 429, { error: "Too many requests. Try again shortly." }, method, { "Retry-After": "60" });
