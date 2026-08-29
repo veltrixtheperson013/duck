@@ -31,6 +31,15 @@ test("child enrollment is one-time and signed requests reject replay", () => {
   assert.throws(() => h.control.enroll({ token: "wrong", publicKey: "x" }), /invalid or expired/);
 });
 
+test("child authentication reports clock skew without widening the replay window", () => {
+  const h = harness(); const worker = enroll(h); const request = signed(worker, h, "/internal/children/heartbeat", {});
+  h.tick(60_001);
+  assert.throws(
+    () => h.control.verifyRequest(request),
+    (error) => error.status === 401 && error.code === "child_clock_skew" && error.managerTime === h.now(),
+  );
+});
+
 test("manager assigns allowlisted jobs and accepts leased results", async () => {
   const h = harness(); const worker = enroll(h); h.control.assign("cluster-01", worker.childId);
   h.control.heartbeat(h.state().workers[worker.childId], { metrics: { diskFreeMb: 4096, clockMs: h.now() }, version: "1.0.0" });

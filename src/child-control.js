@@ -65,12 +65,13 @@ class ChildControlPlane {
 
   verifyRequest({ method, pathname, headers, body }) {
     const childId = String(headers["x-duck-child-id"] || ""); const timestamp = Number(headers["x-duck-child-time"]); const nonce = String(headers["x-duck-child-nonce"] || ""); const signature = String(headers["x-duck-child-signature"] || "");
-    if (!CHILD_ID.test(childId) || !Number.isSafeInteger(timestamp) || Math.abs(this.now() - timestamp) > 60_000 || !/^[A-Za-z0-9_-]{16,100}$/.test(nonce) || !/^[A-Za-z0-9_-]{40,200}$/.test(signature)) throw Object.assign(new Error("Child request authentication failed."), { status: 401 });
+    if (!CHILD_ID.test(childId) || !Number.isSafeInteger(timestamp) || !/^[A-Za-z0-9_-]{16,100}$/.test(nonce) || !/^[A-Za-z0-9_-]{40,200}$/.test(signature)) throw Object.assign(new Error("Child request authentication failed."), { status: 401, code: "child_auth_malformed" });
+    if (Math.abs(this.now() - timestamp) > 60_000) throw Object.assign(new Error("Child request clock is out of sync."), { status: 401, code: "child_clock_skew", managerTime: this.now() });
     const state = this.readState(); const worker = state.workers[childId]; if (!worker || worker.revokedAt || worker.quarantinedAt) throw Object.assign(new Error("Child worker is not active."), { status: 403 });
     let seen = this.nonces.get(childId); if (!seen) { seen = new Map(); this.nonces.set(childId, seen); } for (const [key, usedAt] of seen) if (usedAt < this.now() - 120_000) seen.delete(key); if (seen.has(nonce)) throw Object.assign(new Error("Child request was already used."), { status: 409 });
     const message = `${String(method).toUpperCase()}\n${pathname}\n${timestamp}\n${nonce}\n${hash(canonical(body))}`; let valid = false;
     try { valid = verifySignature(null, Buffer.from(message), createPublicKey({ key: Buffer.from(worker.publicKey, "base64"), format: "der", type: "spki" }), Buffer.from(signature, "base64url")); } catch { valid = false; }
-    if (!valid) throw Object.assign(new Error("Child request signature is invalid."), { status: 401 }); seen.set(nonce, this.now()); return worker;
+    if (!valid) throw Object.assign(new Error("Child request signature is invalid."), { status: 401, code: "child_signature_invalid" }); seen.set(nonce, this.now()); return worker;
   }
 
   heartbeat(worker, input) {

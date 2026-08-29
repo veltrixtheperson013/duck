@@ -139,6 +139,20 @@ test("website serves the homepage, privacy policy, assets, and health route", as
 
     const health = await fetch(`${origin}/health`);
     assert.deepEqual(await health.json(), { ok: true, service: "duck" });
+
+    const childApi = await fetch(`${origin}/internal/children/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: "{}",
+    });
+    assert.equal(childApi.status, 401);
+    assert.match(childApi.headers.get("content-type"), /^application\/json/);
+    assert.equal(childApi.headers.get("x-duck-child-protocol"), "1");
+    const childApiText = await childApi.text();
+    assert.doesNotMatch(childApiText, /<!DOCTYPE/i);
+    const childApiError = JSON.parse(childApiText);
+    assert.equal(childApiError.code, "child_auth_malformed");
+    assert.equal(Number.isSafeInteger(childApiError.managerTime), true);
   });
 });
 

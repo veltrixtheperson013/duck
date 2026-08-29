@@ -9,3 +9,5 @@ The main Duck process remains authoritative. A child accepts only the fixed job 
 5. Assign clusters to the worker from the Operator Deck. Unassigned or unhealthy clusters stay on the manager fallback.
 
 Use HTTPS between child and manager. Only localhost development accepts plain HTTP.
+
+Transient proxy or manager outages are handled with bounded request deadlines and exponential backoff. A child validates JSON and the manager protocol before accepting a response, prevents overlapping heartbeats, suppresses repeated identical errors, and reports when the connection recovers.

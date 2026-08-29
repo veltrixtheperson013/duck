@@ -361,6 +361,7 @@ function createDuckWebsiteServer(options = {}) {
   const server = http.createServer({ maxHeaderSize: 16 * 1024 }, async (req, res) => {
     const method = req.method || "GET"; const requestId = randomBytes(8).toString("hex"); res.setHeader("X-Request-ID", requestId); let pathname;
     try { pathname = new URL(req.url || "/", "http://duck.local").pathname; } catch { return send(res, 400, "text/plain; charset=utf-8", "Bad request.", method); }
+    if (pathname.startsWith("/internal/children/")) res.setHeader("X-Duck-Child-Protocol", "1");
     try {
       prune();
       if (pathname.startsWith("/internal/children/")) {
@@ -498,7 +499,7 @@ function createDuckWebsiteServer(options = {}) {
       if (pathname === "/donate/checkout") return json(res, 405, { error: "Method not allowed." }, method, { Allow: "POST" });
       if (page || dashboardGuildPage || dashboardSubpage || pathname.startsWith("/api/") || pathname.startsWith("/auth/")) return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD" });
       return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
-    } catch (error) { const status = error.code === "plus_required" ? 402 : error instanceof SyntaxError ? 400 : error.status || 500; if (status >= 500) reportError("website_request_failed", error, { requestId, method, pathname, status, code: error.code || null }); return json(res, status, { error: status === 500 ? `Duck hit an unexpected server error. Reference: ${requestId}` : error.message, requestId }); }
+    } catch (error) { const status = error.code === "plus_required" ? 402 : error instanceof SyntaxError ? 400 : error.status || 500; if (status >= 500) reportError("website_request_failed", error, { requestId, method, pathname, status, code: error.code || null }); const childRequest = pathname.startsWith("/internal/children/"); return json(res, status, { error: status === 500 ? `Duck hit an unexpected server error. Reference: ${requestId}` : error.message, ...(childRequest ? { code: error.code || "child_request_failed", managerTime: Number.isSafeInteger(error.managerTime) ? error.managerTime : Date.now() } : {}), requestId }); }
   });
   server.requestTimeout = 20_000;
   server.headersTimeout = 10_000;
