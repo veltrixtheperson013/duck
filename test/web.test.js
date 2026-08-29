@@ -60,6 +60,14 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
     const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/);
 
+    const versionedCss = await fetch(`${origin}/styles.css?v=20260848`, { headers: { "Accept-Encoding": "identity" } });
+    assert.equal(versionedCss.status, 200);
+    assert.equal(versionedCss.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    const brotliCss = await fetch(`${origin}/styles.css?v=20260848`, { headers: { "Accept-Encoding": "br" } });
+    assert.equal(brotliCss.status, 200);
+    assert.equal(brotliCss.headers.get("content-encoding"), "br");
+    assert.match(await brotliCss.text(), /2026 public-site rebuild/);
+
     const script = await fetch(`${origin}/site.js`);
     assert.equal(script.status, 200);
     assert.match(script.headers.get("content-type"), /^text\/javascript/);
@@ -84,7 +92,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260847/);
+    assert.match(dashboardText, /styles\.css\?v=20260848/);
     assert.match(dashboardText, /dashboard\.js\?v=20260847/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
@@ -226,6 +234,21 @@ test("public pages contain no GitHub references", async () => {
   ]);
   assert.doesNotMatch(pages.join("\n"), /github/i);
   assert.doesNotMatch(pages.slice(0, 3).join("\n"), /(?:href|src)="\/(?:styles\.css|site\.js)"/);
+});
+
+test("public pages expose a keyboard-first shared shell", async () => {
+  const files = ["index", "features", "guide", "updates", "pricing", "donate", "privacy-policy", "refunds", "terms-of-service", "clusters", "dashboard"];
+  for (const file of files) {
+    const html = await readFile(new URL(`../public/${file}.html`, import.meta.url), "utf8");
+    assert.match(html, /class="skip-link" href="#main-content"/, `${file} needs a skip link`);
+    assert.match(html, /<main[^>]*id="main-content"/, `${file} needs a main landmark target`);
+    assert.match(html, /<nav[^>]*id="site-navigation"[^>]*aria-label="Main navigation"/, `${file} needs a labeled primary navigation`);
+    assert.match(html, /aria-controls="site-navigation"/, `${file} needs an explicit menu relationship`);
+  }
+  const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+  assert.match(css, /:focus-visible/);
+  assert.match(css, /prefers-reduced-motion:reduce/);
+  assert.match(css, /forced-colors:active/);
 });
 
 test("Discord sessions cannot read or change another account's server profile", async () => {

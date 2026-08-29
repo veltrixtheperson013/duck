@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import { ChannelType, PermissionsBitField, Routes } from "discord.js";
 import { getPublicGuildSettings, getPublicModelCatalog, hasMaturePlusEntitlement, makeSettingsPatch } from "./dashboard-config.js";
 import { logError, logWarn } from "./logging.js";
@@ -46,7 +46,14 @@ const pages = new Map([
   ["/xp-background.jpg", { file: "xp-background.jpg", type: "image/jpeg" }],
 ]);
 const assetFiles = new Map([...pages.values()].map(({ file, type }) => [file, type]));
-const assetCache = new Map([...assetFiles].map(([file, type]) => { const body = fs.readFileSync(path.join(publicDirectory, file)); const gzip = /^(?:text\/|application\/javascript)/.test(type) ? gzipSync(body, { level: 6 }) : null; return [file, { body, gzip, etag: `"${createHash("sha256").update(body).digest("base64url").slice(0, 24)}-identity"`, gzipEtag: gzip ? `"${createHash("sha256").update(gzip).digest("base64url").slice(0, 24)}-gzip"` : null }]; }));
+const assetCache = new Map([...assetFiles].map(([file, type]) => {
+  const body = fs.readFileSync(path.join(publicDirectory, file));
+  const compressible = /^(?:text\/|application\/javascript)/.test(type);
+  const gzip = compressible ? gzipSync(body, { level: 6 }) : null;
+  const brotli = compressible ? brotliCompressSync(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } }) : null;
+  const etagFor = (payload, encoding) => payload ? `"${createHash("sha256").update(payload).digest("base64url").slice(0, 24)}-${encoding}"` : null;
+  return [file, { body, gzip, brotli, etag: etagFor(body, "identity"), gzipEtag: etagFor(gzip, "gzip"), brotliEtag: etagFor(brotli, "br") }];
+}));
 const MANAGE_GUILD = 1n << 5n;
 const ADMINISTRATOR = 1n << 3n;
 const DUCK_OWNER_USER_ID = "1138897388694687834";
@@ -58,7 +65,29 @@ function safeJson(body) { return JSON.stringify(body).replace(/[<>&\u2028\u2029]
 function json(res, status, body, method = "GET", headers = {}) { sendBuffer(res, status, "application/json; charset=utf-8", Buffer.from(safeJson(body)), method, headers); }
 function send(res, status, contentType, body, method = "GET", headers = {}) { if (Buffer.isBuffer(body)) return sendBuffer(res, status, contentType, body, method, headers); if (contentType !== "text/plain; charset=utf-8") throw new TypeError("Dynamic response text can only be emitted as text/plain."); return text(res, status, body, method, headers); }
 function redirect(res, location, headers = {}) { res.writeHead(302, { ...securityHeaders("text/plain; charset=utf-8"), "Cache-Control": "no-store", Location: location, ...headers }); res.end(); }
-function sendAsset(req, res, page, method, extraHeaders = {}) { const asset = assetCache.get(page.file); if (!asset) return send(res, 500, "text/plain; charset=utf-8", "Duck could not load this page.", method); const isHtml = page.type.startsWith("text/html"); const cacheControl = isHtml ? "no-cache" : page.type.startsWith("image/") ? "public, max-age=604800, stale-while-revalidate=86400" : "public, max-age=3600, stale-while-revalidate=86400"; const zipped = Boolean(asset.gzip) && /(?:^|,)\s*gzip\s*(?:,|$)/i.test(req.headers["accept-encoding"] || ""); const etag = zipped ? asset.gzipEtag : asset.etag; const common = { ...securityHeaders(page.type), "Cache-Control": cacheControl, ETag: etag, Vary: "Accept-Encoding", ...(zipped ? { "Content-Encoding": "gzip" } : {}), ...extraHeaders }; if (req.headers["if-none-match"] === etag) { res.writeHead(304, common); return res.end(); } const body = zipped ? asset.gzip : asset.body; res.writeHead(200, { ...common, "Content-Length": body.length }); res.end(method === "HEAD" ? undefined : body); }
+function acceptsEncoding(header, wanted) {
+  return String(header || "").split(",").some((entry) => {
+    const [name, ...parameters] = entry.trim().toLowerCase().split(";");
+    if (name !== wanted && name !== "*") return false;
+    return !parameters.some((parameter) => /^\s*q=0(?:\.0*)?\s*$/.test(parameter));
+  });
+}
+function sendAsset(req, res, page, method, extraHeaders = {}) {
+  const asset = assetCache.get(page.file);
+  if (!asset) return send(res, 500, "text/plain; charset=utf-8", "Duck could not load this page.", method);
+  const isHtml = page.type.startsWith("text/html");
+  const version = new URL(req.url, "http://duck.local").searchParams.get("v") || "";
+  const versioned = /^[A-Za-z0-9_-]{6,32}$/.test(version);
+  const cacheControl = isHtml ? "no-cache" : versioned ? "public, max-age=31536000, immutable" : page.type.startsWith("image/") ? "public, max-age=604800, stale-while-revalidate=86400" : "public, max-age=3600, stale-while-revalidate=86400";
+  const encodingHeader = req.headers["accept-encoding"];
+  const encoding = asset.brotli && acceptsEncoding(encodingHeader, "br") ? "br" : asset.gzip && acceptsEncoding(encodingHeader, "gzip") ? "gzip" : "identity";
+  const body = encoding === "br" ? asset.brotli : encoding === "gzip" ? asset.gzip : asset.body;
+  const etag = encoding === "br" ? asset.brotliEtag : encoding === "gzip" ? asset.gzipEtag : asset.etag;
+  const common = { ...securityHeaders(page.type), "Cache-Control": cacheControl, ETag: etag, Vary: "Accept-Encoding", ...(encoding === "identity" ? {} : { "Content-Encoding": encoding }), ...extraHeaders };
+  if (req.headers["if-none-match"] === etag) { res.writeHead(304, common); return res.end(); }
+  res.writeHead(200, { ...common, "Content-Length": body.length });
+  res.end(method === "HEAD" ? undefined : body);
+}
 function parseCookies(req) { const cookies = Object.create(null); for (const part of String(req.headers.cookie || "").split(";")) { const [key, value] = part.trim().split(/=(.*)/s); if (!key) continue; try { cookies[key] = decodeURIComponent(value || ""); } catch { /* Ignore malformed attacker-controlled cookies. */ } } return cookies; }
 function randomToken() { return randomBytes(32).toString("base64url"); }
 function digest(value) { return createHash("sha256").update(String(value || "")).digest(); }
