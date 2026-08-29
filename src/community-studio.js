@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionsBitField } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, PermissionsBitField } from "discord.js";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
 import { isSafeSelfAssignableRole, recordAuditEvent } from "./community.js";
@@ -72,18 +72,18 @@ function flushLevelProfiles() {
 
 async function handleRankCommand(interaction) {
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
-  if (!settings.levelsEnabled) return interaction.reply({ content: "Levels are disabled in this server.", ephemeral: true });
+  if (!settings.levelsEnabled) return interaction.reply({ content: "Levels are disabled in this server.", flags: MessageFlags.Ephemeral });
   const target = interaction.options.getUser("member", false) || interaction.user;
   const profile = getGuildSettings(interaction.guildId).levelProfiles?.[target.id] || { xp: 0, messages: 0 };
   const level = levelForXp(profile.xp); const floor = xpForLevel(level); const ceiling = xpForLevel(level + 1);
   const progress = Math.max(0, Math.min(10, Math.round(((profile.xp - floor) / Math.max(1, ceiling - floor)) * 10)));
   const bar = `${"▰".repeat(progress)}${"▱".repeat(10 - progress)}`;
-  return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x16845c).setAuthor({ name: target.globalName || target.username, iconURL: target.displayAvatarURL() }).setTitle(`Pond Level ${level}`).setDescription(`${bar}\n**${profile.xp || 0} XP** · ${profile.messages || 0} rewarded messages\n${Math.max(0, ceiling - (profile.xp || 0))} XP until level ${level + 1}`)], ephemeral: true });
+  return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x16845c).setAuthor({ name: target.globalName || target.username, iconURL: target.displayAvatarURL() }).setTitle(`Pond Level ${level}`).setDescription(`${bar}\n**${profile.xp || 0} XP** · ${profile.messages || 0} rewarded messages\n${Math.max(0, ceiling - (profile.xp || 0))} XP until level ${level + 1}`)], flags: MessageFlags.Ephemeral });
 }
 
 async function handleLeaderboardCommand(interaction) {
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
-  if (!settings.levelsEnabled) return interaction.reply({ content: "Levels are disabled in this server.", ephemeral: true });
+  if (!settings.levelsEnabled) return interaction.reply({ content: "Levels are disabled in this server.", flags: MessageFlags.Ephemeral });
   const profiles = getGuildSettings(interaction.guildId).levelProfiles || {};
   const leaders = Object.entries(profiles).filter(([id, profile]) => /^\d{10,}$/.test(id) && profile && Number.isFinite(Number(profile.xp))).sort((a, b) => Number(b[1].xp) - Number(a[1].xp)).slice(0, 10);
   const lines = leaders.map(([id, profile], index) => `**${index + 1}.** <@${id}> — Level ${levelForXp(profile.xp)} · ${profile.xp} XP`);
@@ -92,13 +92,13 @@ async function handleLeaderboardCommand(interaction) {
 
 async function handleSuggestCommand(interaction) {
   const raw = getGuildSettings(interaction.guildId); const settings = getPublicGuildSettings(raw);
-  if (!settings.suggestionsEnabled || !settings.suggestionChannelId) return interaction.reply({ content: "Suggestions are not configured in this server.", ephemeral: true });
+  if (!settings.suggestionsEnabled || !settings.suggestionChannelId) return interaction.reply({ content: "Suggestions are not configured in this server.", flags: MessageFlags.Ephemeral });
   const channel = interaction.guild.channels.cache.get(settings.suggestionChannelId);
-  if (!channel?.isTextBased?.() || typeof channel.send !== "function") return interaction.reply({ content: "The suggestion channel is unavailable.", ephemeral: true });
+  if (!channel?.isTextBased?.() || typeof channel.send !== "function") return interaction.reply({ content: "The suggestion channel is unavailable.", flags: MessageFlags.Ephemeral });
   const text = clean(interaction.options.getString("idea", true), 1_000);
-  if (!text) return interaction.reply({ content: "Write a suggestion first.", ephemeral: true });
+  if (!text) return interaction.reply({ content: "Write a suggestion first.", flags: MessageFlags.Ephemeral });
   const requestedAnonymous = interaction.options.getBoolean("anonymous", false) === true;
-  if (requestedAnonymous && (!settings.suggestionAnonymousEnabled || !hasPlusEntitlement(raw))) return interaction.reply({ content: "Anonymous proposals are not enabled for this server's plan.", ephemeral: true });
+  if (requestedAnonymous && (!settings.suggestionAnonymousEnabled || !hasPlusEntitlement(raw))) return interaction.reply({ content: "Anonymous proposals are not enabled for this server's plan.", flags: MessageFlags.Ephemeral });
   const anonymous = requestedAnonymous;
   const embed = new EmbedBuilder().setColor(0x4d8c70).setTitle("New pond proposal").setDescription(text).setAuthor(anonymous ? { name: "Anonymous community member" } : { name: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() }).setFooter({ text: `Submitted ${anonymous ? "anonymously" : `by ${interaction.user.id}`} · Awaiting staff review` }).setTimestamp();
   const row = new ActionRowBuilder().addComponents(
@@ -108,13 +108,13 @@ async function handleSuggestCommand(interaction) {
   const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
   await Promise.allSettled([sent.react("👍"), sent.react("👎")]);
   await recordAuditEvent(interaction.guild, { userId: interaction.user.id, action: "Submitted suggestion", reason: `Suggestion ${sent.id} in #${channel.name}`, source: "discord" });
-  return interaction.reply({ content: `Your suggestion is swimming over to ${channel}.`, ephemeral: true });
+  return interaction.reply({ content: `Your suggestion is swimming over to ${channel}.`, flags: MessageFlags.Ephemeral });
 }
 
 async function handleSuggestionDecision(interaction) {
   const match = interaction.customId.match(/^duck_suggest:(approve|decline):(\d{10,})$/);
   if (!match) return false;
-  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to decide suggestions.", ephemeral: true });
+  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to decide suggestions.", flags: MessageFlags.Ephemeral });
   const approved = match[1] === "approve"; const original = interaction.message.embeds[0];
   const embed = EmbedBuilder.from(original).setColor(approved ? 0x2fac72 : 0xc95b51).setTitle(approved ? "Approved pond proposal" : "Declined pond proposal").setFooter({ text: `${approved ? "Approved" : "Declined"} by ${interaction.user.tag}` });
   await interaction.update({ embeds: [embed], components: [] });

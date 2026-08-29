@@ -5,6 +5,7 @@ import {
   ButtonStyle,
   ChannelType,
   EmbedBuilder,
+  MessageFlags,
   ModalBuilder,
   PermissionsBitField,
   StringSelectMenuBuilder,
@@ -183,20 +184,20 @@ async function publishTicketPanel(guild, actorId) {
 async function handleReactionRole(interaction, roleId) {
   const raw = getGuildSettings(interaction.guildId);
   const settings = getPublicGuildSettings(raw);
-  if (!settings.reactionRolesEnabled || !settings.reactionRoleOptions?.some((option) => option.roleId === roleId)) return interaction.reply({ content: "That reaction role is no longer configured.", ephemeral: true });
+  if (!settings.reactionRolesEnabled || !settings.reactionRoleOptions?.some((option) => option.roleId === roleId)) return interaction.reply({ content: "That reaction role is no longer configured.", flags: MessageFlags.Ephemeral });
   const role = interaction.guild.roles.cache.get(roleId);
   const member = interaction.member;
-  if (!isSafeSelfAssignableRole(role)) return interaction.reply({ content: "Duck cannot safely manage that role.", ephemeral: true });
+  if (!isSafeSelfAssignableRole(role)) return interaction.reply({ content: "Duck cannot safely manage that role.", flags: MessageFlags.Ephemeral });
   const removing = member.roles.cache.has(roleId);
   if (!removing) {
     const configuredIds = settings.reactionRoleOptions.map((option) => option.roleId);
     const selectedIds = configuredIds.filter((id) => member.roles.cache.has(id));
-    if (settings.reactionRoleLimit > 0 && selectedIds.length >= settings.reactionRoleLimit) return interaction.reply({ content: `This panel allows up to ${settings.reactionRoleLimit} role${settings.reactionRoleLimit === 1 ? "" : "s"}. Remove one first.`, ephemeral: true });
+    if (settings.reactionRoleLimit > 0 && selectedIds.length >= settings.reactionRoleLimit) return interaction.reply({ content: `This panel allows up to ${settings.reactionRoleLimit} role${settings.reactionRoleLimit === 1 ? "" : "s"}. Remove one first.`, flags: MessageFlags.Ephemeral });
     if (settings.reactionRoleMode === "exclusive" && selectedIds.length) await member.roles.remove(selectedIds, "Exclusive Duck reaction-role selection");
   }
   await (removing ? member.roles.remove(role, "Self-service reaction role") : member.roles.add(role, "Self-service reaction role"));
   await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: removing ? "Removed self role" : "Added self role", reason: role.name, source: "discord" });
-  return interaction.reply({ content: `${removing ? "Removed" : "Added"} **${role.name}**.`, ephemeral: true });
+  return interaction.reply({ content: `${removing ? "Removed" : "Added"} **${role.name}**.`, flags: MessageFlags.Ephemeral });
 }
 
 async function promptTicketVerification(interaction, option) {
@@ -213,7 +214,7 @@ async function promptImageTicketVerification(interaction, option) {
   pruneTicketVerificationChallenges();
   let sample;
   try { sample = getImageCaptcha(); } catch (error) {
-    return interaction.reply({ content: `Image verification is temporarily unavailable. A server administrator needs to install the CAPTCHA dataset. (${clean(error?.message, 140)})`, ephemeral: true });
+    return interaction.reply({ content: `Image verification is temporarily unavailable. A server administrator needs to install the CAPTCHA dataset. (${clean(error?.message, 140)})`, flags: MessageFlags.Ephemeral });
   }
   const token = randomBytes(12).toString("base64url");
   ticketVerificationChallenges.set(token, { guildId: interaction.guildId, userId: interaction.user.id, optionId: option.id, mode: "image", answer: normalizeCaptchaAnswer(sample.answer), expiresAt: Date.now() + TICKET_VERIFICATION_TTL_MS });
@@ -221,13 +222,13 @@ async function promptImageTicketVerification(interaction, option) {
   const file = new AttachmentBuilder(sample.buffer, { name: filename, description: "Duck image verification challenge" });
   const embed = new EmbedBuilder().setColor(0x16845c).setTitle(clean(option.verificationLabel, 80) || "Image verification").setDescription("Read the characters in the image, then press **Enter answer**. This one-time challenge expires in 10 minutes.").setImage(`attachment://${filename}`);
   const controls = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`duck_ticket_image_answer:${token}`).setLabel("Enter answer").setStyle(ButtonStyle.Primary));
-  return interaction.reply({ embeds: [embed], components: [controls], files: [file], ephemeral: true });
+  return interaction.reply({ embeds: [embed], components: [controls], files: [file], flags: MessageFlags.Ephemeral });
 }
 
 async function promptImageTicketAnswer(interaction, token) {
   pruneTicketVerificationChallenges();
   const challenge = ticketVerificationChallenges.get(token);
-  if (!challenge || challenge.mode !== "image" || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That image challenge expired or belongs to another member. Open a new verification ticket and try again.", ephemeral: true });
+  if (!challenge || challenge.mode !== "image" || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That image challenge expired or belongs to another member. Open a new verification ticket and try again.", flags: MessageFlags.Ephemeral });
   const answer = new TextInputBuilder().setCustomId("duck_ticket_verify_answer").setLabel("Type the characters shown in the image").setPlaceholder("CAPTCHA answer").setStyle(TextInputStyle.Short).setRequired(true).setMinLength(3).setMaxLength(32);
   const modal = new ModalBuilder().setCustomId(`duck_ticket_verify:${token}`).setTitle("Image verification").addComponents(new ActionRowBuilder().addComponents(answer));
   return interaction.showModal(modal);
@@ -236,16 +237,16 @@ async function promptImageTicketAnswer(interaction, token) {
 async function handleTicketOpen(interaction, optionId, verified = false) {
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
   const option = settings.ticketOptions?.find((item) => item.id === optionId);
-  if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That ticket option is no longer available.", ephemeral: true });
+  if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That ticket option is no longer available.", flags: MessageFlags.Ephemeral });
   const existing = interaction.guild.channels.cache.find((channel) => !channel.name.startsWith("closed-") && channel.topic?.match(/duck-ticket-owner:(\d{10,})/)?.[1] === interaction.user.id);
-  if (existing) return interaction.reply({ content: `You already have an open ticket: ${existing}`, ephemeral: true });
+  if (existing) return interaction.reply({ content: `You already have an open ticket: ${existing}`, flags: MessageFlags.Ephemeral });
   if (option.type === "verification" && !verified) return promptTicketVerification(interaction, option);
   if (option.type === "image_verification" && !verified) return promptImageTicketVerification(interaction, option);
   const lockKey = `${interaction.guildId}:${interaction.user.id}`;
-  if (ticketLocks.has(lockKey)) return interaction.reply({ content: "Your ticket is already being created.", ephemeral: true });
+  if (ticketLocks.has(lockKey)) return interaction.reply({ content: "Your ticket is already being created.", flags: MessageFlags.Ephemeral });
   ticketLocks.add(lockKey);
   try {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const overwrites = [
       { id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
       { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] },
@@ -264,9 +265,9 @@ async function handleTicketOpen(interaction, optionId, verified = false) {
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Opened ticket", reason: option.label, source: "discord" });
     return interaction.editReply({ content: `Your ticket is ready: ${channel}` });
   } catch (error) {
-    const failure = { content: `Duck could not create this ticket: ${clean(error?.message, 180) || "Discord rejected the channel setup."}`, ephemeral: true };
+    const failure = { content: `Duck could not create this ticket: ${clean(error?.message, 180) || "Discord rejected the channel setup."}` };
     if (interaction.deferred || interaction.replied) await interaction.editReply(failure).catch(() => null);
-    else await interaction.reply(failure).catch(() => null);
+    else await interaction.reply({ ...failure, flags: MessageFlags.Ephemeral }).catch(() => null);
     return null;
   } finally { ticketLocks.delete(lockKey); }
 }
@@ -277,19 +278,19 @@ async function handleTicketVerificationModal(interaction) {
   const token = interaction.customId.slice("duck_ticket_verify:".length);
   const challenge = ticketVerificationChallenges.get(token);
   ticketVerificationChallenges.delete(token);
-  if (!challenge || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That verification challenge expired or belongs to another member. Open a new verification ticket and try again.", ephemeral: true });
+  if (!challenge || challenge.guildId !== interaction.guildId || challenge.userId !== interaction.user.id) return interaction.reply({ content: "That verification challenge expired or belongs to another member. Open a new verification ticket and try again.", flags: MessageFlags.Ephemeral });
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
   const expectedType = challenge.mode === "image" ? "image_verification" : "verification";
   const option = settings.ticketOptions?.find((item) => item.id === challenge.optionId && item.type === expectedType);
-  if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That verification ticket is no longer available.", ephemeral: true });
+  if (!settings.ticketsEnabled || !option) return interaction.reply({ content: "That verification ticket is no longer available.", flags: MessageFlags.Ephemeral });
   const rawAnswer = interaction.fields.getTextInputValue("duck_ticket_verify_answer");
   const submitted = challenge.mode === "image" ? normalizeCaptchaAnswer(rawAnswer) : normalizeTicketVerificationAnswer(rawAnswer);
   if (submitted !== challenge.answer) {
     const reason = `Failed Duck ticket verification for ${option.label}`;
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: "Failed ticket verification", reason: option.label, source: "discord" });
-    if (isTicketStaff(interaction, settings)) return interaction.reply({ content: "Verification failed. Duck never removes server staff for a failed challenge; open the ticket again to retry.", ephemeral: true });
-    if (!interaction.member?.kickable) return interaction.reply({ content: "Verification failed, but Duck cannot kick you because of Discord role hierarchy. Staff have been notified in the audit log.", ephemeral: true });
-    await interaction.reply({ content: "Verification failed. You are being removed from this server.", ephemeral: true });
+    if (isTicketStaff(interaction, settings)) return interaction.reply({ content: "Verification failed. Duck never removes server staff for a failed challenge; open the ticket again to retry.", flags: MessageFlags.Ephemeral });
+    if (!interaction.member?.kickable) return interaction.reply({ content: "Verification failed, but Duck cannot kick you because of Discord role hierarchy. Staff have been notified in the audit log.", flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: "Verification failed. You are being removed from this server.", flags: MessageFlags.Ephemeral });
     try { await interaction.member.kick(reason); } catch { await interaction.editReply({ content: "Verification failed, but Discord prevented Duck from kicking you. Staff have been notified in the audit log." }).catch(() => null); }
     return true;
   }
@@ -299,13 +300,13 @@ async function handleTicketVerificationModal(interaction) {
 
 async function handleTicketClose(interaction) {
   const ownerId = interaction.channel?.topic?.match(/duck-ticket-owner:(\d{10,})/)?.[1];
-  if (!ownerId) return interaction.reply({ content: "This is not a Duck ticket channel.", ephemeral: true });
+  if (!ownerId) return interaction.reply({ content: "This is not a Duck ticket channel.", flags: MessageFlags.Ephemeral });
   const raw = getGuildSettings(interaction.guildId);
   const settings = getPublicGuildSettings(raw);
   const staff = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels) || [settings.ticketSupportRoleId, settings.ticketAdminRoleId].some((id) => id && interaction.member.roles.cache.has(id));
-  if (interaction.user.id !== ownerId && !staff) return interaction.reply({ content: "Only the ticket owner or support staff can close this ticket.", ephemeral: true });
+  if (interaction.user.id !== ownerId && !staff) return interaction.reply({ content: "Only the ticket owner or support staff can close this ticket.", flags: MessageFlags.Ephemeral });
   const lockKey = `${interaction.guildId}:${interaction.channelId}`;
-  if (ticketCloseLocks.has(lockKey)) return interaction.reply({ content: "This ticket is already being closed.", ephemeral: true });
+  if (ticketCloseLocks.has(lockKey)) return interaction.reply({ content: "This ticket is already being closed.", flags: MessageFlags.Ephemeral });
   ticketCloseLocks.add(lockKey);
   try {
     await interaction.deferReply();
@@ -332,7 +333,7 @@ async function handleTicketClose(interaction) {
     const detail = error?.code === 10009 ? "Discord had stale ticket permissions. Please try again; Duck has refreshed the safe close operation." : clean(error?.message, 160) || "Discord rejected the channel update.";
     const failure = { content: `Duck could not close this ticket: ${detail}` };
     if (interaction.deferred || interaction.replied) return interaction.editReply(failure).catch(() => null);
-    return interaction.reply({ ...failure, ephemeral: true }).catch(() => null);
+    return interaction.reply({ ...failure, flags: MessageFlags.Ephemeral }).catch(() => null);
   } finally {
     ticketCloseLocks.delete(lockKey);
   }
@@ -340,22 +341,22 @@ async function handleTicketClose(interaction) {
 
 function aiActionParts(customId) { const match = customId.match(/^duck_ai_(?:action|pick):(\d{10,}):(\d{10,}):(\d{10,})$/); return match ? { channelId: match[1], messageId: match[2], userId: match[3] } : null; }
 async function promptAiAction(interaction) {
-  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to review this flag.", ephemeral: true });
-  const target = aiActionParts(interaction.customId); if (!target) return interaction.reply({ content: "That review card is invalid.", ephemeral: true });
+  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to review this flag.", flags: MessageFlags.Ephemeral });
+  const target = aiActionParts(interaction.customId); if (!target) return interaction.reply({ content: "That review card is invalid.", flags: MessageFlags.Ephemeral });
   const menu = new StringSelectMenuBuilder().setCustomId(`duck_ai_pick:${target.channelId}:${target.messageId}:${target.userId}`).setPlaceholder("Choose a reviewed action").addOptions(
     { label: "Delete message", value: "delete", description: "Remove only the flagged message", emoji: "🗑️" },
     { label: "Kick member", value: "kick", description: "Remove the member without banning", emoji: "👢" },
     { label: "Softban (24h cleanup)", value: "softban", description: "Ban, clear 24 hours, then immediately unban", emoji: "🧹" },
     { label: "Ban member", value: "ban", description: "Permanently ban and clear 24 hours", emoji: "⛔" },
   );
-  return interaction.reply({ content: "Review the original message, then choose an action. Duck re-checks permissions and hierarchy when you submit.", components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+  return interaction.reply({ content: "Review the original message, then choose an action. Duck re-checks permissions and hierarchy when you submit.", components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
 }
 
 async function handleAiActionSelection(interaction) {
   const target = aiActionParts(interaction.customId); const action = interaction.values?.[0];
-  if (!target || !["delete", "kick", "softban", "ban"].includes(action)) return interaction.reply({ content: "That review action is invalid.", ephemeral: true });
+  if (!target || !["delete", "kick", "softban", "ban"].includes(action)) return interaction.reply({ content: "That review action is invalid.", flags: MessageFlags.Ephemeral });
   const permission = action === "delete" ? PermissionsBitField.Flags.ManageMessages : action === "kick" ? PermissionsBitField.Flags.KickMembers : PermissionsBitField.Flags.BanMembers;
-  if (!interaction.memberPermissions?.has(permission)) return interaction.reply({ content: "You do not have the required Discord permission for that action.", ephemeral: true });
+  if (!interaction.memberPermissions?.has(permission)) return interaction.reply({ content: "You do not have the required Discord permission for that action.", flags: MessageFlags.Ephemeral });
   await interaction.deferUpdate();
   const channel = interaction.guild.channels.cache.get(target.channelId) ?? await interaction.guild.channels.fetch(target.channelId).catch(() => null);
   const message = channel?.messages ? await channel.messages.fetch(target.messageId).catch(() => null) : null;

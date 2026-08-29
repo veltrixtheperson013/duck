@@ -1,4 +1,4 @@
-import { Events, ActivityType, PermissionsBitField } from "discord.js";
+import { Events, ActivityType, MessageFlags, PermissionsBitField } from "discord.js";
 import { client } from "./client.js";
 import { logInfo, logDebug, logWarn, logError, elapsedMs, splitDiscordLines } from "./logging.js";
 import { pendingActions, pendingByChannel } from "./state.js";
@@ -137,16 +137,16 @@ client.on(Events.GuildCreate, async (guild) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!claimDiscordEvent(`interaction:${interaction.id}`)) return;
-    if (isPlatformBlocked(interaction.user?.id)) { if (interaction.isRepliable()) await interaction.reply({ content: "You cannot use Duck right now. Contact Duck's operator if you believe this is a mistake.", ephemeral: true }).catch(() => null); return; }
+    if (isPlatformBlocked(interaction.user?.id)) { if (interaction.isRepliable()) await interaction.reply({ content: "You cannot use Duck right now. Contact Duck's operator if you believe this is a mistake.", flags: MessageFlags.Ephemeral }).catch(() => null); return; }
     if (interaction.isChatInputCommand()) {
       const colorResult = await handleColorCommand(interaction);
       if (colorResult !== false) return;
       const studioResult = await handleCommunitySlashCommand(interaction);
       if (studioResult !== false) return;
       if (interaction.commandName === "clean") {
-        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", ephemeral: true });
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", flags: MessageFlags.Ephemeral });
         const channelPermissions = interaction.channel?.permissionsFor?.(interaction.guild.members.me);
-        if (!channelPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Duck needs Manage Messages in this channel.", ephemeral: true });
+        if (!channelPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Duck needs Manage Messages in this channel.", flags: MessageFlags.Ephemeral });
         const type = interaction.options.getString("type", true); const count = interaction.options.getInteger("count", true);
         const matchers = {
           bots: (item) => item.author?.bot,
@@ -154,8 +154,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           attachments: (item) => Number(item.attachments?.size || 0) > 0,
           embeds: (item) => Number(item.embeds?.length || 0) > 0,
         };
-        if (!matchers[type]) return interaction.reply({ content: "Choose a supported cleanup type.", ephemeral: true });
-        await interaction.deferReply({ ephemeral: true });
+        if (!matchers[type]) return interaction.reply({ content: "Choose a supported cleanup type.", flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const recent = await interaction.channel.messages.fetch({ limit: 100 });
         const matches = recent.filter((item) => !item.pinned && matchers[type](item)).first(count);
         const removed = matches.length ? await interaction.channel.bulkDelete(matches, true) : null;
@@ -165,11 +165,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       if (interaction.commandName === "purgeuser") {
-        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", ephemeral: true });
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "You need Manage Messages to use this command.", flags: MessageFlags.Ephemeral });
         const channelPermissions = interaction.channel?.permissionsFor?.(interaction.guild.members.me);
-        if (!channelPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Duck needs Manage Messages in this channel.", ephemeral: true });
+        if (!channelPermissions?.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Duck needs Manage Messages in this channel.", flags: MessageFlags.Ephemeral });
         const user = interaction.options.getUser("member", true); const count = interaction.options.getInteger("count", true);
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const recent = await interaction.channel.messages.fetch({ limit: 100 });
         const matches = recent.filter((item) => item.author.id === user.id && !item.pinned).first(count);
         const removed = matches.length ? await interaction.channel.bulkDelete(matches, true) : null;
@@ -179,37 +179,37 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       if (interaction.commandName === "modlog") {
-        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ViewAuditLog)) return interaction.reply({ content: "You need View Audit Log to use this command.", ephemeral: true });
+        if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ViewAuditLog)) return interaction.reply({ content: "You need View Audit Log to use this command.", flags: MessageFlags.Ephemeral });
         const count = interaction.options.getInteger("count", false) || 10; const entries = getGuildInsights(interaction.guild).auditLog.slice(0, count);
         const lines = entries.map((entry, index) => `${index + 1}. **${entry.action}** · <t:${Math.floor(Date.parse(entry.createdAt) / 1000)}:R>\n${entry.userId ? `By <@${entry.userId}> · ` : ""}${entry.targetId ? `Target <@${entry.targetId}> · ` : ""}${entry.reason}`);
         const chunks = splitDiscordLines((lines.join("\n\n") || "Duck has no stored moderation events for this server yet.").split(/\r?\n/));
-        await interaction.reply({ content: chunks[0], ephemeral: true, allowedMentions: { parse: [] } });
-        for (const chunk of chunks.slice(1)) await interaction.followUp({ content: chunk, ephemeral: true, allowedMentions: { parse: [] } });
+        await interaction.reply({ content: chunks[0], flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+        for (const chunk of chunks.slice(1)) await interaction.followUp({ content: chunk, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
         return;
       }
       if (interaction.commandName === "duck") {
         const prompt = interaction.options.getString("prompt", false) || "commands";
         const response = await makeSlashDuckResponse(interaction, prompt);
         const chunks = splitDiscordLines(String(response).split(/\r?\n/));
-        await interaction.reply({ content: chunks[0], ephemeral: true });
+        await interaction.reply({ content: chunks[0], flags: MessageFlags.Ephemeral });
         for (const chunk of chunks.slice(1)) {
-          await interaction.followUp({ content: chunk, ephemeral: true });
+          await interaction.followUp({ content: chunk, flags: MessageFlags.Ephemeral });
         }
         return;
       }
 
       if (interaction.commandName === "prefix") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
-          await interaction.reply({ content: "Only an Administrator can change Duck's command prefix.", ephemeral: true });
+          await interaction.reply({ content: "Only an Administrator can change Duck's command prefix.", flags: MessageFlags.Ephemeral });
           return;
         }
         const value = interaction.options.getString("value", true).trim();
         if (!value || value.length > 5 || /[\s/@]/.test(value)) {
-          await interaction.reply({ content: "Use 1-5 visible characters without spaces, `/`, or `@`.", ephemeral: true });
+          await interaction.reply({ content: "Use 1-5 visible characters without spaces, `/`, or `@`.", flags: MessageFlags.Ephemeral });
           return;
         }
         updateGuildSettings(interaction.guildId, { commandPrefix: value });
-        await interaction.reply({ content: `Duck's additional prefix is now \`${value}\`. \`!\`, \`!!\`, and slash commands still work.`, ephemeral: true });
+        await interaction.reply({ content: `Duck's additional prefix is now \`${value}\`. \`!\`, \`!!\`, and slash commands still work.`, flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -220,10 +220,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === "synccommands") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
-          await interaction.reply({ content: "Only an Administrator can synchronize Duck's slash commands.", ephemeral: true });
+          await interaction.reply({ content: "Only an Administrator can synchronize Duck's slash commands.", flags: MessageFlags.Ephemeral });
           return;
         }
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const result = await registerCommands(client, { guildIds: [interaction.guildId], syncGlobal: false });
         await interaction.editReply(`Synchronized ${result.commandCount} slash commands in this server. Discord should show the current options immediately.`);
         return;
@@ -231,7 +231,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === "announce") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
-          await interaction.reply({ content: "Only an Administrator can prepare announcements.", ephemeral: true });
+          await interaction.reply({ content: "Only an Administrator can prepare announcements.", flags: MessageFlags.Ephemeral });
           return;
         }
         const targetChannel = interaction.options.getChannel("channel", false) ?? interaction.channel;
@@ -256,13 +256,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (explicitContent) {
         const slashMessage = makeSlashCommandMessage(interaction, explicitContent);
         if (await handleExplicitCommand(slashMessage, explicitContent)) return;
-        await interaction.reply({ content: "I could not validate that command. Check the target and arguments, then try again.", ephemeral: true });
+        await interaction.reply({ content: "I could not validate that command. Check the target and arguments, then try again.", flags: MessageFlags.Ephemeral });
         return;
       }
 
       if (interaction.commandName === "setup") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
-          await interaction.reply({ content: "Only an Administrator can set up Duck.", ephemeral: true });
+          await interaction.reply({ content: "Only an Administrator can set up Duck.", flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -271,7 +271,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const honeypotChannel = interaction.options.getChannel("honeypot-channel", false);
         const honeypotEnabled = interaction.options.getBoolean("honeypot-enabled", false);
         if (!channel && !quarantineChannel && !honeypotChannel && honeypotEnabled === null) {
-          await interaction.reply({ content: "Choose a moderation, quarantine, or honeypot setting.", ephemeral: true });
+          await interaction.reply({ content: "Choose a moderation, quarantine, or honeypot setting.", flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -286,7 +286,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (!permissions?.has(required)) {
             await interaction.reply({
               content: "Duck needs View Channel, Connect, and Move Members in the selected voice quarantine channel.",
-              ephemeral: true,
+              flags: MessageFlags.Ephemeral,
             });
             return;
           }
@@ -315,7 +315,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             honeypotChannel ? `Honeypot channel set to ${honeypotChannel}.` : null,
             honeypotEnabled !== null ? `Honeypot ${honeypotEnabled ? "enabled" : "disabled"}.` : null,
           ].filter(Boolean).join("\n"),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         if ((honeypotChannel || honeypotEnabled === true) && (honeypotEnabled ?? getGuildSettings(interaction.guildId).automodHoneypotEnabled)) await publishHoneypotCounter(interaction.guild).catch((err) => logWarn("honeypot.counter-publish-failed", { guildId: interaction.guildId, error: err?.message || String(err) }));
         return;
@@ -329,16 +329,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ...makeUtilityHelp().split("\n"),
         ];
         const chunks = splitDiscordLines(lines);
-        await interaction.reply({ content: chunks[0], ephemeral: true });
+        await interaction.reply({ content: chunks[0], flags: MessageFlags.Ephemeral });
         for (const chunk of chunks.slice(1)) {
-          await interaction.followUp({ content: chunk, ephemeral: true });
+          await interaction.followUp({ content: chunk, flags: MessageFlags.Ephemeral });
         }
         return;
       }
 
       if (interaction.commandName === "entry-setup") {
         if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
-          await interaction.reply({ content: "Only an Administrator can configure entry channels.", ephemeral: true });
+          await interaction.reply({ content: "Only an Administrator can configure entry channels.", flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -353,7 +353,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (enabled && !nextCategoryId) {
           await interaction.reply({
             content: "Pick a category when enabling entry channels. Example: `/entry-setup enabled:true category:<category>`",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           return;
         }
@@ -384,7 +384,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `Rules URL: ${updated.rulesUrl || "not set"}`,
             `Announcements URL: ${updated.announcementsUrl || "not set"}`,
           ].join("\n"),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -396,7 +396,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
       await interaction.reply({
         content: "That Duck slash command is not available in this build. Try `/duck prompt:commands`, `/duck-tools`, or `duck commands` in chat.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -424,7 +424,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           guildId: interaction.guildId,
           userId: interaction.user.id,
         });
-        await interaction.reply({ content: "That Duck button is no longer available.", ephemeral: true });
+        await interaction.reply({ content: "That Duck button is no longer available.", flags: MessageFlags.Ephemeral });
       }
     }
     if (interaction.isStringSelectMenu()) {
@@ -437,7 +437,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.deferred && !interaction.replied) {
       await interaction.editReply({ content: "Duck hit an error while handling that action.", components: [] }).catch(() => {});
     } else if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: "Duck hit an error while handling that.", ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: "Duck hit an error while handling that.", flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
 });

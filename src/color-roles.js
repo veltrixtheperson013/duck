@@ -1,4 +1,4 @@
-import { ActionRowBuilder, EmbedBuilder, PermissionsBitField, StringSelectMenuBuilder } from "discord.js";
+import { ActionRowBuilder, EmbedBuilder, MessageFlags, PermissionsBitField, StringSelectMenuBuilder } from "discord.js";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
 import { assertCanPublishTo, isSafeSelfAssignableRole, recordAuditEvent } from "./community.js";
@@ -80,34 +80,34 @@ async function assignColorRole(member, settings, roleId, reason) {
 async function handleColorSelect(interaction) {
   if (!interaction.customId.startsWith("duck_color:")) return false;
   const settings = getPublicGuildSettings(getGuildSettings(interaction.guildId));
-  if (!settings.colorRolesEnabled) return interaction.reply({ content: "Color Dock is disabled in this server.", ephemeral: true });
+  if (!settings.colorRolesEnabled) return interaction.reply({ content: "Color Dock is disabled in this server.", flags: MessageFlags.Ephemeral });
   try {
     const result = await assignColorRole(interaction.member, settings, interaction.values[0], `Color Dock selection by ${interaction.user.tag}`);
     await recordAuditEvent(interaction.guild, { userId: interaction.user.id, targetId: interaction.user.id, action: result.removed ? "Removed name color" : "Selected name color", reason: result.role?.name || "Cleared Color Dock roles", source: "discord" });
-    return interaction.reply({ content: result.removed ? "Your pond color has been cleared." : `${colorOptionEmoji(result.role.color)} Your name color is now **${result.role.name.replace(/^🎨\s*/, "")}**.`, ephemeral: true });
-  } catch (error) { return interaction.reply({ content: error.message, ephemeral: true }); }
+    return interaction.reply({ content: result.removed ? "Your pond color has been cleared." : `${colorOptionEmoji(result.role.color)} Your name color is now **${result.role.name.replace(/^🎨\s*/, "")}**.`, flags: MessageFlags.Ephemeral });
+  } catch (error) { return interaction.reply({ content: error.message, flags: MessageFlags.Ephemeral }); }
 }
 
 async function handleColorCommand(interaction) {
   if (!interaction.guildId || !["color", "colors"].includes(interaction.commandName)) return false;
   const raw = getGuildSettings(interaction.guildId); const settings = getPublicGuildSettings(raw);
-  if (!settings.colorRolesEnabled || !settings.colorRoleOptions.length) return interaction.reply({ content: "Color Dock is not configured in this server.", ephemeral: true });
+  if (!settings.colorRolesEnabled || !settings.colorRoleOptions.length) return interaction.reply({ content: "Color Dock is not configured in this server.", flags: MessageFlags.Ephemeral });
   if (interaction.commandName === "colors") {
     const lines = settings.colorRoleOptions.map((option, index) => `${index + 1}. ${colorOptionEmoji(option.color)} **${option.label}** · \`${hexColor(option.color)}\``);
-    return interaction.reply({ embeds: [new EmbedBuilder().setColor(settings.colorRoleAccent).setTitle(settings.colorRoleTitle).setDescription(lines.join("\n").slice(0, 4_000))], ephemeral: true });
+    return interaction.reply({ embeds: [new EmbedBuilder().setColor(settings.colorRoleAccent).setTitle(settings.colorRoleTitle).setDescription(lines.join("\n").slice(0, 4_000))], flags: MessageFlags.Ephemeral });
   }
   const requested = interaction.options.getString("choice", true).trim();
   let option = settings.colorRoleOptions.find((item) => item.label.toLocaleLowerCase("en-US") === requested.toLocaleLowerCase("en-US") || hexColor(item.color).toLowerCase() === requested.toLowerCase());
   if (requested.toLowerCase() === "random") {
-    if (!hasPlusEntitlement(raw)) return interaction.reply({ content: "Random color shuffle requires Duck Plus.", ephemeral: true });
+    if (!hasPlusEntitlement(raw)) return interaction.reply({ content: "Random color shuffle requires Duck Plus.", flags: MessageFlags.Ephemeral });
     option = settings.colorRoleOptions[Math.floor(Math.random() * settings.colorRoleOptions.length)];
   }
   const roleId = ["remove", "clear", "none"].includes(requested.toLowerCase()) ? "remove" : option?.roleId;
-  if (!roleId) return interaction.reply({ content: "That color is not in this server's palette. Use `/colors` to see the list.", ephemeral: true });
+  if (!roleId) return interaction.reply({ content: "That color is not in this server's palette. Use `/colors` to see the list.", flags: MessageFlags.Ephemeral });
   try {
     const result = await assignColorRole(interaction.member, settings, roleId, `Color command by ${interaction.user.tag}`);
-    return interaction.reply({ content: result.removed ? "Your pond color has been cleared." : `${colorOptionEmoji(result.role.color)} Your name color is now **${option.label}**.`, ephemeral: true });
-  } catch (error) { return interaction.reply({ content: error.message, ephemeral: true }); }
+    return interaction.reply({ content: result.removed ? "Your pond color has been cleared." : `${colorOptionEmoji(result.role.color)} Your name color is now **${option.label}**.`, flags: MessageFlags.Ephemeral });
+  } catch (error) { return interaction.reply({ content: error.message, flags: MessageFlags.Ephemeral }); }
 }
 
 async function applyRandomJoinColor(member) {

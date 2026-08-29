@@ -108,7 +108,7 @@ Prefix and AI forms are `duck voice quarantine @user 30m reason` and `duck voice
 
 - **Ask for approval:** every action waits for Administrator confirmation.
 - **Approve for me (Recommended):** read-only low-risk actions run immediately; medium, high, and critical actions still wait for confirmation.
-- **Agent mode:** every validated action runs immediately. Enabling this mode requires a second Administrator confirmation. Requester permissions, role hierarchy, exact-target validation, and Duck's Discord permissions still apply.
+- **Agent mode:** Duck can iteratively request bounded channel history, search a channel, inspect a specific message, refresh member or role details, and check channel or voice state before preparing an ordered action plan. Every validated action then runs immediately. Enabling this mode requires a second Administrator confirmation. Requester permissions, role hierarchy, server isolation, exact-target validation, and Duck's Discord permissions still apply; the AI receives no shell, filesystem, arbitrary HTTP, database, or self-modification tool.
 
 Utilities include `/commands`, `/ping`, `/test`, `/userinfo`, `/serverinfo`, `/channelinfo`, `/roleinfo`, `/avatar`, `/quote`, `/ship`, `/curse`, `/spinwheel`, `/roll`, `/coinflip`, `/eightball`, `/truth`, `/dare`, `/truthordare`, `/neverhaveiever`, `/hotseat`, `/vibecheck`, `/remind`, `/suggest`, `/rank`, `/leaderboard`, `/join`, `/tts`, and `/leave`.
 
