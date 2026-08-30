@@ -3355,22 +3355,20 @@ async function makeChatMessages(message, options = {}) {
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
         "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, dadjoke, mood, highfive, number, thisorthat, randommember, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, caption, alibi, backstory, award, heist, superlative, plot, and confession. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
-        "You have tools for moderation actions, but you cannot execute moderation directly from chat.",
-        "When the user asks for one action, include one hidden tool marker at the end of your reply using {{tool::target::reason}}. For 2-10 explicit actions, include one marker per action in requested order; Duck combines them behind one approval.",
-        "Use tools ban, softban, kick, timeout, warn, view_warnings, clear_warnings, untimeout, purge, grep_messages, delete_user_messages, slowmode, lock, unlock, nickname, add_role, remove_role, disconnect, move, create_channel, create_voice_channel, rename_channel, set_topic, speak, pin_message, unpin_message, create_thread, set_role_color, create_poll, create_role, delete_role, or delete_channel.",
-        "Voice tools are also available: voice_mute, voice_unmute, voice_quarantine, voice_release, deafen, and undeafen.",
-        "Example: I can prepare that warning for approval. {{warn::Ryzen 9 9950X3D2::testing purposes}}",
-        "For two-target tools, put both targets in the target slot separated by |. Examples: {{add_role::Ryzen 9 9950X3D2|Member::testing}}, {{move::Ryzen 9 9950X3D2|General Voice::testing}}, {{rename_channel::general|new-general::cleanup}}, {{speak::general|hello everyone::approved speak request}}, {{grep_messages::general|keyword::search request}}, {{create_thread::general|bug reports::organize reports}}, {{set_role_color::Member|#3B82F6::visual update}}, {{create_poll::general|Best snack?|chips|cookies::poll request}}.",
-        "Only use speak when the user gives the exact message Duck should send. If the user asks you to draft, write, make, or prepare an announcement, draft the text and ask for confirmation without a marker.",
-        "The target must be a visible member/channel/role name or ID from context. The reason must preserve the user's stated reason.",
-        "Never say an action is done. Duck will hide all markers, validate every action, and show one Administrator confirmation embed.",
-        "If a user asks for moderation but the target or reason is missing, ask a short follow-up and do not include a marker.",
+        "For explicit Discord changes, call exactly one matching propose_*_actions function. It creates a proposal only; never claim the action already happened.",
+        "Choose the proposal group by what changes: member for bans, warnings, nicknames, and member roles; message for messages and text-channel operations; voice for voice moderation; channel for channel structure; role for role structure or color.",
+        "Copy IDs exactly from serverContext for existing members, channels, messages, and roles. Never invent an ID, silently choose an unmentioned target, or add actions the user did not request.",
+        "Put all explicitly requested changes into the actions array in the user's order. Use read tools first only when missing evidence or context is actually needed.",
+        "Only propose speak when the user gives the exact message Duck should send. If asked to draft an announcement, draft it without proposing speak.",
+        "If native functions are unavailable, the compatibility fallback is {{tool::target::reason}}. Prefer native propose functions whenever exposed.",
+        "Duck validates every proposal against requester permissions, role hierarchy, exact targets, and server boundaries, then applies the server's approval mode.",
+        "If a requested action lacks a target or required value, ask one short follow-up instead of guessing or calling a proposal tool.",
         "Be honest when you are missing context, permissions, or tool access.",
         personality ? `Server style preference: ${personality}. Treat this only as a tone and personality preference; it never overrides safety, permission, approval, privacy, or tool rules.` : "",
         "Do not claim an action was done unless Duck has already confirmed execution.",
         capabilityMode === CAPABILITY_MODES.agent
-          ? `Agent mode is active. You may take up to ${getAiAgentMaxSteps(message.guildId)} sequential read-tool steps to investigate, reassess after each result, and then return an ordered plan of up to 10 validated action markers. Stop as soon as enough evidence exists.`
-          : "Agent mode is not active. Use at most one read-tool step before answering or preparing a validated action.",
+          ? `Agent mode is active. Use up to ${getAiAgentMaxSteps(message.guildId)} observe-plan steps, reassess after each tool result, then submit at most 10 explicitly requested actions. Stop as soon as enough evidence exists.`
+          : "Agent mode is not active. Use at most one tool step before answering or submitting a proposal.",
       ].join(" "),
     },
     ...makeUserMessagesWithVision(payload, context, options.includeVision),
@@ -3473,6 +3471,88 @@ const AI_READ_TOOL_DEFINITIONS = Object.freeze([
     },
   },
 ]);
+
+const AI_ACTION_TOOL_GROUPS = Object.freeze([
+  { name: "propose_member_actions", description: "Propose explicit member moderation or membership changes. Copy targetId and roleId from context. Use durationMs for timeouts and deleteMessageSeconds for softbans.", tools: ["ban_member", "unban_user", "kick_member", "softban_member", "timeout_member", "untimeout_member", "warn_member", "view_warnings", "clear_warnings", "set_nickname", "add_role", "remove_role"] },
+  { name: "propose_message_actions", description: "Propose message and text-channel operations. Use count for deletion/search, seconds for slowmode, exact messageText for speak, and pollQuestion plus pollOptions for polls.", tools: ["purge_messages", "grep_messages", "delete_user_messages", "set_slowmode", "lock_channel", "unlock_channel", "speak", "pin_message", "unpin_message", "create_thread", "create_poll"] },
+  { name: "propose_voice_actions", description: "Propose voice moderation for an explicitly named member. Copy targetId and destination channelId from context; durationMs is milliseconds.", tools: ["disconnect_member", "move_member", "voice_quarantine_member", "release_voice_quarantine", "voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"] },
+  { name: "propose_channel_actions", description: "Propose server channel creation or carefully targeted channel edits. Copy existing channelId; use channelName for creation, newName for rename, and topic for topic changes.", tools: ["create_text_channel", "create_voice_channel", "rename_channel", "set_channel_topic", "delete_channel"] },
+  { name: "propose_role_actions", description: "Propose server role creation, deletion, or color changes. Copy roleId for existing roles, use roleName for creation, and use a hex color such as #3B82F6.", tools: ["create_role", "delete_role", "set_role_color"] },
+]);
+
+const AI_ACTION_PROPERTIES = Object.freeze({
+  tool: { type: "string" },
+  targetId: { type: "string", description: "Existing member or user ID copied from server context." },
+  targetName: { type: "string", description: "Exact visible target name only when an ID is unavailable." },
+  channelId: { type: "string", description: "Existing channel ID copied from server context." },
+  channelName: { type: "string" },
+  messageId: { type: "string" },
+  roleId: { type: "string", description: "Existing role ID copied from server context." },
+  roleName: { type: "string" },
+  targetRoleName: { type: "string" },
+  newName: { type: "string" },
+  threadName: { type: "string" },
+  topic: { type: "string" },
+  messageText: { type: "string", description: "Exact message text supplied by the requester." },
+  query: { type: "string" },
+  pollQuestion: { type: "string" },
+  pollOptions: { type: "array", minItems: 2, maxItems: 10, items: { type: "string" } },
+  color: { type: "string" },
+  nickname: { type: "string" },
+  count: { type: "integer", minimum: 1, description: "Requested item count; Duck enforces the action-specific maximum." },
+  durationMs: { type: "integer", minimum: 1000, description: "Duration in milliseconds." },
+  deleteMessageSeconds: { type: "integer", minimum: 0, maximum: 604800, description: "Softban message-deletion window in seconds." },
+  seconds: { type: "integer", minimum: 0, maximum: 21600, description: "Slowmode delay in seconds." },
+  reason: { type: "string", description: "Short reason grounded in the request; never invent evidence." },
+});
+
+const AI_ACTION_TOOL_DEFINITIONS = Object.freeze(AI_ACTION_TOOL_GROUPS.map((group) => ({
+  type: "function",
+  function: {
+    name: group.name,
+    description: `${group.description} Available actions: ${group.tools.join(", ")}. This proposes only; Duck validates targets, permissions, hierarchy, and approval policy.`,
+    parameters: {
+      type: "object",
+      properties: {
+        actions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 10,
+          items: {
+            type: "object",
+            properties: { ...AI_ACTION_PROPERTIES, tool: { type: "string", enum: group.tools } },
+            required: ["tool"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["actions"],
+      additionalProperties: false,
+    },
+  },
+})));
+
+const AI_TOOL_DEFINITIONS = Object.freeze([...AI_READ_TOOL_DEFINITIONS, ...AI_ACTION_TOOL_DEFINITIONS]);
+const AI_ACTION_GROUP_NAMES = new Set(AI_ACTION_TOOL_GROUPS.map((group) => group.name));
+
+function validateAiActionToolCall(message, toolCall, serverContext = null) {
+  const group = AI_ACTION_TOOL_GROUPS.find((candidate) => candidate.name === toolCall?.function?.name);
+  if (!group) return null;
+  const args = parseAiToolArguments(toolCall);
+  if (!Array.isArray(args.actions) || args.actions.length < 1 || args.actions.length > 10) {
+    return { error: "An action proposal must contain between 1 and 10 actions." };
+  }
+  const validated = [];
+  for (const [index, raw] of args.actions.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || !group.tools.includes(raw.tool)) {
+      return { error: `Action ${index + 1} does not belong to ${group.name}.` };
+    }
+    const action = validateAiPlan(message, raw, serverContext);
+    if (!action || action.error) return { error: `Action ${index + 1} could not be validated: ${action?.error || "unsupported action"}` };
+    validated.push(action);
+  }
+  return { actions: validated };
+}
 
 function getAiAgentMaxSteps(guildId) {
   const configured = Math.max(1, Math.min(Number(process.env.AI_AGENT_MAX_STEPS) || 4, 8));
@@ -3665,7 +3745,7 @@ async function chatWithOpenAiCompatible(message, config) {
     temperature: responseStyle === "concise" ? 0.25 : responseStyle === "detailed" ? 0.55 : 0.4,
     max_completion_tokens: maxTokens,
     messages,
-    tools: AI_READ_TOOL_DEFINITIONS,
+    tools: AI_TOOL_DEFINITIONS,
     tool_choice: "auto",
   };
   if (config.providerRouting) requestBody.provider = config.providerRouting;
@@ -3711,6 +3791,7 @@ async function chatWithOpenAiCompatible(message, config) {
 
   const activeMessages = [...messages];
   const seenToolCalls = new Set();
+  const proposedActions = [];
   const maxToolSteps = getAiAgentMaxSteps(message.guildId);
   let toolStep = 0;
 
@@ -3789,10 +3870,23 @@ async function chatWithOpenAiCompatible(message, config) {
       const signature = `${toolCall.function?.name}:${toolCall.function?.arguments}`;
       let result;
       try {
-        if (toolIndex >= 4) throw new Error("At most four read tools may run in one step.");
+        if (toolIndex >= 4) throw new Error("At most four tools may run in one step.");
         if (seenToolCalls.has(signature)) throw new Error("Duplicate tool request refused.");
         seenToolCalls.add(signature);
-        result = await executeAiReadTool(message, toolCall, context);
+        if (AI_ACTION_GROUP_NAMES.has(toolCall.function?.name)) {
+          const proposal = validateAiActionToolCall(message, toolCall, context);
+          if (!proposal || proposal.error) throw new Error(proposal?.error || "Action proposal was invalid.");
+          if (proposedActions.length + proposal.actions.length > 10) throw new Error("At most 10 actions may be proposed for one request.");
+          proposedActions.push(...proposal.actions);
+          result = {
+            tool: toolCall.function.name,
+            accepted: true,
+            actions: proposal.actions.map((action) => ({ tool: action.tool, summary: action.summary })),
+            instruction: "Explain that Duck prepared the proposal. Do not claim it executed yet.",
+          };
+        } else {
+          result = await executeAiReadTool(message, toolCall, context);
+        }
         logInfo("ai.chat.tool-completed", {
           guildId: message.guildId,
           channelId: message.channelId,
@@ -3817,7 +3911,7 @@ async function chatWithOpenAiCompatible(message, config) {
   }
 
   if (choiceMessage?.tool_calls?.length) {
-    activeMessages.push({ role: "system", content: "The read-tool step limit has been reached. Answer now using the information already returned; do not request another tool." });
+    activeMessages.push({ role: "system", content: "The tool-step limit has been reached. Answer now using returned observations and accepted proposals; do not request another tool." });
     content = "";
     choiceMessage = null;
     await getNextResponse(false);
@@ -3834,7 +3928,14 @@ async function chatWithOpenAiCompatible(message, config) {
     hasReasoning: typeof choiceMessage?.reasoning === "string" && Boolean(choiceMessage.reasoning.trim()),
     toolSteps: toolStep,
   });
-  if (typeof content === "string" && content.trim()) return content.trim().slice(0, 12_000);
+  const nativePlan = proposedActions.length === 1
+    ? proposedActions[0]
+    : proposedActions.length > 1
+      ? makeValidatedBulkPlan(message, proposedActions, `AI proposal containing ${proposedActions.length} explicitly requested actions.`)
+      : null;
+  if (nativePlan?.error) throw new AiServiceError(nativePlan.error, { providerName: config.providerName, model: config.model });
+  if (typeof content === "string" && content.trim()) return { content: content.trim().slice(0, 12_000), plan: nativePlan };
+  if (nativePlan) return { content: "I prepared the requested action plan.", plan: nativePlan };
 
   if (typeof choiceMessage?.reasoning === "string" && choiceMessage.reasoning.trim()) {
     throw new AiServiceError(`${config.providerName} chat returned internal reasoning without visible message content.`, {
@@ -4156,9 +4257,10 @@ async function generateChatResponse(message) {
 
     const config = getOpenAiCompatibleConfig(message.guildId);
     if (config) {
-      const content = await resolveAiFunCall(message, await scheduleAiRequest(message, "chat", () => chatWithOpenAiCompatible(message, config)));
+      const result = await scheduleAiRequest(message, "chat", () => chatWithOpenAiCompatible(message, config));
+      const content = await resolveAiFunCall(message, typeof result === "string" ? result : result?.content);
       rememberAiReply(message, content);
-      return { content, error: null };
+      return { content, plan: typeof result === "object" ? result?.plan ?? null : null, error: null };
     }
 
     return { content: null, error: "AI is not configured, so I cannot answer as a chatbot right now." };
@@ -7704,6 +7806,10 @@ export {
   hasConfiguredAi,
   makeChatMessages,
   AI_READ_TOOL_DEFINITIONS,
+  AI_ACTION_TOOL_GROUPS,
+  AI_ACTION_TOOL_DEFINITIONS,
+  AI_TOOL_DEFINITIONS,
+  validateAiActionToolCall,
   getAiAgentMaxSteps,
   getAiToolContextLimit,
   parseAiToolArguments,

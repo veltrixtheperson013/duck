@@ -178,7 +178,9 @@ I have deleted the channel "General".
 
 Duck's AI never calls Discord APIs directly. It returns a JSON plan, Duck validates that plan, and the guild's `/capibility` policy decides whether to execute it or show an Administrator-only confirmation prompt.
 
-For chat responses, Duck also supports hidden inline tool markers. The AI can respond normally and end with:
+OpenAI-compatible chat uses native structured function calls. The model receives six bounded read functions plus five proposal groups for member, message, voice, channel, and role actions. Each proposal is parsed by Duck, matched to the current server, and checked again against requester permissions, role hierarchy, and the guild approval policy. The model can request multiple explicitly requested actions in one ordered proposal, up to ten.
+
+Hidden inline tool markers remain only as a compatibility fallback for providers that do not support native function calling. A fallback response can end with:
 
 ```text
 {{warn::Ryzen 9 9950X3D2::testing purposes}}
@@ -195,12 +197,12 @@ Supported marker tool names include `ban`, `softban`, `kick`, `timeout`, `warn`,
 
 The planner is instructed to:
 
-- Choose exactly one tool for the user's moderation request.
+- Choose one proposal group and include every explicitly requested action in order.
 - Return `{"tool":"none"}` when the request is vague, not moderation, or only a question.
 - Use IDs from the provided server context for existing members, channels, and roles.
 - Never invent IDs.
 - Never target a member unless that member was mentioned in the request.
-- Never chain multiple moderation actions in one plan.
+- Ask a short follow-up when a required target or value is missing instead of guessing.
 
 Tool fields:
 

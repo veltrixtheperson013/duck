@@ -599,7 +599,7 @@ client.on(Events.MessageCreate, async (message) => {
         if (chatResult.content) {
           const parsedToolCall = parseInlineToolCall(planningMessage, chatResult.content);
           toolResponseContent = parsedToolCall.content;
-          plan = parsedToolCall.plan;
+          plan = chatResult.plan ?? parsedToolCall.plan;
           logDebug("message.inline-tool-parsed", {
             messageId: message.id,
             hasPlan: Boolean(plan),
@@ -608,6 +608,8 @@ client.on(Events.MessageCreate, async (message) => {
             hasResponseContent: Boolean(toolResponseContent),
             ms: elapsedMs(messageStartedAt),
           });
+        } else if (chatResult.plan) {
+          plan = chatResult.plan;
         }
       }
 
@@ -661,10 +663,11 @@ client.on(Events.MessageCreate, async (message) => {
 
       if (content && queueMessage) {
         const parsedToolCall = parseInlineToolCall(planningMessage, content);
-        if (parsedToolCall.plan && !parsedToolCall.plan.error) {
-          const needed = TOOL_REQUIREMENTS[parsedToolCall.plan.tool];
+        const discoveredPlan = chatResult.plan ?? parsedToolCall.plan;
+        if (discoveredPlan && !discoveredPlan.error) {
+          const needed = TOOL_REQUIREMENTS[discoveredPlan.tool];
           if (!needed || hasPermission(message.member, needed)) {
-            const hierarchyError = requesterActionBlockReason(planningMessage, parsedToolCall.plan);
+            const hierarchyError = requesterActionBlockReason(planningMessage, discoveredPlan);
             if (hierarchyError) {
               await queueMessage.edit(makeDuckChatPayload(message, hierarchyError, {
                 title: "Hierarchy Check Failed",
@@ -672,25 +675,60 @@ client.on(Events.MessageCreate, async (message) => {
               })).catch(() => {});
               return;
             }
-            await dispatchPlannedAction(message, parsedToolCall.plan, {
+            await dispatchPlannedAction(message, discoveredPlan, {
               messageToEdit: queueMessage,
               content: parsedToolCall.content || "Prepared a moderation plan. Waiting for Administrator confirmation.",
               useEmbed: true,
             });
             logInfo("message.inline-moderation-planned", {
               messageId: message.id,
-              tool: parsedToolCall.plan.tool,
+              tool: discoveredPlan.tool,
               queueMessageId: queueMessage.id,
               ms: elapsedMs(messageStartedAt),
             });
             return;
           }
+          await queueMessage.edit(makeDuckChatPayload(message, `That action requires ${describePermissionRequirement(needed)}.`, {
+            title: "Permission Check Failed",
+            color: DUCK_COLORS.danger,
+          })).catch(() => {});
+          return;
         }
         await sendDuckChatPages(message, parsedToolCall.content || content, {
           color: chatResult.error ? DUCK_COLORS.danger : DUCK_COLORS.brand,
         }, queueMessage);
       } else if (content) {
         const parsedToolCall = parseInlineToolCall(planningMessage, content);
+        const discoveredPlan = chatResult.plan ?? parsedToolCall.plan;
+        if (discoveredPlan && !discoveredPlan.error) {
+          const needed = TOOL_REQUIREMENTS[discoveredPlan.tool];
+          if (needed && !hasPermission(message.member, needed)) {
+            await message.reply(makeDuckChatPayload(message, `That action requires ${describePermissionRequirement(needed)}.`, {
+              title: "Permission Check Failed",
+              color: DUCK_COLORS.danger,
+            }));
+            return;
+          }
+          const hierarchyError = requesterActionBlockReason(planningMessage, discoveredPlan);
+          if (hierarchyError) {
+            await message.reply(makeDuckChatPayload(message, hierarchyError, {
+              title: "Hierarchy Check Failed",
+              color: DUCK_COLORS.danger,
+            }));
+            return;
+          }
+          await dispatchPlannedAction(message, discoveredPlan, {
+            content: parsedToolCall.content || "Prepared a moderation plan. Waiting for Administrator confirmation.",
+            useEmbed: true,
+          });
+          logInfo("message.inline-moderation-planned", {
+            messageId: message.id,
+            tool: discoveredPlan.tool,
+            queueMessageId: null,
+            ms: elapsedMs(messageStartedAt),
+          });
+          return;
+        }
         await sendDuckChatPages(message, parsedToolCall.content || content, {
           color: chatResult.error ? DUCK_COLORS.danger : DUCK_COLORS.brand,
         });

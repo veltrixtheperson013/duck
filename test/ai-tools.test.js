@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AI_ACTION_TOOL_DEFINITIONS,
+  AI_ACTION_TOOL_GROUPS,
   AI_READ_TOOL_DEFINITIONS,
+  AI_TOOL_DEFINITIONS,
   executeAiReadTool,
   getAiToolContextLimit,
   parseAiToolArguments,
   serializeAiToolResult,
+  validateAiActionToolCall,
 } from "../src/core.js";
+import { TOOL_DEFINITIONS } from "../src/constants.js";
 
 const GUILD_ID = "123456789012345678";
 const CHANNEL_ID = "223456789012345678";
@@ -65,6 +70,45 @@ test("AI read tools expose only bounded server-context operations", () => {
   }
   assert.equal(getAiToolContextLimit(999), 100);
   assert.equal(getAiToolContextLimit(-5), 1);
+});
+
+test("AI action tools expose every supported action exactly once", () => {
+  const groupedActions = AI_ACTION_TOOL_GROUPS.flatMap((group) => group.tools);
+  assert.equal(new Set(groupedActions).size, groupedActions.length);
+  assert.deepEqual([...groupedActions].sort(), TOOL_DEFINITIONS.map((tool) => tool.name).sort());
+  assert.equal(AI_ACTION_TOOL_DEFINITIONS.length, 5);
+  assert.equal(AI_TOOL_DEFINITIONS.length, AI_READ_TOOL_DEFINITIONS.length + AI_ACTION_TOOL_DEFINITIONS.length);
+  for (const definition of AI_ACTION_TOOL_DEFINITIONS) {
+    assert.equal(definition.type, "function");
+    assert.equal(definition.function.parameters.additionalProperties, false);
+    assert.equal(definition.function.parameters.properties.actions.maxItems, 10);
+    assert.equal(definition.function.parameters.properties.actions.items.additionalProperties, false);
+  }
+});
+
+test("AI action proposals are group checked and validated into local plans", () => {
+  const message = makeMessageFixture();
+  message.content = "Duck, purge 7 messages because spam";
+  const context = { members: [], channels: [], roles: [] };
+  const valid = validateAiActionToolCall(message, {
+    function: {
+      name: "propose_message_actions",
+      arguments: JSON.stringify({ actions: [{ tool: "purge_messages", count: 7, reason: "spam" }] }),
+    },
+  }, context);
+  assert.equal(valid.error, undefined);
+  assert.equal(valid.actions.length, 1);
+  assert.equal(valid.actions[0].tool, "purge_messages");
+  assert.equal(valid.actions[0].count, 7);
+  assert.equal(valid.actions[0].channelId, CHANNEL_ID);
+
+  const wrongGroup = validateAiActionToolCall(message, {
+    function: {
+      name: "propose_message_actions",
+      arguments: JSON.stringify({ actions: [{ tool: "ban_member", targetId: "423456789012345678" }] }),
+    },
+  }, context);
+  assert.match(wrongGroup.error, /does not belong/);
 });
 
 test("AI tool arguments and results are parsed and bounded", () => {
