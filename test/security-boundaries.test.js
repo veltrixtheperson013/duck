@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { PermissionsBitField } from "discord.js";
+import { TOOL_REQUIREMENTS } from "../src/constants.js";
+import { registerCommands } from "../src/core.js";
 
 const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
@@ -44,6 +47,15 @@ test("command registration has a single configured scope", () => {
   assert.match(implementation, /getCommandScope\(\)/);
   assert.match(implementation, /scope === "global" \? body : \[\]/);
   assert.match(implementation, /scope === "guild" \? body : \[\]/);
+});
+
+test("channel lock correctly requires Manage Roles", async () => {
+  assert.equal(TOOL_REQUIREMENTS.lock_channel, PermissionsBitField.Flags.ManageRoles);
+  assert.equal(TOOL_REQUIREMENTS.unlock_channel, PermissionsBitField.Flags.ManageRoles);
+  const commands = await registerCommands({ user: { id: "validation" } }, { dryRun: true });
+  for (const name of ["lock", "unlock"]) {
+    assert.equal(commands.find((command) => command.name === name).default_member_permissions, String(PermissionsBitField.Flags.ManageRoles));
+  }
 });
 
 test("custom actions cannot execute arbitrary uploaded code", () => {

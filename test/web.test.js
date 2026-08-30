@@ -60,10 +60,10 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
     const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/);
 
-    const versionedCss = await fetch(`${origin}/styles.css?v=20260848`, { headers: { "Accept-Encoding": "identity" } });
+    const versionedCss = await fetch(`${origin}/styles.css?v=20260849`, { headers: { "Accept-Encoding": "identity" } });
     assert.equal(versionedCss.status, 200);
     assert.equal(versionedCss.headers.get("cache-control"), "public, max-age=31536000, immutable");
-    const brotliCss = await fetch(`${origin}/styles.css?v=20260848`, { headers: { "Accept-Encoding": "br" } });
+    const brotliCss = await fetch(`${origin}/styles.css?v=20260849`, { headers: { "Accept-Encoding": "br" } });
     assert.equal(brotliCss.status, 200);
     assert.equal(brotliCss.headers.get("content-encoding"), "br");
     assert.match(await brotliCss.text(), /2026 public-site rebuild/);
@@ -92,8 +92,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260848/);
-    assert.match(dashboardText, /dashboard\.js\?v=20260847/);
+    assert.match(dashboardText, /styles\.css\?v=20260849/);
+    assert.match(dashboardText, /dashboard\.js\?v=20260848/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
     assert.match(dashboardText, /data-color-panel/);

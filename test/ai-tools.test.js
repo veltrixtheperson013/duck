@@ -12,6 +12,7 @@ import {
   validateAiActionToolCall,
 } from "../src/core.js";
 import { TOOL_DEFINITIONS } from "../src/constants.js";
+import { summarizeEmbedsForAi } from "../src/ai-content.js";
 
 const GUILD_ID = "123456789012345678";
 const CHANNEL_ID = "223456789012345678";
@@ -24,6 +25,7 @@ function makeMessageFixture({ readable = true } = {}) {
     createdTimestamp: Date.parse("2026-08-29T12:00:00.000Z"),
     cleanContent: "Please inspect this channel safely",
     attachments: new Map(),
+    embeds: [{ title: "Server rules", description: "Be respectful.", fields: [{ name: "Rule 2", value: "No spam." }] }],
   };
   const channel = {
     id: CHANNEL_ID,
@@ -134,7 +136,15 @@ test("channel context tool enforces supplied IDs and Discord visibility", async 
   assert.equal(result.channel.id, CHANNEL_ID);
   assert.equal(result.messages.length, 1);
   assert.match(result.messages[0].content, /inspect this channel/);
+  assert.deepEqual(result.messages[0].embeds, [{ title: "Server rules", description: "Be respectful.", fields: [{ name: "Rule 2", value: "No spam." }] }]);
 
   await assert.rejects(() => executeAiReadTool(message, call, { availableChannels: [] }), /not supplied/);
   await assert.rejects(() => executeAiReadTool(makeMessageFixture({ readable: false }), call, context), /cannot view/);
+});
+
+test("AI embed summaries include readable rule text and stay bounded", () => {
+  const summaries = summarizeEmbedsForAi([{ author: { name: "Duck rules" }, title: "Welcome", description: "x".repeat(2_000), fields: [{ name: "Rule 1", value: "No scams" }], footer: { text: "Read carefully" } }], { maxChars: 300 });
+  assert.equal(summaries[0].author, "Duck rules");
+  assert.equal(summaries[0].title, "Welcome");
+  assert.ok(JSON.stringify(summaries).length < 500);
 });

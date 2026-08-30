@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseScanResult, requestSuggestion, shouldQueueScan } from "../src/ai-scan.js";
+import { buildScanInput, getServerRules, parseScanResult, requestSuggestion, shouldQueueScan } from "../src/ai-scan.js";
 
 test("AI scanner accepts only bounded advisory flags", () => {
   assert.deepEqual(parseScanResult('{"flag":true,"category":"harassment","confidence":0.91,"reason":"Targeted insults."}'), { category: "harassment", confidence: 0.91, reason: "Targeted insults." });
@@ -34,4 +34,25 @@ test("AI scanner rejects unapproved models and preserves selected-model privacy 
   const body = JSON.parse(request.options.body);
   assert.equal(body.model, "tencent/hy3");
   assert.deepEqual(body.provider, { order: ["tencent"], allow_fallbacks: false, data_collection: "deny" });
+});
+
+test("AI scanner reads recent and pinned rule embeds", async () => {
+  const recentRule = { id: "recent", createdTimestamp: 2, content: "", embeds: [{ title: "General rules", fields: [{ name: "Rule 1", value: "No harassment" }] }] };
+  const pinnedRule = { id: "pinned", createdTimestamp: 1, content: "", embeds: [{ description: "No advertising or scams", footer: { text: "Applies everywhere" } }] };
+  const channel = { messages: { fetch: async () => new Map([[recentRule.id, recentRule]]), fetchPins: async () => ({ items: [{ message: pinnedRule }] }) } };
+  const message = { guildId: "810000000000000001", guild: { channels: { cache: new Map([["810000000000000002", channel]]), fetch: async () => null } } };
+  const rules = await getServerRules(message, { aiScanRulesChannelId: "810000000000000002" }, 1_000);
+  assert.match(rules, /No advertising or scams/);
+  assert.match(rules, /General rules/);
+  assert.match(rules, /No harassment/);
+});
+
+test("AI scanner clearly separates nearby context from the target message", () => {
+  const nearby = { id: "820000000000000003", createdTimestamp: 1, author: { id: "820000000000000004", bot: false }, content: "That was a quoted example", embeds: [] };
+  const target = { id: "820000000000000005", createdTimestamp: 2, author: { id: "820000000000000006" }, content: "I am reporting the quote, not endorsing it", embeds: [], channel: { messages: { cache: new Map([[nearby.id, nearby]]) } } };
+  const input = buildScanInput(target);
+  assert.match(input, /<nearby_context>/);
+  assert.match(input, /quoted example/);
+  assert.match(input, /<target_message>/);
+  assert.match(input, /reporting the quote/);
 });
