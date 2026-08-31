@@ -7,6 +7,7 @@ data/warnings.json
 data/quotes.json
 data/captcha-dataset/
 data/children.json
+data/scam-image-hashes.json
 child-data/
 child/child-data/
 *.log

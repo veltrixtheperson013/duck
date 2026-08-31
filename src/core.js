@@ -7375,7 +7375,7 @@ async function registerCommands(client, options = {}) {
         .addChannelTypes(ChannelType.GuildVoice)
         .setRequired(false),
     )
-    .addChannelOption((option) => option.setName("honeypot-channel").setDescription("Trap channel: first message softbans; second permanently bans.").addChannelTypes(ChannelType.GuildText).setRequired(false))
+    .addChannelOption((option) => option.setName("honeypot-channel").setDescription("Trap channel: any non-staff message triggers a permanent ban.").addChannelTypes(ChannelType.GuildText).setRequired(false))
     .addBooleanOption((option) => option.setName("honeypot-enabled").setDescription("Enable or disable the configured honeypot channel.").setRequired(false));
 
   const toolsCommand = new SlashCommandBuilder()

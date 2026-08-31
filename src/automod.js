@@ -1,13 +1,25 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionsBitField } from "discord.js";
+import { EmbedBuilder, PermissionsBitField } from "discord.js";
 import { addMemberWarning, getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings } from "./dashboard-config.js";
 import { assertCanPublishTo, recordAuditEvent } from "./community.js";
+import { scanScamImages } from "./scam-images.js";
 
 const SWEAR_WORDS = ["fuck", "shit", "bitch", "cunt", "nigger", "nigga", "faggot", "retard"];
 const SEXUAL_TERMS = ["porn", "hentai", "nudes", "nude", "onlyfans", "sex tape", "rule34", "r34", "xxx"];
 const DISCORD_INVITE_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/[a-z0-9-]+/i;
 const URL_PATTERN = /\b(?:https?:\/\/|www\.)\S+/i;
 const DANGEROUS_ATTACHMENT_PATTERN = /\.(?:exe|scr|bat|cmd|com|msi|msp|jar|vbs|vbe|jse?|wsf|wsh|ps1|reg|lnk)(?:$|[?#])/i;
+const SCAM_LINK_PATTERN = /(?:https?:\/\/|www\.|\b[a-z0-9][a-z0-9-]{0,62}\.(?:com|net|org|gg|io|co|app|xyz|link|site|top|shop|live|click|info|ru|cn|me)(?:\b|\/))/i;
+const KNOWN_CRYPTO_SCAM_DOMAINS = ["gezowin.com", "fomawin.com", "soakwin.com", "buzawin.com", "fuxowin.com", "zesowin.com", "fyzwin.com", "jazawin.com", "linktr.ee/beastgames"];
+const SCAM_SCORE_SIGNALS = [
+  [/\bgiveaway\b/i, 0.15], [/\bpromo\s*code\b/i, 0.20], [/\bbonus\s*code\b/i, 0.15],
+  [/\bactivate\s+(?:the\s+)?code\b/i, 0.20], [/\bwithdrawal\s+success\b/i, 0.30],
+  [/\bwithdraw\s+(?:your\s+|the\s+)?bonus\b/i, 0.20], [/\bpost\s+will\s+be\s+deleted\b/i, 0.35],
+  [/\bonly\s+the\s+fastest\b/i, 0.30], [/\bcrypto(?:currency)?\s+casino\b/i, 0.25],
+  [/\$\s?\d{1,3}(?:,\d{3})*\s+(?:bonus|to everyone|for everyone)\b/i, 0.25],
+  [/\brakeback\b/i, 0.10], [/\bvip[\s-]?club\b/i, 0.05],
+  [/\bregister(?:ing|s)?\s+(?:will\s+)?(?:get|receive)\b/i, 0.15],
+];
 const violationCounts = new Map();
 const messageCooldowns = new Map();
 const actionCooldowns = new Map();
@@ -21,6 +33,66 @@ function normalizedText(value) {
 function includesTerm(text, terms) {
   const haystack = ` ${normalizedText(text).replace(/[^\p{L}\p{N}]+/gu, " ")} `;
   return terms.some((term) => haystack.includes(` ${normalizedText(term).replace(/[^\p{L}\p{N}]+/gu, " ")} `));
+}
+
+function scamText(value) {
+  return normalizedText(value)
+    .replace(/\b(?:hxxp|hxxps)\s*:\s*\/\//g, "https://")
+    .replace(/(?:\[|\()\s*(?:\.|dot)\s*(?:\]|\))/g, ".")
+    .replace(/\s+dot\s+/g, ".")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function detectScam(message) {
+  const content = scamText(message?.content);
+  if (!content) return null;
+  const warningContext = /\b(?:beware|warning|warn(?:ing|ed)?|avoid|report(?:ing|ed)?|block(?:ed|ing)?|never|do not|don't|dont)\b.{0,90}\b(?:scam|scammer|phish|fraud|fake|suspicious)\b/i.test(content)
+    || /\b(?:scam|scammer|phish|fraud|fake|suspicious)\b.{0,90}\b(?:beware|warning|avoid|report|block|never|do not|don't|dont)\b/i.test(content);
+  const secretRequestText = content.replace(/\b(?:never|do not|don't|dont)\s+(?:send|share|give|enter|type|paste|provide|upload)\b.{0,55}\b(?:password|passcode|auth(?:entication)? token|discord token|session token|seed phrase|recovery phrase|private key|backup codes?)\b/gi, "");
+  const asksForSecret = /\b(?:send|share|give|enter|type|paste|provide|upload|confirm)\b.{0,55}\b(?:password|passcode|auth(?:entication)? token|discord token|session token|seed phrase|recovery phrase|private key|backup codes?)\b/i.test(secretRequestText)
+    || /\b(?:password|passcode|auth(?:entication)? token|discord token|session token|seed phrase|recovery phrase|private key|backup codes?)\b.{0,55}\b(?:to me|here|below|into (?:this|the)|for verification)\b/i.test(secretRequestText);
+  if (asksForSecret && !warningContext) return "Credential or recovery-secret theft attempt";
+
+  const hasLink = SCAM_LINK_PATTERN.test(content);
+  const celebrityCrypto = /\b(?:mr[\s._-]*beast|elon musk|tesla|spacex|youtube|coinbase|binance)\b/i.test(content)
+    && /\b(?:bitcoin|btc|ethereum|eth|crypto|usdt|wallet|airdrop|giveaway)\b/i.test(content)
+    && /\b(?:double|send|claim|receive|return|bonus|giveaway|livestream|live stream)\b/i.test(content);
+  if (celebrityCrypto && (hasLink || /\b(?:send|deposit|transfer)\b.{0,45}\b(?:btc|eth|crypto|usdt|wallet address)\b/i.test(content)) && !warningContext) return "Celebrity crypto giveaway impersonation";
+
+  const cryptoDoubling = /\b(?:double|triple|2x|3x|guaranteed return|instant profit)\b/i.test(content)
+    && /\b(?:send|deposit|transfer)\b.{0,55}\b(?:bitcoin|btc|ethereum|eth|crypto|usdt|solana|sol|wallet|address)\b/i.test(content);
+  if (cryptoDoubling && !warningContext) return "Crypto doubling or guaranteed-return scam";
+
+  const lure = /\b(?:free|gift(?:ed)?|giveaway|winner|won|airdrop|bonus|reward|promo(?:tion)?|nitro|steam gift|gift card|robux|v-?bucks|crypto giveaway|limited offer)\b/i.test(content);
+  const action = /\b(?:claim|redeem|click|visit|open|verify|login|log in|sign in|connect|sync|validate|activate|scan)\b/i.test(content);
+  if (hasLink && lure && action && !warningContext) return "Suspicious reward or giveaway link";
+
+  const fakeReport = /\b(?:accidentally|mistakenly|mass)\s+report(?:ed|ing)?\b/i.test(content)
+    && /\b(?:contact|add|message|dm|reach)\b/i.test(content)
+    && /\b(?:admin|administrator|moderator|support|staff|steam employee|discord employee)\b/i.test(content);
+  if (fakeReport && !warningContext) return "Fake report or support impersonation script";
+
+  const accountThreat = /\b(?:account|profile|server)\b.{0,55}\b(?:suspend(?:ed)?|disable(?:d)?|delete(?:d)?|ban(?:ned)?|terminate(?:d)?|compromised|locked)\b/i.test(content)
+    && /\b(?:verify|appeal|restore|recover|secure|unlock)\b/i.test(content);
+  if (hasLink && accountThreat && !warningContext) return "Urgent account-verification scam";
+
+  const walletTrap = /\b(?:connect|sync|validate|verify|authenticate|restore)\b.{0,35}\b(?:wallet|seed|assets?)\b/i.test(content)
+    || /\b(?:wallet|seed|assets?)\b.{0,35}\b(?:connect|sync|validate|verify|authenticate|restore)\b/i.test(content);
+  if (hasLink && walletTrap && !warningContext) return "Suspicious wallet-connection link";
+
+  const qrBait = /\bscan\b.{0,35}\b(?:qr|code)\b/i.test(content) || /\b(?:qr|code)\b.{0,35}\bscan\b/i.test(content);
+  if (qrBait && /\b(?:login|log in|sign in|verify|nitro|gift|wallet|account)\b/i.test(content) && !warningContext) return "Suspicious QR login or verification request";
+
+  if (!warningContext) {
+    let score = 0;
+    for (const [pattern, weight] of SCAM_SCORE_SIGNALS) if (pattern.test(content)) score += weight;
+    if (KNOWN_CRYPTO_SCAM_DOMAINS.some((domain) => content.includes(domain))) score += 0.5;
+    else if (/\b[a-z]{3,8}win\.(?:com|net|org|io)\b/i.test(content)) score += 0.35;
+    if (/\b(?:mr[\s._-]*beast|elon\s*musk|jeff\s*bezos|kim\s*kardashian|kanye\s*west|taylor\s*swift|binance|coinbase)\b/i.test(content) && score > 0) score += 0.3;
+    if (score >= 0.6) return "Multi-signal crypto promotion scam";
+  }
+  return null;
 }
 
 function pruneRuntimeMaps(now = Date.now()) {
@@ -80,6 +152,8 @@ function detectViolation(message, settings) {
   const content = String(message.content || "");
   const attachmentNameList = [...(message.attachments?.values?.() || [])].map((item) => item.name || "");
   const attachmentNames = attachmentNameList.join(" ");
+  const scam = detectScam(message);
+  if (scam) return scam;
   if (settings.automodSwearFilter && includesTerm(content, SWEAR_WORDS)) return "Blocked language";
   if (settings.automodNsfwFilter && includesTerm(`${content} ${attachmentNames}`, SEXUAL_TERMS)) return "Sexual or NSFW content";
   if (settings.automodInviteFilter && DISCORD_INVITE_PATTERN.test(content)) return "Discord invite link";
@@ -209,11 +283,10 @@ function honeypotCounterEmbed(guild, stats) {
     .setColor(0xd95d54)
     .setAuthor({ name: "Duck Sentry", iconURL: guild.client.user.displayAvatarURL() })
     .setTitle("🍯 Honeypot watch")
-    .setDescription("This channel is an active moderation trap. Sending a message triggers automatic removal. Staff with Ban Members are exempt.")
+    .setDescription("This channel is an active moderation trap. Sending a message triggers an immediate permanent ban and up to seven days of message cleanup. Staff with Ban Members are exempt.")
     .addFields(
       { name: "Caught", value: `**${stats.total.toLocaleString()}**`, inline: true },
-      { name: "Returned once", value: `**${stats.firstTraps.toLocaleString()}**`, inline: true },
-      { name: "Repeat bans", value: `**${stats.permanentBans.toLocaleString()}**`, inline: true },
+      { name: "Permanent bans", value: `**${stats.permanentBans.toLocaleString()}**`, inline: true },
       { name: "Last activity", value: Number.isFinite(lastAt) ? `<t:${Math.floor(lastAt / 1_000)}:R>` : "No traps triggered yet", inline: false },
     )
     .setFooter({ text: `${guild.name} • persistent counter • Duck verifies permissions live` })
@@ -236,7 +309,7 @@ async function publishHoneypotCounter(guild, statsOverride = null, persist = upd
   return counter;
 }
 
-async function incrementHoneypotCounter(message, outcome, storedSettings, persist = updateGuildSettings) {
+async function incrementHoneypotCounter(message, storedSettings, persist = updateGuildSettings) {
   const guildId = message.guildId;
   const previousTask = honeypotCounterLocks.get(guildId) || Promise.resolve();
   const task = previousTask.catch(() => null).then(async () => {
@@ -244,8 +317,7 @@ async function incrementHoneypotCounter(message, outcome, storedSettings, persis
     const base = fresh.honeypotStats || storedSettings.honeypotStats;
     const stats = normalizedHoneypotStats(base);
     stats.total += 1;
-    if (outcome === "permanent") stats.permanentBans += 1;
-    else stats.firstTraps += 1;
+    stats.permanentBans += 1;
     stats.lastTriggeredAt = new Date().toISOString();
     stats.lastUserId = message.author.id;
     persist(guildId, { honeypotStats: stats });
@@ -264,18 +336,10 @@ async function handleHoneypot(message, settings, storedSettings = {}, persist = 
   if (honeypotProcessing.has(key)) return true;
   honeypotProcessing.add(key);
   try {
-    const previous = Array.isArray(storedSettings.honeypotTriggeredUserIds) && storedSettings.honeypotTriggeredUserIds.includes(member.id);
-    const reason = previous ? "Duck honeypot: repeated entry after softban" : "Duck honeypot: message in protected trap channel";
-    if (previous) { await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason }); await incrementHoneypotCounter(message, "permanent", storedSettings, persist); await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot permanent ban", reason, source: "automod" }); return true; }
-    const invite = await message.channel.createInvite({ maxAge: 86_400, maxUses: 1, unique: true, reason: "Duck honeypot one-time return invitation" }).catch(() => null);
-    const latestTriggered = getGuildSettings(message.guildId).honeypotTriggeredUserIds;
-    const triggered = [...new Set([...(Array.isArray(latestTriggered) ? latestTriggered : Array.isArray(storedSettings.honeypotTriggeredUserIds) ? storedSettings.honeypotTriggeredUserIds : []), member.id])].slice(-1_000);
-    persist(message.guildId, { honeypotTriggeredUserIds: triggered });
+    const reason = "Duck honeypot: message in protected trap channel";
     await message.guild.members.ban(member.id, { deleteMessageSeconds: 604_800, reason });
-    await message.guild.members.unban(member.id, "Duck honeypot first trigger: one return allowed");
-    await incrementHoneypotCounter(message, "first", { ...storedSettings, honeypotTriggeredUserIds: triggered }, persist);
-    await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot softban", reason, source: "automod" });
-    if (invite?.url) await message.author.send({ content: `You triggered the honeypot in **${message.guild.name}**. You may return once; speaking in that channel again will permanently ban you.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Return to server").setURL(invite.url))] }).catch(() => null);
+    await incrementHoneypotCounter(message, storedSettings, persist);
+    await recordAuditEvent(message.guild, { userId: message.client?.user?.id, targetId: member.id, action: "Honeypot permanent ban", reason, source: "automod" });
     return true;
   } finally { honeypotProcessing.delete(key); }
 }
@@ -288,7 +352,10 @@ async function handleAutomodAndCustomActions(message) {
   if (await handleRateGuard(message, settings)) return true;
   if (settings.automodEnabled) {
     const staffExempt = message.member?.permissions?.has(PermissionsBitField.Flags.ManageMessages);
-    const violation = staffExempt ? null : detectViolation(message, settings);
+    const textScam = staffExempt ? null : detectScam(message);
+    let violation = staffExempt ? null : detectViolation(message, settings);
+    if (!staffExempt && textScam) await scanScamImages(message, textScam);
+    else if (!staffExempt && !violation) violation = await scanScamImages(message, null, (content) => detectScam({ content }));
     if (violation) {
       await message.delete().catch(() => null);
       await escalateViolation(message, settings, violation);
@@ -298,4 +365,4 @@ async function handleAutomodAndCustomActions(message) {
   return handleCustomActions(message, settings);
 }
 
-export { customActionMatches, detectViolation, handleAutomodAndCustomActions, handleHoneypot, honeypotCounterEmbed, includesTerm, normalizedHoneypotStats, publishHoneypotCounter };
+export { customActionMatches, detectScam, detectViolation, handleAutomodAndCustomActions, handleHoneypot, honeypotCounterEmbed, includesTerm, normalizedHoneypotStats, publishHoneypotCounter };

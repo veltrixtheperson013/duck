@@ -9,7 +9,7 @@
     "start": "node .",
     "preview": "node scripts/preview-website.js",
     "setup:captcha": "python3 scripts/install-captcha-dataset.py",
-    "check": "node --check src/index.js && node --check src/child-control.js && node --check child/src/protocol.js && node --check child/src/agent.js && node --check src/ai-content.js && node --check src/core.js && node --check src/runtime.js && node --check src/clusters.js && node --check src/deployments.js && node --check src/automod.js && node --check src/ai-scan.js && node --check src/captcha.js && node --check src/community.js && node --check src/community-studio.js && node --check src/color-roles.js && node --check src/dashboard-config.js && node --check src/operator-state.js && node --check src/admin.js && node --check src/stripe.js && node --check src/web.js && node --check public/theme-init.js && node --check public/site.js && node --check public/dashboard.js && node --check public/clusters.js && node --check public/billing.js && node --check admin-public/admin.js && node --check admin-public/unlock.js && node --check scripts/preview-website.js",
+    "check": "node --check src/index.js && node --check src/child-control.js && node --check child/src/protocol.js && node --check child/src/agent.js && node --check src/ai-content.js && node --check src/core.js && node --check src/runtime.js && node --check src/clusters.js && node --check src/deployments.js && node --check src/automod.js && node --check src/scam-images.js && node --check src/ai-scan.js && node --check src/captcha.js && node --check src/community.js && node --check src/community-studio.js && node --check src/color-roles.js && node --check src/dashboard-config.js && node --check src/operator-state.js && node --check src/admin.js && node --check src/stripe.js && node --check src/web.js && node --check public/theme-init.js && node --check public/site.js && node --check public/dashboard.js && node --check public/clusters.js && node --check public/billing.js && node --check admin-public/admin.js && node --check admin-public/unlock.js && node --check scripts/preview-website.js",
     "check:commands": "node . --check-commands",
     "lint": "eslint src test",
     "test": "node --test"
@@ -17,10 +17,12 @@
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
     "@noble/ciphers": "^1.2.1",
+    "@tesseract.js-data/eng": "^1.0.0",
     "discord.js": "^14.21.0",
     "ffmpeg-static": "^5.2.0",
     "opusscript": "^0.1.1",
-    "stripe": "^18.5.0"
+    "stripe": "^18.5.0",
+    "tesseract.js": "^7.0.0"
   },
   "overrides": {
     "undici": "^6.27.0"

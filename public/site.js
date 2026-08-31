@@ -3,7 +3,6 @@ const reducedMotion = motionPreference.matches;
 const runWhenIdle = (task, timeout = 1_200) => "requestIdleCallback" in window ? window.requestIdleCallback(task, { timeout }) : window.setTimeout(task, 1);
 const duckThemes = [
   { id: "classic", name: "Classic Duck", icon: "🦆", copy: "Warm paper and pond green." },
-  { id: "light", name: "Daylight", icon: "☀️", copy: "Bright, crisp, and quiet." },
   { id: "dark", name: "Midnight", icon: "🌙", copy: "Low-glare charcoal and mint." },
   { id: "galaxy", name: "Milky Way", icon: "🌌", copy: "Vivid starlight, cosmic dust, and a living galactic band." },
   { id: "matrix", name: "Matrix Rain", icon: "⌨️", copy: "Terminal glass and falling code." },
@@ -42,7 +41,7 @@ function installThemeControls() {
   let closeTimer;
   const close = (restoreFocus = false) => { if (panel.hidden) return; window.clearTimeout(closeTimer); panel.classList.add("is-closing"); picker.setAttribute("aria-expanded", "false"); closeTimer = window.setTimeout(() => { panel.hidden = true; panel.classList.remove("is-closing"); if (restoreFocus) picker.focus(); }, reducedMotion ? 0 : 160); };
   const open = () => { window.clearTimeout(closeTimer); panel.hidden = false; panel.classList.remove("is-closing"); picker.setAttribute("aria-expanded", "true"); (buttons.get(currentTheme()) || buttons.values().next().value)?.focus(); };
-  mode.addEventListener("click", () => apply(darkThemes.has(currentTheme()) ? "light" : "dark")); picker.addEventListener("click", (event) => { event.stopPropagation(); if (panel.hidden || panel.classList.contains("is-closing")) open(); else close(); }); panel.addEventListener("click", (event) => event.stopPropagation()); document.addEventListener("click", () => close()); document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(true); }); for (const [theme, button] of buttons) button.addEventListener("click", () => { apply(theme); close(true); });
+  mode.addEventListener("click", () => apply(darkThemes.has(currentTheme()) ? "classic" : "dark")); picker.addEventListener("click", (event) => { event.stopPropagation(); if (panel.hidden || panel.classList.contains("is-closing")) open(); else close(); }); panel.addEventListener("click", (event) => event.stopPropagation()); document.addEventListener("click", () => close()); document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(true); }); for (const [theme, button] of buttons) button.addEventListener("click", () => { apply(theme); close(true); });
   runWhenIdle(() => buildAtmosphere(currentTheme())); refresh();
 }
 

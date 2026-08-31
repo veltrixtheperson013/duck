@@ -58,12 +58,12 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.status, 200);
     assert.match(css.headers.get("content-type"), /^text\/css/);
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
-    const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/);
+    const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/); assert.match(cssText, /\.public-site \.cta h2 \{ color:#fff; \}/); assert.match(cssText, /\.public-site \.cta \.eyebrow \{ color:#9be1bd; \}/);
 
-    const versionedCss = await fetch(`${origin}/styles.css?v=20260849`, { headers: { "Accept-Encoding": "identity" } });
+    const versionedCss = await fetch(`${origin}/styles.css?v=20260851`, { headers: { "Accept-Encoding": "identity" } });
     assert.equal(versionedCss.status, 200);
     assert.equal(versionedCss.headers.get("cache-control"), "public, max-age=31536000, immutable");
-    const brotliCss = await fetch(`${origin}/styles.css?v=20260849`, { headers: { "Accept-Encoding": "br" } });
+    const brotliCss = await fetch(`${origin}/styles.css?v=20260851`, { headers: { "Accept-Encoding": "br" } });
     assert.equal(brotliCss.status, 200);
     assert.equal(brotliCss.headers.get("content-encoding"), "br");
     assert.match(await brotliCss.text(), /2026 public-site rebuild/);
@@ -71,9 +71,14 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     const script = await fetch(`${origin}/site.js`);
     assert.equal(script.status, 200);
     assert.match(script.headers.get("content-type"), /^text\/javascript/);
+    const scriptText = await script.text();
+    assert.match(scriptText, /Classic Duck/);
+    assert.doesNotMatch(scriptText, /Daylight|id: "light"/);
     const themeInit = await fetch(`${origin}/theme-init.js`);
     assert.equal(themeInit.status, 200);
-    assert.match(await themeInit.text(), /duck-theme/);
+    const themeInitText = await themeInit.text();
+    assert.match(themeInitText, /duck-theme/);
+    assert.match(themeInitText, /saved === "light"/);
 
     const xpBackground = await fetch(`${origin}/xp-background.jpg`);
     assert.equal(xpBackground.status, 200);
@@ -91,8 +96,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /theme-init\.js\?v=20260840/);
-    assert.match(dashboardText, /styles\.css\?v=20260849/);
+    assert.match(dashboardText, /theme-init\.js\?v=20260841/);
+    assert.match(dashboardText, /styles\.css\?v=20260851/);
     assert.match(dashboardText, /dashboard\.js\?v=20260848/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);

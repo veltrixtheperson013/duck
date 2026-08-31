@@ -7,8 +7,8 @@
   <link rel="canonical" href="https://duck.wispbyte.app/updates">
   <title>Updates — Duck</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <script src="/theme-init.js?v=20260840"></script><link rel="preload" href="styles.css?v=20260849" as="style"><link rel="stylesheet" href="styles.css?v=20260849">
-  <script src="site.js?v=20260846" defer></script>
+  <script src="/theme-init.js?v=20260841"></script><link rel="preload" href="styles.css?v=20260851" as="style"><link rel="stylesheet" href="styles.css?v=20260851">
+  <script src="site.js?v=20260847" defer></script>
 </head>
 <body class="public-site page-updates">
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -19,6 +19,12 @@
 
     <div class="update-toolbar"><p><strong>Release history</strong><span>Product changes written for humans.</span></p><a href="clusters.html">View live status <span aria-hidden="true">→</span></a></div>
     <section class="update-timeline" aria-label="Duck release history">
+      <article class="update-card is-hotfix">
+        <div class="update-meta"><time datetime="2026-08-31">August 31, 2026</time><span>Scam-defense hotfix</span></div>
+        <h2>The honeypot stopped giving second chances</h2>
+        <p>A honeypot message now permanently bans the non-staff sender immediately. Duck no longer creates a return invite, unbans the account, or sends a return button.</p>
+        <ul><li>Added local detection for MrBeast and celebrity crypto impersonation, crypto-doubling schemes, credential theft, wallet traps, fake support reports, reward links, and QR-login bait.</li><li>Novel image-only scams are read with local OCR; visual fingerprints stop near-identical image reposts.</li><li>Obfuscated links such as hxxps and bracketed dot domains are normalized before inspection.</li><li>Scam warnings and ordinary safety discussions are explicitly excluded from the high-confidence rules.</li></ul>
+      </article>
       <article class="update-card is-hotfix">
         <div class="update-meta"><time datetime="2026-08-23">August 23, 2026</time><span>Cluster foundation</span></div>
         <h2>Duck’s infrastructure has a hive now</h2>

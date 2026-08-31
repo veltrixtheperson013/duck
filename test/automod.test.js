@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { customActionMatches, detectViolation, handleHoneypot, includesTerm, normalizedHoneypotStats } from "../src/automod.js";
+import { customActionMatches, detectScam, detectViolation, handleHoneypot, includesTerm, normalizedHoneypotStats } from "../src/automod.js";
 import { trimWarningStore } from "../src/config.js";
 
 test("AutoMod term matching uses normalized whole words and phrases", () => {
@@ -33,6 +33,27 @@ test("AutoMod blocks common raid payloads without an AI provider", () => {
   assert.match(detectViolation({ ...base, content: "one\ntwo\nthree" }, { automodLineLimit: 2 }), /Too many lines/);
 });
 
+test("AutoMod blocks high-confidence scam scripts locally", () => {
+  const message = (content) => ({ content, attachments: new Map(), mentions: { users: new Map() } });
+  assert.equal(detectScam(message("MR BEAST LIVE crypto giveaway! Claim double BTC at mrbeast-bonus[.]xyz now")), "Celebrity crypto giveaway impersonation");
+  assert.equal(detectScam(message("MrBeast will double your crypto. Send BTC to this wallet address now")), "Celebrity crypto giveaway impersonation");
+  assert.equal(detectScam(message("Guaranteed 2x return: send BTC to this wallet address and receive double back")), "Crypto doubling or guaranteed-return scam");
+  assert.equal(detectScam(message("Claim your free Nitro at hxxps://nitro-gift[.]xyz")), "Suspicious reward or giveaway link");
+  assert.equal(detectScam(message("I accidentally reported your Steam account. Add this support admin to appeal.")), "Fake report or support impersonation script");
+  assert.equal(detectScam(message("Connect your wallet at https://wallet-sync.example.com to validate your assets")), "Suspicious wallet-connection link");
+  assert.equal(detectScam(message("Send me your Discord token for verification")), "Credential or recovery-secret theft attempt");
+  assert.equal(detectScam(message("Scan this QR code to verify your Discord login")), "Suspicious QR login or verification request");
+  assert.equal(detectScam(message("MrBeast crypto casino promo code! Only the fastest win; this post will be deleted. https://linktr.ee/beastgames")), "Multi-signal crypto promotion scam");
+  assert.equal(detectViolation(message("MR-BEAST crypto giveaway: claim BTC at bonus[.]xyz"), {}), "Celebrity crypto giveaway impersonation");
+});
+
+test("AutoMod does not flag ordinary scam warnings and discussion", () => {
+  const message = (content) => ({ content, attachments: new Map(), mentions: { users: new Map() } });
+  assert.equal(detectScam(message("Warning: avoid the fake MrBeast crypto giveaway scam and never click its links.")), null);
+  assert.equal(detectScam(message("MrBeast posted a video discussing crypto scams.")), null);
+  assert.equal(detectScam(message("Never share your seed phrase with anyone.")), null);
+});
+
 test("custom actions match only allowlisted server-side conditions", () => {
   const botId = "323456789012345678";
   const message = { content: "Hello Duck! https://duck.example", channelId: "123456789012345678", author: { id: "223456789012345678" }, attachments: new Map([["1", {}]]), client: { user: { id: botId } }, mentions: { users: new Map([[botId, {}]]) } };
@@ -49,14 +70,16 @@ test("custom actions match only allowlisted server-side conditions", () => {
   assert.equal(customActionMatches({ ...base, triggerType: "unknown" }, message), false);
 });
 
-test("honeypot softbans once with a return invite then permanently bans", async () => {
+test("honeypot permanently bans on the first trigger without a return path", async () => {
   const actions = []; const persisted = []; const member = { id: "223456789012345678", bannable: true, permissions: { has: () => false } };
-  const message = { guildId: "123456789012345678", channelId: "323456789012345678", member, author: { async send(payload) { actions.push(["dm", payload]); } }, channel: { async createInvite() { actions.push(["invite"]); return { url: "https://discord.gg/duck" }; } }, guild: { name: "Test Pond", members: { async ban(id, options) { actions.push(["ban", id, options]); }, async unban(id) { actions.push(["unban", id]); } } } };
+  const message = { guildId: "123456789012345678", channelId: "323456789012345678", member, author: { id: member.id, async send(payload) { actions.push(["dm", payload]); } }, channel: { async createInvite() { actions.push(["invite"]); return { url: "https://discord.gg/duck" }; } }, guild: { name: "Test Pond", members: { async ban(id, options) { actions.push(["ban", id, options]); }, async unban(id) { actions.push(["unban", id]); } } } };
   const settings = { automodHoneypotEnabled: true, automodHoneypotChannelId: message.channelId };
   assert.equal(await handleHoneypot(message, settings, {}, (...args) => persisted.push(args)), true);
-  assert.equal(actions.some(([name]) => name === "unban"), true); assert.equal(actions.some(([name]) => name === "dm"), true); assert.deepEqual(persisted[0][1].honeypotTriggeredUserIds, [member.id]);
+  assert.deepEqual(actions.map(([name]) => name), ["ban"]);
+  assert.equal(actions[0][2].deleteMessageSeconds, 604_800);
+  assert.equal(persisted.some(([, patch]) => patch.honeypotStats?.permanentBans === 1), true);
   actions.length = 0; await handleHoneypot(message, settings, { honeypotTriggeredUserIds: [member.id] }, () => {});
-  assert.deepEqual(actions.map(([name]) => name), ["ban"]); assert.equal(actions[0][2].deleteMessageSeconds, 604_800);
+  assert.deepEqual(actions.map(([name]) => name), ["ban"]);
 });
 
 test("honeypot counters normalize malformed persisted values", () => {
