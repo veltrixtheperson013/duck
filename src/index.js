@@ -1,6 +1,6 @@
 import { createChatActivity, handleChatActivity } from "./chat-activity.js";
 import { statusPayload } from "./status-emojis.js";
-import { handlePersonalCommand } from "./personal-app.js";
+import { handleLanguageAutocomplete, handlePersonalCommand } from "./personal-app.js";
 import { Events, ActivityType, MessageFlags, PermissionsBitField } from "discord.js";
 import { client } from "./client.js";
 import { logInfo, logDebug, logWarn, logError, elapsedMs, splitDiscordLines } from "./logging.js";
@@ -142,6 +142,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!claimDiscordEvent(`interaction:${interaction.id}`)) return;
     if (isPlatformBlocked(interaction.user?.id)) { if (interaction.isRepliable()) await interaction.reply({ content: "You cannot use Duck right now. Contact Duck's operator if you believe this is a mistake.", flags: MessageFlags.Ephemeral }).catch(() => null); return; }
+    if (interaction.isAutocomplete()) {
+      if (!await handleLanguageAutocomplete(interaction)) await interaction.respond([]);
+      return;
+    }
     if (interaction.isChatInputCommand()) {
       if (await handlePersonalCommand(interaction) !== false) return;
       if (!interaction.guild) return interaction.reply({ content: "This command needs a server installation. Use /helper for personal tools.", flags: MessageFlags.Ephemeral });

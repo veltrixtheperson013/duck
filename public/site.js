@@ -1,4 +1,66 @@
 const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+// Load language choices only when requested; no Google script runs on Duck.
+function installLanguagePicker() {
+  const host = document.querySelector("footer") || document.querySelector("main");
+  if (!host) return;
+  const button = document.createElement("button");
+  button.className = "duck-language-button";
+  button.type = "button";
+  button.setAttribute("aria-haspopup", "dialog");
+  const icon = document.createElement("img");
+  icon.src = "/languages.svg"; icon.width = 20; icon.height = 20; icon.alt = "";
+  button.append(icon, document.createTextNode(" Language"));
+  const dialog = document.createElement("dialog");
+  dialog.className = "duck-language-dialog";
+  dialog.setAttribute("aria-labelledby", "duck-language-title");
+  const close = document.createElement("button");
+  close.type = "button"; close.className = "duck-language-close"; close.setAttribute("aria-label", "Close language picker"); close.textContent = "?"; close.addEventListener("click", () => dialog.close());
+  const title = document.createElement("h2"); title.id = "duck-language-title"; title.textContent = "Choose your language";
+  const description = document.createElement("p"); description.dataset.languageStatus = ""; description.textContent = "Loading languages?";
+  const label = document.createElement("label"); label.htmlFor = "duck-language-select"; label.textContent = "Website language";
+  const languageSelect = document.createElement("select"); languageSelect.id = "duck-language-select"; languageSelect.dir = "auto";
+  const translateLink = document.createElement("a"); translateLink.className = "button primary"; translateLink.dataset.languageOpen = ""; translateLink.target = "_blank"; translateLink.rel = "noopener noreferrer"; translateLink.hidden = true; translateLink.textContent = "Translate with Google";
+  dialog.append(close, title, description, label, languageSelect, translateLink);
+  document.body.append(dialog);
+  host.append(button);
+  const select = dialog.querySelector("select");
+  const status = dialog.querySelector("[data-language-status]");
+  const link = dialog.querySelector("[data-language-open]");
+  let loaded;
+  const privatePage = /\/(?:dashboard|billing|auth|admin|api)(?:[/.]|$)/i.test(location.pathname);
+  const refresh = () => {
+    if (!loaded) return;
+    link.hidden = !loaded.enabled || privatePage;
+    if (!loaded.enabled) status.textContent = `Scheduled for ${loaded.release}. Preview the language choices below.`;
+    else if (privatePage) status.textContent = "For this signed-in page, use your browser’s Translate page option. Google’s website copy cannot access your Duck login session.";
+    else status.textContent = "Opens a translated copy of this page on Google Translate. Google receives the public page URL. Translation availability varies by language and region.";
+    // Never send OAuth codes, session queries, hashes, or local-preview hosts.
+    const source = new URL(location.pathname, "https://duck.wispbyte.app");
+    const target = new URL("https://translate.google.com/translate");
+    target.search = new URLSearchParams({ sl: "en", tl: select.value, u: source.href });
+    link.href = target.href;
+  };
+  select.addEventListener("change", refresh);
+  dialog.addEventListener("close", () => button.focus());
+  button.addEventListener("click", async () => {
+    if (!dialog.open) dialog.showModal();
+    try {
+      const response = await fetch("/api/languages", { credentials: "omit" });
+      if (!response.ok) throw new Error("unavailable");
+      loaded = await response.json();
+      select.replaceChildren(...loaded.languages.map((language) => {
+        const option = document.createElement("option");
+        option.value = language.code;
+        option.textContent = `${language.name} — ${language.nativeName}`;
+        return option;
+      }));
+      select.value = loaded.languages.find((language) => language.code.toLowerCase() === navigator.language.toLowerCase())?.code || loaded.languages.find((language) => language.code === navigator.language.split("-")[0])?.code || "en";
+      refresh();
+    } catch { status.textContent = "Language choices could not load. Please close this window and try again."; link.hidden = true; }
+  });
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installLanguagePicker, { once: true });
+else installLanguagePicker();
 const reducedMotion = motionPreference.matches;
 const runWhenIdle = (task, timeout = 1_200) => "requestIdleCallback" in window ? window.requestIdleCallback(task, { timeout }) : window.setTimeout(task, 1);
 const duckThemes = [
@@ -190,3 +252,20 @@ for (const card of document.querySelectorAll(".code-card")) {
   });
   title.append(button);
 }
+
+function installLucideIcons() {
+  const mapping = { features: "sparkles", guide: "book-open", updates: "history", clusters: "activity", status: "activity", pricing: "badge-dollar-sign", privacy: "shield-check", "privacy-policy": "shield-check", dashboard: "layout-dashboard", donate: "heart" };
+  for (const anchor of document.querySelectorAll(".site-header nav a, a.button, footer a")) {
+    if (anchor.querySelector("svg, img") || anchor.classList.contains("brand")) continue;
+    const url = new URL(anchor.href, location.href);
+    const route = url.pathname.split("/").filter(Boolean).pop()?.replace(/\.html$/, "");
+    const icon = url.hostname === "top.gg" ? "thumbs-up" : url.hostname === "discord.com" && url.pathname.includes("oauth2") ? "plus" : url.pathname === "/auth/discord" ? "log-in" : mapping[route];
+    if (!icon) continue;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "duck-ui-icon"); svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "/icons.svg#" + icon); svg.append(use); anchor.prepend(svg);
+  }
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installLucideIcons, { once: true });
+else installLucideIcons();

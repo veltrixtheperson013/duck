@@ -1,3 +1,4 @@
+import { languagePrompt } from "./languages.js";
 const PERSONALITIES = Object.freeze({
   classic: "Friendly, concise, and gently playful. Use occasional duck humor without distracting from the answer.",
   calm: "Patient, reassuring, and low-key. React calmly and avoid teasing or excessive enthusiasm.",
@@ -8,7 +9,7 @@ const PERSONALITIES = Object.freeze({
 
 function personalityPrompt(settings = {}) {
   const preset = Object.hasOwn(PERSONALITIES, settings.aiPersonalityPreset) ? settings.aiPersonalityPreset : "classic";
-  return [PERSONALITIES[preset], String(settings.aiPersonality || "").trim().slice(0, 240)].filter(Boolean).join(" ");
+  return [languagePrompt(settings.aiLanguage), PERSONALITIES[preset], String(settings.aiPersonality || "").trim().slice(0, 240)].filter(Boolean).join(" ");
 }
 
 export { PERSONALITIES, personalityPrompt };

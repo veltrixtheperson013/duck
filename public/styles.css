@@ -1588,3 +1588,17 @@ html[data-theme] body.dashboard-site:is(.settings-page-open,.settings-page-loadi
 
 /* Decorative page shapes sit behind the full-screen panel and must not widen its viewport. */
 body:is(.settings-page-open,.settings-page-loading)::before,body:is(.settings-page-open,.settings-page-loading)::after { display:none; }
+
+/* Lightweight language picker and navigation icons. */
+.duck-language-button { display:inline-flex; align-items:center; gap:8px; margin:16px; padding:10px 16px; border:1px solid #a3b6ad; border-radius:10px; background:#f5faf7; color:#172b22; cursor:pointer; font:inherit; }
+.duck-language-dialog { width:min(440px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; padding:28px; border:1px solid #a3b6ad; border-radius:16px; background:#f5faf7; color:#172b22; box-shadow:0 20px 80px #0005; }
+.duck-language-dialog::backdrop { background:#0008; }
+.duck-language-dialog h2 { margin:0 24px 16px 0; color:inherit; }
+.duck-language-dialog p { line-height:1.6; color:inherit; }
+.duck-language-dialog label { display:block; margin-top:16px; }
+.duck-language-dialog select { display:block; width:100%; box-sizing:border-box; padding:12px; margin:8px 0 20px; background:#fff; color:#172b22; border:1px solid #8b9e94; border-radius:8px; }
+.duck-language-dialog [hidden] { display:none!important; }
+.duck-language-close { float:right; border:0; background:transparent; color:inherit; font-size:24px; cursor:pointer; }
+html:is([data-theme="dark"],[data-theme="galaxy"],[data-theme="matrix"],[data-theme="nebula"],[data-theme="black-hole"]) .duck-language-dialog { background:#18221e; color:#f0f7f3; }
+.duck-ui-icon { width:1em; height:1em; display:inline-block; flex-shrink:0; vertical-align:-.15em; margin-right:.4em; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+@media (min-width:761px) and (max-width:1250px) { .site-header nav .duck-ui-icon { display:none; } }
