@@ -70,45 +70,49 @@ class FairGuildScheduler {
   }
 
   drain() {
-    while (this.activeGlobal < this.globalConcurrency && this.order.length) {
-      const select = (priorityOnly, normalOnly = false) => {
-        for (let checked = 0; checked < this.order.length; checked += 1) {
-          this.cursor %= this.order.length;
-          const key = this.order[this.cursor];
-          this.cursor = (this.cursor + 1) % this.order.length;
-          const state = this.guilds.get(key);
-          const next = state?.queue?.[0];
-          if (!state || state.active >= this.guildConcurrency || !next) continue;
-          if (priorityOnly && !next.priority) continue;
-          if (normalOnly && next.priority) continue;
-          return { key, state };
-        }
-        return null;
-      };
-      let selected = this.priorityBurst < 2 ? select(true) : select(false, true);
-      selected ??= select(false);
-      if (!selected) return;
+  while (this.activeGlobal < this.globalConcurrency && this.order.length) {
+    const select = (priorityOnly, normalOnly = false) => {
+      for (let checked = 0; checked < this.order.length; checked += 1) {
+        this.cursor %= this.order.length;
+        const key = this.order[this.cursor];
+        this.cursor = (this.cursor + 1) % this.order.length;
+        const state = this.guilds.get(key);
+        const next = state?.queue?.[0];
+        if (!state || state.active >= this.guildConcurrency || !next) continue;
+        if (priorityOnly && !next.priority) continue;
+        if (normalOnly && next.priority) continue;
+        return { key, state };
+      }
+      return null;
+    };
 
-      const item = selected.state.queue.shift();
-      this.priorityBurst = item.priority ? this.priorityBurst + 1 : 0;
-      this.queuedGlobal -= 1;
-      selected.state.active += 1;
-      this.activeGlobal += 1;
-      Promise.resolve()
-        .then(item.task)
-        .then(item.resolve, item.reject)
-        .finally(() => {
-          selected.state.active -= 1;
-          this.activeGlobal -= 1;
-          if (!selected.state.active && !selected.state.queue.length) {
-            this.guilds.delete(selected.key);
-            const index = this.order.indexOf(selected.key);
-            if (index !== -1) this.order.splice(index, 1);
+    let selected = this.priorityBurst < 2 ? select(true) : select(false, true);
+    selected ??= select(false);
+    if (!selected) return;
+
+    const item = selected.state.queue.shift();
+    this.priorityBurst = item.priority ? this.priorityBurst + 1 : 0;
+    this.queuedGlobal -= 1;
+    selected.state.active += 1;
+    this.activeGlobal += 1;
+
+    new Promise((resolve) => resolve(item.task()))
+      .then(item.resolve, item.reject)
+      .finally(() => {
+        selected.state.active -= 1;
+        this.activeGlobal -= 1;
+
+        if (!selected.state.active && !selected.state.queue.length) {
+          this.guilds.delete(selected.key);
+          const index = this.order.indexOf(selected.key);
+          if (index !== -1) {
+            this.order.splice(index, 1);
             if (this.cursor > index) this.cursor -= 1;
             if (this.cursor < 0) this.cursor = 0;
           }
-          this.scheduleDrain();
-        });
+        }
+        this.scheduleDrain();
+      });
     }
   }
 }

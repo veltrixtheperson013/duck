@@ -13,8 +13,9 @@ const HASH_DISTANCE = 8;
 const MAX_OCR_QUEUE = 4;
 const ALLOWED_IMAGE_HOSTS = new Set(["cdn.discordapp.com", "media.discordapp.net"]);
 const imageHashCache = new Map();
+
 let activeImageJobs = 0;
-let queuedOcrJobs = 0;
+let activeOcrJobs = 0;
 let ocrTail = Promise.resolve();
 let ocrWorkerPromise = null;
 
@@ -97,8 +98,10 @@ async function imageDifferenceHash(bytes) {
     const child = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vf", "scale=9:8:flags=area,format=gray", "-frames:v", "1", "-f", "rawvideo", "pipe:1"], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     const output = []; let size = 0; let settled = false;
     const finish = (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
-    const timer = setTimeout(() => { child.kill(); finish(null); }, 4_000); timer.unref?.();
-    child.stdout.on("data", (chunk) => { size += chunk.length; if (size <= 72) output.push(chunk); else child.kill(); });
+    const timer = setTimeout(() => { try { child.kill(); } catch {} finish(null); }, 4_000); 
+    timer.unref?.();
+
+    child.stdout.on("data", (chunk) => { size += chunk.length; if (size <= 72) output.push(chunk); else try { child.kill(); } catch {} });
     child.on("error", () => finish(null));
     child.on("close", (code) => finish(code === 0 && size === 72 ? differenceHash(Buffer.concat(output, size)) : null));
     child.stdin.on("error", () => {});
@@ -112,8 +115,10 @@ async function prepareOcrImage(bytes) {
     const child = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vf", "scale=1600:1600:force_original_aspect_ratio=decrease,format=gray", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     const output = []; let size = 0; let settled = false;
     const finish = (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
-    const timer = setTimeout(() => { child.kill(); finish(null); }, 5_000); timer.unref?.();
-    child.stdout.on("data", (chunk) => { size += chunk.length; if (size <= MAX_IMAGE_BYTES) output.push(chunk); else child.kill(); });
+    const timer = setTimeout(() => { try { child.kill(); } catch {} finish(null); }, 5_000); 
+    timer.unref?.();
+
+    child.stdout.on("data", (chunk) => { size += chunk.length; if (size <= MAX_IMAGE_BYTES) output.push(chunk); else try { child.kill(); } catch {} });
     child.on("error", () => finish(null));
     child.on("close", (code) => finish(code === 0 && size > 0 && size <= MAX_IMAGE_BYTES ? Buffer.concat(output, size) : null));
     child.stdin.on("error", () => {});
@@ -160,11 +165,19 @@ async function runOcr(bytes) {
 }
 
 async function recognizeImageText(bytes) {
-  if (queuedOcrJobs >= MAX_OCR_QUEUE) return null;
-  queuedOcrJobs += 1;
+  if (activeOcrJobs >= MAX_OCR_QUEUE) return null;
+  activeOcrJobs += 1;
+
   const task = ocrTail.catch(() => null).then(() => runOcr(bytes));
   ocrTail = task.then(() => null, () => null);
-  try { return await task; } catch { return null; } finally { queuedOcrJobs -= 1; }
+
+  try { 
+    return await task;
+  } catch {
+    return null;
+  } finally { 
+    activeOcrJobs -= 1; 
+  }
 }
 
 async function hashAttachment(attachment) {
@@ -172,6 +185,7 @@ async function hashAttachment(attachment) {
   if (!url || activeImageJobs >= 2) return null;
   const cacheKey = `${attachment.id || url.pathname}:${attachment.size || 0}`;
   if (imageHashCache.has(cacheKey)) return { bytes: null, hash: imageHashCache.get(cacheKey) };
+
   activeImageJobs += 1;
   try {
     const bytes = await readBoundedImage(url);
@@ -181,22 +195,32 @@ async function hashAttachment(attachment) {
       while (imageHashCache.size > MAX_CACHE) imageHashCache.delete(imageHashCache.keys().next().value);
     }
     return { bytes, hash };
-  } catch { return null; } finally { activeImageJobs -= 1; }
+  } catch { 
+    return null; 
+  } finally { 
+    activeImageJobs -= 1; 
+  }
 }
 
 async function scanScamImages(message, learnReason = null, textDetector = null) {
   const attachments = [...(message?.attachments?.values?.() || [])].filter((attachment) => safeAttachmentUrl(attachment)).slice(0, 1);
   if (!attachments.length) return null;
+
   const analysis = await hashAttachment(attachments[0]);
   const hash = analysis?.hash;
   if (!hash) return null;
+
   if (learnReason) { rememberScamHash(hash, learnReason); return null; }
+
   const match = findClosestHash(hash, hashStore().hashes);
   if (match) return `Known scam image repost (visual distance ${match.distance})`;
+
   if (typeof textDetector !== "function") return null;
+
   const bytes = analysis.bytes || await readBoundedImage(safeAttachmentUrl(attachments[0]));
   const text = bytes ? await recognizeImageText(bytes) : null;
   const reason = text ? textDetector(text) : null;
+
   if (!reason) return null;
   rememberScamHash(hash, reason);
   return `Scam text detected inside image: ${reason}`;
