@@ -11,7 +11,12 @@ function installLanguagePicker() {
   const header = element("div", "duck-language-heading");
   const heading = element("div"); heading.append(element("small", "duck-language-eyebrow", "MAKE YOURSELF AT HOME"));
   const title = element("h2", "", "Choose your language"); title.id = "duck-language-title"; heading.append(title);
-  const close = element("button", "duck-language-close", "\u00d7"); close.type = "button"; close.setAttribute("aria-label", "Close language picker"); close.addEventListener("click", () => dialog.close()); header.append(heading, close);
+  const close = element("button", "duck-language-close");
+  const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("aria-hidden", "true");
+  const closePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  closePath.setAttribute("d", "M6 6l12 12M18 6 6 18"); closePath.setAttribute("fill", "none"); closePath.setAttribute("stroke", "currentColor"); closePath.setAttribute("stroke-width", "2"); closePath.setAttribute("stroke-linecap", "round");
+  closeIcon.append(closePath); close.append(closeIcon); close.type = "button"; close.setAttribute("aria-label", "Close language picker"); close.addEventListener("click", () => dialog.close()); header.append(heading, close);
   const status = element("p", "duck-language-status", "Loading languages..."); status.dataset.languageStatus = "";
   const search = element("input", "duck-language-search"); search.type = "search"; search.placeholder = "Search languages..."; search.setAttribute("aria-label", "Search languages");
   const list = element("div", "duck-language-list"); list.setAttribute("aria-label", "Languages");

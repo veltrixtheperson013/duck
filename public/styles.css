@@ -1632,3 +1632,19 @@ body:is(.settings-page-open,.settings-page-loading)::before,body:is(.settings-pa
 .cluster-status-page .cluster-lookup-result strong { color:var(--green); }
 .cluster-status-page .overall-cluster-status:not(.is-outage):not(.is-maintenance):not(.is-offline) { color:var(--green); background:color-mix(in srgb,var(--green) 10%,var(--paper)); border-color:color-mix(in srgb,var(--green) 35%,var(--line)); }
 .cluster-status-page .cluster-hive { min-height:180px; padding-top:48px; }
+
+/* The guide intro keeps a dark green surface in every theme. */
+html .public-site.page-guide .guide-intro h2 { color:#fffdf7; }
+html .public-site.page-guide .guide-intro .eyebrow { color:#a5e8c8; }
+html .public-site.page-guide .guide-intro p:not(.eyebrow) { color:#d7eee2; }
+.page-guide .guide-step { scroll-margin-top:calc(var(--chrome-height,90px) + 24px); }
+
+/* Keep labels centered and long copy inside its own layout. */
+.duck-language-close svg { display:block; width:16px; height:16px; margin:0; }
+.public-site .catalog-jump a { display:flex; align-items:center; justify-content:center; line-height:1.3; }
+.public-site .updates-hero h1 { font-size:clamp(2.5rem,7vw,6.5rem); line-height:1.06; overflow-wrap:anywhere; }
+.public-site .update-toolbar { justify-content:space-between; gap:16px 24px; margin-block:28px; }
+.public-site .update-toolbar > p { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; margin:0; }
+.public-site .update-toolbar > a { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; }
+.public-site .policy-summary { min-width:0; }
+.public-site .policy-summary h1 { overflow-wrap:anywhere; }
