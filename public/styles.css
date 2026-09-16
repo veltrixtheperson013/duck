@@ -1648,3 +1648,21 @@ html .public-site.page-guide .guide-intro p:not(.eyebrow) { color:#d7eee2; }
 .public-site .update-toolbar > a { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; }
 .public-site .policy-summary { min-width:0; }
 .public-site .policy-summary h1 { overflow-wrap:anywhere; }
+
+/* Dark callout copy and a footer with room for the language control. */
+html .public-site .updates-cta .eyebrow { color:#ffdc7c; }
+html .public-site .updates-cta h2 { color:#fffdf7; }
+html .public-site .updates-cta p:not(.eyebrow) { color:#e2f1e9; }
+footer { flex-wrap:wrap; }
+.footer-links { flex-wrap:wrap; align-items:center; }
+.footer-links a { display:inline-flex; align-items:center; gap:0; min-height:44px; white-space:nowrap; }
+.public-site .site-footer { grid-template-columns:auto minmax(0,1fr) auto; gap:12px 28px; }
+.public-site .site-footer > p { grid-column:2; grid-row:1; }
+.public-site .site-footer > .duck-language-button { grid-column:3; grid-row:1; justify-self:end; margin:0; }
+.public-site .site-footer > .footer-links { grid-column:1 / -1; grid-row:2; justify-content:flex-start; }
+@media (max-width:650px) {
+  .public-site .site-footer { grid-template-columns:minmax(0,1fr) auto; }
+  .public-site .site-footer > .duck-language-button { grid-column:2; }
+  .public-site .site-footer > p { grid-column:1 / -1; grid-row:2; }
+  .public-site .site-footer > .footer-links { grid-row:3; }
+}
