@@ -1590,15 +1590,45 @@ html[data-theme] body.dashboard-site:is(.settings-page-open,.settings-page-loadi
 body:is(.settings-page-open,.settings-page-loading)::before,body:is(.settings-page-open,.settings-page-loading)::after { display:none; }
 
 /* Lightweight language picker and navigation icons. */
-.duck-language-button { display:inline-flex; align-items:center; gap:8px; margin:16px; padding:10px 16px; border:1px solid #a3b6ad; border-radius:10px; background:#f5faf7; color:#172b22; cursor:pointer; font:inherit; }
-.duck-language-dialog { width:min(440px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; padding:28px; border:1px solid #a3b6ad; border-radius:16px; background:#f5faf7; color:#172b22; box-shadow:0 20px 80px #0005; }
-.duck-language-dialog::backdrop { background:#0008; }
-.duck-language-dialog h2 { margin:0 24px 16px 0; color:inherit; }
-.duck-language-dialog p { line-height:1.6; color:inherit; }
-.duck-language-dialog label { display:block; margin-top:16px; }
-.duck-language-dialog select { display:block; width:100%; box-sizing:border-box; padding:12px; margin:8px 0 20px; background:#fff; color:#172b22; border:1px solid #8b9e94; border-radius:8px; }
+.duck-language-button { display:inline-flex; align-items:center; gap:9px; margin:12px 0; padding:10px 15px; border:1px solid var(--line); border-radius:999px; background:var(--paper); color:var(--ink); cursor:pointer; font:700 .88rem var(--sans); }
+.duck-language-glyph { width:20px; height:20px; background:currentColor; mask:url('/languages.svg') center/contain no-repeat; }
+.duck-language-dialog { width:min(520px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:0; overflow:auto; box-sizing:border-box; border:1px solid var(--line); border-radius:22px; background:var(--paper); color:var(--ink); box-shadow:0 28px 100px #0005; font-family:var(--sans); }
+.duck-language-dialog::backdrop { background:#08161099; backdrop-filter:blur(5px); }
+.duck-language-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:26px 26px 0; }
+.duck-language-eyebrow { color:var(--green); font-size:.64rem; font-weight:850; letter-spacing:.12em; }
+.duck-language-dialog h2 { margin:7px 0 0; color:var(--ink); font:800 1.6rem/1.15 var(--sans); letter-spacing:-.035em; }
+.duck-language-close { display:grid; place-items:center; flex:0 0 32px; width:32px; height:32px; padding:0; border:1px solid var(--line); border-radius:50%; background:transparent; color:var(--muted); font:24px/1 var(--sans); cursor:pointer; }
+.duck-language-status { margin:14px 26px 18px; font-size:.86rem; line-height:1.55; color:var(--muted); }
+.duck-language-dialog .duck-language-search { display:block; width:calc(100% - 52px); box-sizing:border-box; margin:0 26px 14px; padding:12px 14px; border:1px solid var(--line); border-radius:11px; background:var(--cream); color:var(--ink); font:inherit; }
+.duck-language-search::placeholder { color:var(--muted); }
+.duck-language-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; padding:0 20px 16px 26px; max-height:300px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+.duck-language-option { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding:12px; border:1px solid transparent; border-radius:11px; text-align:left; background:transparent; color:var(--ink); font:inherit; cursor:pointer; }
+.duck-language-option strong,.duck-language-option small { display:block; overflow-wrap:anywhere; }
+.duck-language-option strong { font-size:.94rem; font-weight:700; }
+.duck-language-option small { margin-top:3px; font-size:.74rem; color:var(--muted); }
+.duck-language-option:hover { background:var(--cream); }
+.duck-language-option[aria-pressed="true"] { background:color-mix(in srgb,var(--green) 10%,var(--paper)); border-color:color-mix(in srgb,var(--green) 45%,var(--line)); }
+.duck-language-check { color:var(--green); font-weight:900; }
+.duck-language-empty { grid-column:1/-1; padding:20px 0; color:var(--muted); }
+.duck-language-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:18px 26px; border-top:1px solid var(--line); background:var(--cream); }
+.duck-language-selection { color:var(--muted); font-size:.8rem; }
+.duck-language-translate { padding:10px 14px; border-radius:9px; color:var(--paper); background:var(--ink); font-size:.85rem; font-weight:750; text-decoration:none; }
 .duck-language-dialog [hidden] { display:none!important; }
-.duck-language-close { float:right; border:0; background:transparent; color:inherit; font-size:24px; cursor:pointer; }
-html:is([data-theme="dark"],[data-theme="galaxy"],[data-theme="matrix"],[data-theme="nebula"],[data-theme="black-hole"]) .duck-language-dialog { background:#18221e; color:#f0f7f3; }
+.duck-language-dialog :focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+@media(max-width:420px) { .duck-language-heading { padding:22px 20px 0; }.duck-language-dialog h2 { font-size:1.4rem; }.duck-language-list { padding-left:14px; padding-right:14px; }.duck-language-option { padding:10px 8px; } }
+
+/* Status panels follow the active theme rather than mixing dark surfaces with light-theme text. */
+.cluster-status-page .cluster-status-shell { padding-top:calc(var(--chrome-height,90px) + 48px); }
+.cluster-status-page :is(.cluster-summary,.cluster-lookup-card,.cluster-hive-card,.cluster-hive-section) { background:var(--paper); color:var(--ink); border-color:var(--line); }
+.cluster-status-page :is(.cluster-lookup-result,.cluster-legend,.cluster-lookup-card input) { background:var(--cream); color:var(--ink); border-color:var(--line); }
+.cluster-status-page :is(.cluster-summary strong,.cluster-lookup-card h2,.cluster-hive-heading h2) { color:var(--ink); }
+.cluster-status-page :is(.cluster-summary small,.cluster-lookup-card p,.cluster-lookup-result small,.cluster-hive-heading p,.cluster-updated,.cluster-status-hero p:not(.eyebrow)) { color:var(--muted); }
+.cluster-status-page .eyebrow { color:var(--green); }
+.cluster-status-page .cluster-summary article + article,.cluster-status-page .cluster-lookup-result span + span { border-color:var(--line); }
 .duck-ui-icon { width:1em; height:1em; display:inline-block; flex-shrink:0; vertical-align:-.15em; margin-right:.4em; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 @media (min-width:761px) and (max-width:1250px) { .site-header nav .duck-ui-icon { display:none; } }
+
+.cluster-status-page .cluster-legend span { color:var(--muted); }
+.cluster-status-page .cluster-lookup-result strong { color:var(--green); }
+.cluster-status-page .overall-cluster-status:not(.is-outage):not(.is-maintenance):not(.is-offline) { color:var(--green); background:color-mix(in srgb,var(--green) 10%,var(--paper)); border-color:color-mix(in srgb,var(--green) 35%,var(--line)); }
+.cluster-status-page .cluster-hive { min-height:180px; padding-top:48px; }

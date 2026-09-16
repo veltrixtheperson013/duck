@@ -3,60 +3,55 @@ const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
 function installLanguagePicker() {
   const host = document.querySelector("footer") || document.querySelector("main");
   if (!host) return;
-  const button = document.createElement("button");
-  button.className = "duck-language-button";
-  button.type = "button";
-  button.setAttribute("aria-haspopup", "dialog");
-  const icon = document.createElement("img");
-  icon.src = "/languages.svg"; icon.width = 20; icon.height = 20; icon.alt = "";
-  button.append(icon, document.createTextNode(" Language"));
-  const dialog = document.createElement("dialog");
-  dialog.className = "duck-language-dialog";
-  dialog.setAttribute("aria-labelledby", "duck-language-title");
-  const close = document.createElement("button");
-  close.type = "button"; close.className = "duck-language-close"; close.setAttribute("aria-label", "Close language picker"); close.textContent = "?"; close.addEventListener("click", () => dialog.close());
-  const title = document.createElement("h2"); title.id = "duck-language-title"; title.textContent = "Choose your language";
-  const description = document.createElement("p"); description.dataset.languageStatus = ""; description.textContent = "Loading languages?";
-  const label = document.createElement("label"); label.htmlFor = "duck-language-select"; label.textContent = "Website language";
-  const languageSelect = document.createElement("select"); languageSelect.id = "duck-language-select"; languageSelect.dir = "auto";
-  const translateLink = document.createElement("a"); translateLink.className = "button primary"; translateLink.dataset.languageOpen = ""; translateLink.target = "_blank"; translateLink.rel = "noopener noreferrer"; translateLink.hidden = true; translateLink.textContent = "Translate with Google";
-  dialog.append(close, title, description, label, languageSelect, translateLink);
-  document.body.append(dialog);
-  host.append(button);
-  const select = dialog.querySelector("select");
-  const status = dialog.querySelector("[data-language-status]");
-  const link = dialog.querySelector("[data-language-open]");
-  let loaded;
+  const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text) node.textContent = text; return node; };
+  const button = element("button", "duck-language-button", "Language");
+  button.type = "button"; button.setAttribute("aria-haspopup", "dialog");
+  const icon = element("span", "duck-language-glyph"); icon.setAttribute("aria-hidden", "true"); button.prepend(icon);
+  const dialog = element("dialog", "duck-language-dialog"); dialog.setAttribute("aria-labelledby", "duck-language-title");
+  const header = element("div", "duck-language-heading");
+  const heading = element("div"); heading.append(element("small", "duck-language-eyebrow", "MAKE YOURSELF AT HOME"));
+  const title = element("h2", "", "Choose your language"); title.id = "duck-language-title"; heading.append(title);
+  const close = element("button", "duck-language-close", "\u00d7"); close.type = "button"; close.setAttribute("aria-label", "Close language picker"); close.addEventListener("click", () => dialog.close()); header.append(heading, close);
+  const status = element("p", "duck-language-status", "Loading languages..."); status.dataset.languageStatus = "";
+  const search = element("input", "duck-language-search"); search.type = "search"; search.placeholder = "Search languages..."; search.setAttribute("aria-label", "Search languages");
+  const list = element("div", "duck-language-list"); list.setAttribute("aria-label", "Languages");
+  const footer = element("div", "duck-language-footer");
+  const selectedLabel = element("span", "duck-language-selection"); selectedLabel.setAttribute("aria-live", "polite");
+  const link = element("a", "duck-language-translate", "Translate with Google"); link.dataset.languageOpen = ""; link.target = "_blank"; link.rel = "noopener noreferrer"; link.hidden = true;
+  footer.append(selectedLabel, link); dialog.append(header, status, search, list, footer); document.body.append(dialog); host.append(button);
+  let loaded; let selected = "en";
   const privatePage = /\/(?:dashboard|billing|auth|admin|api)(?:[/.]|$)/i.test(location.pathname);
   const refresh = () => {
     if (!loaded) return;
     link.hidden = !loaded.enabled || privatePage;
-    if (!loaded.enabled) status.textContent = `Scheduled for ${loaded.release}. Preview the language choices below.`;
-    else if (privatePage) status.textContent = "For this signed-in page, use your browser’s Translate page option. Google’s website copy cannot access your Duck login session.";
-    else status.textContent = "Opens a translated copy of this page on Google Translate. Google receives the public page URL. Translation availability varies by language and region.";
-    // Never send OAuth codes, session queries, hashes, or local-preview hosts.
-    const source = new URL(location.pathname, "https://duck.wispbyte.app");
+    status.textContent = !loaded.enabled ? "Coming September 22. Explore the languages below." : privatePage ? "Use your browser's Translate page option for this signed-in page." : "Read this page in your language with Google Translate. Opens a translated copy in a new tab.";
+    const language = loaded.languages.find((item) => item.code === selected);
+    selectedLabel.textContent = language ? language.name + " selected" : "Choose a language";
     const target = new URL("https://translate.google.com/translate");
-    target.search = new URLSearchParams({ sl: "en", tl: select.value, u: source.href });
-    link.href = target.href;
+    target.search = new URLSearchParams({ sl: "en", tl: selected, u: new URL(location.pathname, "https://duck.wispbyte.app").href }); link.href = target.href;
+    const query = search.value.trim().toLocaleLowerCase();
+    const matches = loaded.languages.filter((item) => (item.name + " " + item.nativeName + " " + item.code).toLocaleLowerCase().includes(query));
+    list.replaceChildren(...matches.map((item) => {
+      const choice = element("button", "duck-language-option"); choice.type = "button"; choice.setAttribute("aria-pressed", String(item.code === selected));
+      const text = element("span"); const native = element("strong", "", item.nativeName); native.dir = "auto"; native.lang = item.code;
+      text.append(native, element("small", "", item.name));
+      const check = element("span", "duck-language-check", item.code === selected ? "\u2713" : ""); check.setAttribute("aria-hidden", "true"); choice.append(text, check);
+      choice.addEventListener("click", () => { selected = item.code; refresh(); list.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true }); });
+      return choice;
+    }));
+    if (!matches.length) list.append(element("p", "duck-language-empty", "No languages found. Try another name or language code."));
   };
-  select.addEventListener("change", refresh);
+  search.addEventListener("input", refresh);
   dialog.addEventListener("close", () => button.focus());
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) { const box = dialog.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close(); } });
   button.addEventListener("click", async () => {
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) dialog.showModal(); search.focus();
     try {
-      const response = await fetch("/api/languages", { credentials: "omit" });
-      if (!response.ok) throw new Error("unavailable");
+      const response = await fetch("/api/languages", { credentials: "omit" }); if (!response.ok) throw new Error("unavailable");
       loaded = await response.json();
-      select.replaceChildren(...loaded.languages.map((language) => {
-        const option = document.createElement("option");
-        option.value = language.code;
-        option.textContent = `${language.name} — ${language.nativeName}`;
-        return option;
-      }));
-      select.value = loaded.languages.find((language) => language.code.toLowerCase() === navigator.language.toLowerCase())?.code || loaded.languages.find((language) => language.code === navigator.language.split("-")[0])?.code || "en";
+      if (!list.childElementCount) selected = loaded.languages.find((item) => item.code.toLowerCase() === navigator.language.toLowerCase())?.code || loaded.languages.find((item) => item.code === navigator.language.split("-")[0])?.code || "en";
       refresh();
-    } catch { status.textContent = "Language choices could not load. Please close this window and try again."; link.hidden = true; }
+    } catch { status.textContent = "Language choices could not load. Close this window and try again."; link.hidden = true; }
   });
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installLanguagePicker, { once: true });
