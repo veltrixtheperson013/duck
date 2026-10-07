@@ -502,7 +502,7 @@ function createDuckWebsiteServer(options = {}) {
       }
       if (pathname === "/dashboard/") return redirect(res, "/dashboard");
       const dashboardGuildPage = /^\/dashboard\/servers\/\d{10,}\/?$/.test(pathname);
-      const dashboardSubpage = pathname === "/dashboard/account" || /^\/dashboard\/servers\/\d{10,}\/plan\/?$/.test(pathname);
+      const dashboardSubpage = /^\/dashboard\/account\/?$/.test(pathname) || /^\/dashboard\/servers\/\d{10,}\/plan\/?$/.test(pathname);
       const page = pages.get(pathname); if ((page || dashboardGuildPage || dashboardSubpage) && ["GET", "HEAD"].includes(method)) { const dashboardRoute = pathname === "/dashboard" || pathname === "/dashboard/" || pathname === "/dashboard.html" || dashboardGuildPage || dashboardSubpage; return sendAsset(req, res, page || pages.get("/dashboard"), method, dashboardRoute ? { "X-Robots-Tag": "noindex, nofollow, noarchive" } : {}); }
       if (pathname === "/donate/checkout") return json(res, 405, { error: "Method not allowed." }, method, { Allow: "POST" });
       if (page || dashboardGuildPage || dashboardSubpage || pathname.startsWith("/api/") || pathname.startsWith("/auth/")) return json(res, 405, { error: "Method not allowed." }, method, { Allow: "GET, HEAD" });

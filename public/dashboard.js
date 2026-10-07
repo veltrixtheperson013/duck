@@ -9,9 +9,31 @@ const accountPageRequested = /^\/dashboard\/account\/?$/.test(location.pathname)
 if (requestedGuildId) document.body.classList.add("settings-page-loading");
 const funSettingNames = ["funCommandsEnabled", "funQuackEnabled", "funDuckFactEnabled", "funCoinflipEnabled", "funTruthEnabled", "funDareEnabled", "funTruthOrDareEnabled", "funRpsEnabled", "funFortuneEnabled", "funTopicEnabled", "funJokeEnabled", "funNumberEnabled", "funThisOrThatEnabled", "funRandomMemberEnabled", "funDadJokeEnabled", "funMoodEnabled", "funHighFiveEnabled", "funShipEnabled", "funCurseEnabled", "funSpinwheelEnabled", "funRollEnabled", "funEightballEnabled", "funQuoteEnabled", "funRoastEnabled", "funComplimentEnabled", "funChooseEnabled", "funRateEnabled", "funWouldYouRatherEnabled", "funNeverHaveIEverEnabled", "funHotseatEnabled", "funVibeCheckEnabled", "funBattleEnabled", "funDramaticEnabled", "funConspiracyEnabled", "funChallengeEnabled", "funCaptionEnabled", "funAlibiEnabled", "funBackstoryEnabled", "funAwardEnabled", "funHeistEnabled", "funSuperlativeEnabled", "funPlotEnabled", "funConfessionEnabled"];
 
-function notice(message, error = false) { const element = $("[data-notice]"); element.textContent = message; element.classList.toggle("is-error", error); element.hidden = !message; }
+function notice(message, error = false) { const element = $("[data-notice]"); element.textContent = message;
+  if (error && message) { const retry = document.createElement("button"); retry.type = "button"; retry.className = "button secondary compact"; retry.textContent = "Retry loading"; retry.addEventListener("click", () => location.reload()); element.append(retry); }
+  element.classList.toggle("is-error", error); element.hidden = !message; }
 function setLoading(active) { state.loading = Math.max(0, state.loading + (active ? 1 : -1)); $("[data-route-progress]")?.classList.toggle("is-active", state.loading > 0); document.body.classList.toggle("is-busy", state.loading > 0); }
-async function api(url, options = {}) { setLoading(true); try { const headers = { Accept: "application/json", ...options.headers }; if (state.me?.csrf && !["GET", "HEAD"].includes(options.method || "GET")) headers["X-Duck-CSRF"] = state.me.csrf; const response = await fetch(url.startsWith("/") ? url : `/${url}`, { cache: "no-store", ...options, headers }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || `Request failed (${response.status}).`); return body; } finally { setLoading(false); } }
+async function api(url, options = {}) {
+  setLoading(true);
+  const method = (options.method || "GET").toUpperCase();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const headers = { Accept: "application/json", ...options.headers };
+    if (state.me?.csrf && !["GET", "HEAD"].includes(method)) headers["X-Duck-CSRF"] = state.me.csrf;
+    const response = await fetch(url.startsWith("/") ? url : `/${url}`, { cache: "no-store", ...options, headers, signal: controller.signal });
+    if (response.status === 401) throw new Error("Your session expired. Sign in again to continue.");
+    if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Duck received an unexpected response. Please try again shortly.");
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || `Request failed (${response.status}).`);
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(method === "GET" ? "Duck took too long to respond. Please retry." : "The save response timed out. Check your server settings before saving again.");
+    if (error instanceof TypeError) throw new Error("Unable to reach Duck. Check your connection and retry.");
+    if (error instanceof SyntaxError) throw new Error("Duck returned an incomplete response. Please retry.");
+    throw error;
+  } finally { clearTimeout(timer); setLoading(false); }
+}
 
 function guildIcon(guild) {
   if (!guild.icon) { const fallback = document.createElement("span"); fallback.className = "server-fallback"; fallback.textContent = guild.name.slice(0, 2).toUpperCase(); return fallback; }
@@ -215,7 +237,7 @@ async function openSettings(guild) {
     form.aiResponseStyle.querySelector('option[value="detailed"]').disabled = !plus; form.aiPersonality.disabled = !plus;
     for (const input of $$('[data-plus-fun]')) { input.disabled = !plus; input.closest(".command-toggle").classList.toggle("is-locked", !plus); }
     setModuleStatus("safety", settings.capabilityMode === "agent" ? "Agent mode" : settings.capabilityMode === "approve" ? "Low-risk auto" : "Approval gated"); setModuleStatus("automod", settings.automodEnabled ? "Active" : "Off", settings.automodEnabled); setModuleStatus("ai", settings.aiChatEnabled ? "Enabled" : "Off", settings.aiChatEnabled); setModuleStatus("voice", settings.ttsEnabled ? "Enabled" : "Off", settings.ttsEnabled); setModuleStatus("community", settings.welcomeChannelId || settings.logChannelId ? "Configured" : "Setup needed", Boolean(settings.welcomeChannelId || settings.logChannelId)); setModuleStatus("studio", settings.levelsEnabled || settings.suggestionsEnabled || settings.starboardEnabled || settings.autorolesEnabled ? "Active" : "Off", settings.levelsEnabled || settings.suggestionsEnabled || settings.starboardEnabled || settings.autorolesEnabled); setModuleStatus("roles", settings.reactionRolesEnabled ? `${settings.reactionRoleOptions.length} roles` : "Off", settings.reactionRolesEnabled); setModuleStatus("colors", settings.colorRolesEnabled ? `${settings.colorRoleOptions.length} colors` : "Off", settings.colorRolesEnabled); setModuleStatus("tickets", settings.ticketsEnabled ? `${settings.ticketOptions.length} options` : "Off", settings.ticketsEnabled); configureBranding(data, form, subscription); setModuleStatus("fun", settings.funCommandsEnabled ? (plus ? "Plus library" : "Free classics") : "Off", settings.funCommandsEnabled); setModuleStatus("plan", plus ? "Plus" : "Free", plus);
-    const saveState = $("[data-save-state]"); saveState.textContent = "Changes apply only when you save."; saveState.classList.remove("is-error"); enhanceSelects(); updateDisclaimers(); updateAiScanReadiness(); selectTab("overview"); document.title = `${guild.name} — Duck Dashboard`; document.body.classList.remove("settings-page-loading"); document.body.classList.add("settings-page-open"); const settingsPage = $("[data-settings-page]"); settingsPage.hidden = false; settingsPage.classList.remove("is-opening"); requestAnimationFrame(() => settingsPage.classList.add("is-opening"));
+    savedSettingsSnapshot = settingsSnapshot(); const saveState = $("[data-save-state]"); saveState.textContent = "Changes apply only when you save."; saveState.classList.remove("is-error"); enhanceSelects(); updateDisclaimers(); updateAiScanReadiness(); selectTab("overview"); document.title = `${guild.name} — Duck Dashboard`; document.body.classList.remove("settings-page-loading"); document.body.classList.add("settings-page-open"); const settingsPage = $("[data-settings-page]"); settingsPage.hidden = false; settingsPage.classList.remove("is-opening"); requestAnimationFrame(() => settingsPage.classList.add("is-opening"));
   } catch (error) { document.body.classList.remove("settings-page-loading"); notice(error.message, true); }
 }
 
@@ -254,19 +276,35 @@ async function initialize() {
 }
 
 $("[data-server-search]").addEventListener("input", (event) => renderGuilds(event.target.value));
-$('[data-refresh-guilds]')?.addEventListener("click", () => refreshGuilds(true));
+$('[data-refresh-guilds]')?.addEventListener("click", () => refreshGuilds(true).catch(() => {}));
 updateGuildRefreshButton();
 for (const button of $$("[data-server-filter]")) button.addEventListener("click", () => { state.serverFilter = button.dataset.serverFilter; $$("[data-server-filter]").forEach((item) => item.classList.toggle("is-active", item === button)); renderGuilds(); });
 for (const button of $$("[data-settings-tab]")) button.addEventListener("click", () => selectTab(button.dataset.settingsTab));
-for (const button of $$('[data-cancel], [data-back]')) button.addEventListener("click", () => location.assign("/dashboard")); $("[data-settings-form]").aiModel.addEventListener("change", updateDisclaimers); $("[data-settings-form]").ttsModel.addEventListener("change", updateDisclaimers);
+for (const button of $$('[data-cancel], [data-back]')) button.addEventListener("click", () => { if (canLeaveSettings()) location.assign("/dashboard"); }); $("[data-settings-form]").aiModel.addEventListener("change", updateDisclaimers); $("[data-settings-form]").ttsModel.addEventListener("change", updateDisclaimers);
 for (const button of $$('[data-jump-tab]')) button.addEventListener("click", () => selectTab(button.dataset.jumpTab));
 const settingsForm = $("[data-settings-form]");
+let savedSettingsSnapshot = null;
+function settingsSnapshot() {
+  return JSON.stringify([...settingsForm.querySelectorAll("input:not([type=file]), select, textarea")].map(input => [input.name, input.type, input.value, input.type === "checkbox" ? input.checked : null]));
+}
+function settingsDirty() { return savedSettingsSnapshot !== null && settingsSnapshot() !== savedSettingsSnapshot; }
+function canLeaveSettings() {
+  if (!settingsDirty()) return true;
+  if (!window.confirm("You have unsaved server settings. Leave without saving?")) return false;
+  savedSettingsSnapshot = settingsSnapshot();
+  return true;
+}
+function updateSaveStatus() {
+  if (!settingsDirty()) return;
+  const output = $("[data-save-state]"); output.textContent = "Unsaved changes"; output.classList.remove("is-error");
+}
+settingsForm.addEventListener("input", updateSaveStatus);
+settingsForm.addEventListener("change", updateSaveStatus);
+settingsForm.addEventListener("click", () => setTimeout(updateSaveStatus, 0));
+window.addEventListener("beforeunload", event => { if (settingsDirty()) { event.preventDefault(); event.returnValue = ""; } });
+document.addEventListener("click", event => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button) return; const anchor = event.target.closest("a[href]"); if (anchor && !anchor.target && new URL(anchor.href).pathname !== location.pathname && !canLeaveSettings()) event.preventDefault(); });
+document.addEventListener("keydown", event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && document.body.classList.contains("settings-page-open")) { event.preventDefault(); if (!settingsForm.querySelector('[type="submit"]').disabled) settingsForm.requestSubmit(); } });
 settingsForm.addEventListener("change", (event) => { if (event.target.name?.startsWith("aiScan") || event.target.closest?.("[data-ai-scan-channels]")) updateAiScanReadiness(); });
-
-const settingsSearch = $("[data-settings-search]");
-const settingsSearchTerms = { overview: "home modules setup", general: "safety moderation approval prefix permissions", automod: "spam links invites caps emoji raid filters slowmode warnings", actions: "automation trigger response no code", ai: "chat model scan rules context", voice: "tts speech elevenlabs", community: "welcome goodbye logs", studio: "levels xp suggestions starboard autorole schedule", roles: "reaction self roles", colors: "palette color names", tickets: "support verify captcha", insights: "statistics audit activity", branding: "name avatar banner profile", fun: "games commands truth dare jokes" };
-settingsSearch?.addEventListener("input", () => { const query = settingsSearch.value.trim().toLowerCase(); for (const button of $$("[data-settings-tab]")) button.hidden = Boolean(query) && !`${button.textContent} ${settingsSearchTerms[button.dataset.settingsTab] || ""}`.toLowerCase().includes(query); });
-document.addEventListener("keydown", (event) => { if (event.key === "/" && !event.ctrlKey && !event.metaKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "")) { event.preventDefault(); settingsSearch?.focus(); } });
 
 const automodPresets = {
   balanced: { automodSwearFilter: true, automodNsfwFilter: true, automodInviteFilter: true, automodLinkFilter: false, automodCapsFilter: true, automodDangerousFileFilter: true, automodRepeatedTextFilter: true, automodZalgoFilter: true, automodMentionLimit: 5, automodEmojiLimit: 18, automodLineLimit: 24, automodGlobalSlowmodeSeconds: 0, automodViolationsBeforeWarn: 3, automodWarningsBeforeAction: 3, automodEscalation: "kick" },
@@ -311,8 +349,9 @@ async function saveSettings(form) {
       ...(state.activePlus ? { levelRewards: serializeLevelRewards(), suggestionAnonymousEnabled: form.suggestionAnonymousEnabled.checked, starboardEmoji: form.starboardEmoji.value.trim() || "⭐", starboardColor: form.starboardColor.value, starboardAllowNsfw: form.starboardAllowNsfw.checked, scheduledPosts: serializeScheduledPosts(), colorRoleRandomOnJoin: form.colorRoleRandomOnJoin.checked } : {}),
       customActions: serializeCustomActions()
     } : {};
+  const submittedSnapshot = settingsSnapshot();
   const result = await api(`api/guilds/${state.activeGuild.id}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ aiWebEnabled: form.aiWebEnabled.checked, aiPersonalityPreset: form.aiPersonalityPreset.value, aiChatEnabled: form.aiChatEnabled.checked, aiVisionEnabled: form.aiVisionEnabled.checked, aiModel: form.aiModel.value, aiChannelMode: form.aiChannelMode.value, aiContextMode: form.aiContextMode.value, aiResponseStyle: form.aiResponseStyle.value, ...(state.activePlus ? { aiPersonality: form.aiPersonality.value } : {}), ttsEnabled: form.ttsEnabled.checked, ttsAnnounceNames: form.ttsAnnounceNames.checked, ttsModel: form.ttsModel.value, capabilityMode: form.capabilityMode.value, commandPrefix: form.commandPrefix.value, modChannelId: channelValue("modChannelId"), welcomeChannelId: channelValue("welcomeChannelId"), welcomeMessage: form.welcomeMessage.value, farewellMessage: form.farewellMessage.value, logChannelId: channelValue("logChannelId"), ...automationSettings, ...funSettings }) });
-  const saveState = $("[data-save-state]"); saveState.textContent = "Saved just now."; saveState.classList.remove("is-error");
+  const saveState = $("[data-save-state]"); savedSettingsSnapshot = submittedSnapshot; saveState.textContent = settingsDirty() ? "Saved. You have newer unsaved changes." : "Saved just now."; saveState.classList.remove("is-error");
   return result;
 }
 

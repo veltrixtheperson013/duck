@@ -50,7 +50,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(homepageText, /Add Duck to Discord/);
     assert.match(homepageText, /AI-assisted Discord moderation/);
     assert.match(homepageText, /Moderate Discord without giving an AI unrestricted control/);
-    assert.match(homepageText, /href="features\.html"/);
+    assert.match(homepageText, /href="\/features\.html"/);
     assert.doesNotMatch(homepageText, /<strong data-server-count>—<\/strong>/);
     assert.match(homepage.headers.get("content-security-policy"), /default-src 'none'/);
     assert.match(homepage.headers.get("etag"), /^".+"$/);
@@ -84,10 +84,10 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
     const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/); assert.match(cssText, /\.public-site \.cta h2 \{ color:#fff; \}/); assert.match(cssText, /\.public-site \.cta \.eyebrow \{ color:#9be1bd; \}/);
 
-    const versionedCss = await fetch(`${origin}/styles.css?v=20260915footer`, { headers: { "Accept-Encoding": "identity" } });
+    const versionedCss = await fetch(`${origin}/styles.css?v=20261006`, { headers: { "Accept-Encoding": "identity" } });
     assert.equal(versionedCss.status, 200);
     assert.equal(versionedCss.headers.get("cache-control"), "public, max-age=31536000, immutable");
-    const brotliCss = await fetch(`${origin}/styles.css?v=20260915footer`, { headers: { "Accept-Encoding": "br" } });
+    const brotliCss = await fetch(`${origin}/styles.css?v=20261006`, { headers: { "Accept-Encoding": "br" } });
     assert.equal(brotliCss.status, 200);
     assert.equal(brotliCss.headers.get("content-encoding"), "br");
     assert.match(await brotliCss.text(), /2026 public-site rebuild/);
@@ -121,8 +121,8 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260841/);
-    assert.match(dashboardText, /styles\.css\?v=20260915footer/);
-    assert.match(dashboardText, /dashboard\.js\?v=20260913/);
+    assert.match(dashboardText, /styles\.css\?v=20261006/);
+    assert.match(dashboardText, /dashboard\.js\?v=20261006/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
     assert.match(dashboardText, /data-color-panel/);
@@ -134,7 +134,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /data-back/);
     assert.match(dashboardText, /Back to servers/);
     assert.match(dashboardText, /Controlled chaos/);
-    assert.match(dashboardText, /Search settings/);
+    assert.doesNotMatch(dashboardText, /Find a tool|data-settings-search/);
     assert.match(dashboardText, /funRoastEnabled/);
     assert.match(dashboardText, /Server identity/);
     assert.match(dashboardText, /data-route-progress/);
@@ -594,4 +594,22 @@ test("Stripe webhook verifies through the SDK and rejects stale delivery order",
   } finally {
     for (const [key, value] of Object.entries(previous)) value == null ? delete process.env[key] : process.env[key] = value;
   }
+});
+
+test("public page assets resolve on trailing-slash and deep dashboard routes", async () => {
+  await withWebsite(async origin => {
+    for (const route of ["/guide/", "/features/", "/updates/", "/privacy-policy/", "/dashboard/servers/1507850959642955816", "/dashboard/account/"]) {
+      const response = await fetch(origin + route);
+      assert.equal(response.status, 200);
+      const html = await response.text();
+      const assets = [...html.matchAll(/(?:src|href)="([^" ]+\.(?:js|css|svg)(?:\?[^" ]*)?)"/g)].map(match => match[1]);
+      assert.ok(assets.length >= 3);
+      for (const asset of assets) {
+        assert.ok(asset.startsWith("/"), asset);
+        const loaded = await fetch(new URL(asset, origin + route));
+        assert.equal(loaded.status, 200, asset);
+        assert.doesNotMatch(loaded.headers.get("content-type"), /text\/html/);
+      }
+    }
+  });
 });

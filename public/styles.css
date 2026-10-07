@@ -1666,3 +1666,41 @@ footer { flex-wrap:wrap; }
   .public-site .site-footer > p { grid-column:1 / -1; grid-row:2; }
   .public-site .site-footer > .footer-links { grid-row:3; }
 }
+
+/* Server editor: a readable title, aligned metadata, and reachable actions. */
+html[data-theme] .settings-page-open .settings-dialog .dialog-top { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:18px 32px; min-height:128px; padding:24px max(24px,calc((100vw - 1560px)/2)); color:var(--ink); background:var(--paper); border-bottom:1px solid var(--line); }
+.settings-page-open .dialog-top::before { display:none; }
+.settings-page-open .dialog-top > div:first-child { flex:1 1 360px; min-width:0; margin:0; }
+.settings-page-open .dialog-top h2 { margin:4px 0 14px; color:var(--ink); font:850 clamp(1.4rem,2vw,2rem)/1.2 var(--sans); letter-spacing:-.03em; overflow-wrap:anywhere; }
+.settings-page-open .dialog-top .eyebrow { margin:0; font-size:.7rem; line-height:1.4; letter-spacing:.12em; }
+.settings-page-open .dialog-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px 18px; line-height:1.5; }
+.settings-page-open .dialog-meta > * { display:inline-flex; align-items:center; margin:0; color:var(--muted); font-size:.75rem; line-height:1.5; }
+.settings-page-open .dialog-top .dialog-account { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin:0; }
+.settings-page-open .dialog-account .button, .settings-page-open .dialog-account .icon-button { display:inline-flex; align-items:center; justify-content:center; min-height:44px; height:44px; margin:0; padding:0 16px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:12px; font:750 .85rem/1 var(--sans); white-space:nowrap; }
+.settings-page-open .dialog-account .icon-button { width:auto; }
+.settings-page-open .settings-tabs::before { display:block; margin:0 14px 16px; color:#e4f5eb; font:850 1.1rem/1.4 var(--sans); letter-spacing:0; content:"Server settings"; }
+.settings-page-open .settings-panel { max-width:1320px; margin-inline:auto; }
+.dashboard-notice.is-error { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.settings-page-open .dashboard-notice:not([hidden]) { position:fixed; top:calc(var(--chrome-height) + 8px); left:50%; transform:translateX(-50%); width:min(700px,calc(100% - 32px)); z-index:120; }
+@media (min-width:761px) {
+  html[data-theme] .settings-page-open > .dashboard-site-header { padding-inline:max(24px,calc((100vw - 1560px)/2)); }
+}
+@media (max-width:760px) {
+  html[data-theme] .settings-page-open .settings-dialog .dialog-top { padding:16px; gap:12px; min-height:0; }
+  .settings-page-open .dialog-top > div:first-child { flex-basis:100%; }
+  .settings-page-open .dialog-top .dialog-account { width:100%; justify-content:flex-start; }
+  .settings-page-open .dialog-meta code, .settings-page-open .dialog-status { display:inline-flex; }
+  .settings-page-open .dialog-top h2 { margin-bottom:10px; font-size:1.4rem; }
+  .settings-page-open .settings-tabs::before { flex:0 0 100%; margin:6px 10px; font-size:1rem; }
+  .settings-page-open .settings-tabs { flex-wrap:wrap; max-height:180px; }
+}
+
+.settings-page-open .dashboard-shell > .dashboard-notice:not([hidden]) { display:flex; }
+
+html[data-theme] .settings-page-open .dialog-top h2 { max-width:none; white-space:normal; text-overflow:clip; overflow:visible; }
+html[data-theme] .settings-page-open .dialog-top .dialog-account > button { flex:0 0 auto; width:auto; min-width:0; height:44px; padding:0 16px; }
+@media (max-width:760px) {
+  html[data-theme] .settings-page-open .settings-tabs { display:grid; grid-template-columns:repeat(14,94px); grid-template-rows:auto 76px; grid-auto-flow:column; gap:6px; flex-wrap:nowrap; padding:10px; max-height:142px; overflow-x:auto; overflow-y:hidden; }
+  html[data-theme] .settings-page-open .settings-tabs::before { grid-column:1 / -1; grid-row:1; margin:0 6px 4px; }
+  html[data-theme] .settings-page-open .settings-tabs > button { grid-row:2; width:94px; min-width:0; margin:0; padding:10px 5px; }
+}
