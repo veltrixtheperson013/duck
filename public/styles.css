@@ -1704,3 +1704,17 @@ html[data-theme] .settings-page-open .dialog-top .dialog-account > button { flex
   html[data-theme] .settings-page-open .settings-tabs::before { grid-column:1 / -1; grid-row:1; margin:0 6px 4px; }
   html[data-theme] .settings-page-open .settings-tabs > button { grid-row:2; width:94px; min-width:0; margin:0; padding:10px 5px; }
 }
+
+/* Presets use the same surfaces and controls as the rest of the editor. */
+.preset-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:16px; margin:20px 0; }
+.preset-field { display:flex; flex-direction:column; gap:8px; min-width:0; color:var(--ink); font:650 .85rem/1.5 var(--sans); }
+.preset-field input:not([type=checkbox]), .preset-field select { box-sizing:border-box; width:100%; min-width:0; min-height:44px; padding:10px 12px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; font:inherit; }
+.preset-field input[type=checkbox] { align-self:flex-start; width:22px; height:22px; accent-color:var(--green); }
+.preset-operations { display:grid; gap:12px; margin-block:16px; }
+.preset-operation { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:12px; align-items:end; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--paper); }
+.preset-field[hidden], .preset-review[hidden] { display:none; }
+.preset-actions { display:flex; flex-wrap:wrap; gap:10px; margin:24px 0; }
+.preset-review { padding:22px; border:2px solid var(--green); border-radius:16px; background:var(--paper); color:var(--ink); }
+.preset-review pre { white-space:pre-wrap; overflow-wrap:anywhere; font:500 .9rem/1.6 var(--sans); }
+.preset-review button { margin:8px 10px 0 0; }
+html[data-theme] .settings-page-open .settings-tabs { grid-template-columns:repeat(15,94px); }

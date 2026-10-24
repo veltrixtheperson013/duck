@@ -1,3 +1,7 @@
+import { claimTrial, trialAvailable } from "./plus-trial.js";
+import { listPresets, PRESET_TEMPLATES } from "./server-presets.js";
+import { prepareManagementAction, executeManagementAction } from "./server-management.js";
+import { randomUUID } from "node:crypto";
 import { LANGUAGES, multilingualEnabled, MULTILINGUAL_RELEASE_LABEL } from "./languages.js";
 import http from "node:http";
 import fs from "node:fs";
@@ -29,6 +33,7 @@ const operatorAssets = new Map([
 ]);
 const operatorAssetCache = new Map([...new Set(["index.html", "unlock.html", ...[...operatorAssets.values()].map(({ file }) => file)])].map((file) => [file, fs.readFileSync(path.join(adminDirectory, file))]));
 const pages = new Map([
+  ["/presets.js", { file: "presets.js", type: "text/javascript; charset=utf-8" }],
   ["/icons.svg", { file: "icons.svg", type: "image/svg+xml" }],
   ["/languages.svg", { file: "languages.svg", type: "image/svg+xml" }],
   ["/lucide-LICENSE.txt", { file: "lucide-LICENSE.txt", type: "text/plain; charset=utf-8" }],
@@ -209,6 +214,8 @@ function createDuckWebsiteServer(options = {}) {
   const clusterManager = options.clusterManager || getClusterManager();
   const childControl = options.childControl || getChildControl({ client, diagnosticIntervalMs: Number(process.env.DUCK_CHILD_DIAGNOSTIC_INTERVAL_MS) || 30 * 60_000 });
   childControl.start();
+  const presetApprovals = new Map();
+  const managementStore = { read: getGuildSettings, write: updateGuildSettings };
   const sessions = new Map(); const operatorSessions = new Map(); const webhookEvents = new Map();
   const oauthStateSecret = randomBytes(32);
   const requestRates = new Map(); const globalRates = new Map(); const billingCheckoutLocks = new Set();
@@ -420,8 +427,50 @@ function createDuckWebsiteServer(options = {}) {
         const installedGuildIds = client?.guilds?.cache ? [...client.guilds.cache.keys()] : [];
         return json(res, 200, { guilds: guilds.map((guild) => { const botPresent = Boolean(client?.guilds?.cache?.has(guild.id)); return { id: guild.id, name: guild.name, icon: guild.icon || null, owner: Boolean(guild.owner), canManage: hasManageGuildPermission(guild), isAdministrator: hasAdministratorPermission(guild), botPresent, cluster: botPresent ? clusterManager.describeGuild(guild.id) : null, inviteUrl: makeBotInviteUrl(guild.id, clientId()) }; }), clusters: clusterManager.list(installedGuildIds), cached: Boolean(cachedGuilds), stale, retryAfterMs });
       }
+      const trialMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/trial$/);
+      if (trialMatch && method === "POST") {
+        const access = await guildAccess(req, trialMatch[1], true);
+        if (access.error) return json(res, access.status, { error: access.error });
+        if (!access.isAdministrator) return json(res, 403, { error: "Administrator permission is required to start a server trial." });
+        const member = await access.botGuild.members.fetch({ user: access.session.user.id, force: true }).catch(() => null);
+        if (!member?.permissions?.has(PermissionsBitField.Flags.Administrator)) return json(res, 403, { error: "Current Administrator permission is required." });
+        if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." });
+        const patch = claimTrial(getGuildSettings(trialMatch[1]), access.session.user.id);
+        updateGuildSettings(trialMatch[1], patch);
+        await recordAuditEvent(access.botGuild, { userId: access.session.user.id, action: "Started seven-day Plus trial", source: "dashboard" });
+        return json(res, 200, { ok: true, expiresAt: patch.subscription.expiresAt });
+      }
+      const presetsMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/presets(?:\/(preview|approve))?$/);
+      if (presetsMatch && ["GET", "POST"].includes(method)) {
+        const access = await guildAccess(req, presetsMatch[1], true);
+        if (access.error) return json(res, access.status, { error: access.error });
+        if (!access.isAdministrator) return json(res, 403, { error: "Administrator permission is required for server presets." });
+        access.member = await access.botGuild.members.fetch({ user: access.session.user.id, force: true }).catch(() => null);
+        if (!access.member?.permissions?.has(PermissionsBitField.Flags.Administrator)) return json(res, 403, { error: "Current Administrator permission is required." });
+        if (method === "GET" && !presetsMatch[2]) return json(res, 200, { presets: listPresets(presetsMatch[1], getGuildSettings), templates: PRESET_TEMPLATES, runs: getGuildSettings(presetsMatch[1]).presetRuns || {} });
+        if (method !== "POST") return json(res, 405, { error: "Use POST for previews and approvals." });
+        if (!requireCsrf(req, access)) return json(res, 403, { error: "Invalid request token." });
+        const input = await readJsonBody(req, 16 * 1024);
+        if (presetsMatch[2] === "preview") {
+          if (!["save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"].includes(input.tool)) return json(res, 400, { error: "Unsupported preset action." });
+          const action = await prepareManagementAction(access.botGuild, access.member, input, managementStore);
+          for (const [key, item] of presetApprovals) if (item.until <= Date.now()) presetApprovals.delete(key);
+          if (presetApprovals.size >= 100) return json(res, 429, { error: "Too many preset approvals pending. Try again shortly." });
+          const token = randomUUID(); presetApprovals.set(token, { guildId: presetsMatch[1], userId: access.session.user.id, action, until: Date.now() + 5 * 60_000 });
+          return json(res, 200, { token, preview: action.summary, expiresIn: 300 });
+        }
+        if (presetsMatch[2] === "approve") {
+          const pending = presetApprovals.get(input.token);
+          if (!pending || pending.until <= Date.now() || pending.guildId !== presetsMatch[1] || pending.userId !== access.session.user.id) return json(res, 403, { error: "This preset approval expired or belongs to another user or server." });
+          presetApprovals.delete(input.token);
+          const result = await executeManagementAction(access.botGuild, access.member, pending.action, managementStore);
+          await recordAuditEvent(access.botGuild, { userId: access.session.user.id, action: pending.action.tool, reason: pending.action.summary.slice(0, 500), source: "dashboard" });
+          return json(res, 200, { ok: true, result });
+        }
+        return json(res, 405, { error: "Use preview then approve." });
+      }
       const settingsMatch = pathname.match(/^\/api\/guilds\/(\d{10,})\/settings$/);
-      if (settingsMatch && method === "GET") { const access = await guildAccess(req, settingsMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); const stored = getGuildSettings(settingsMatch[1]); const current = withOwnerPlus(stored, access.session.user.id); if (current !== stored && current.subscription?.provider === "owner") updateGuildSettings(settingsMatch[1], { subscription: current.subscription }); const plusEnabled = isPlusEnabled(); const billingManager = canManageBilling(access.guild, stored.subscription, access.session.user.id); return json(res, 200, { settings: getPublicGuildSettings(current, process.env.OPENROUTER_MODEL), cluster: clusterManager.describeGuild(settingsMatch[1]), botProfile: getGuildBotProfile(client, settingsMatch[1]), models: getPublicModelCatalog(), channels: getGuildTextChannels(client, settingsMatch[1], access.member, access.isAdministrator), categories: getGuildCategories(client, settingsMatch[1]), roles: getGuildAssignableRoles(client, settingsMatch[1]), insights: getGuildInsights(access.botGuild), isAdministrator: access.isAdministrator, isDuckOwner: isDuckOwner(access.session.user.id), plusEnabled, billingConfigured: Boolean(plusEnabled && stripe && isStripeServerConfigured()), canManageSubscription: billingManager && stored.subscription?.provider === "stripe" && Boolean(stored.subscription?.customerId), canCancelSubscription: billingManager && stored.subscription?.provider === "stripe" && Boolean(stored.subscription?.customerId) && Boolean(stored.subscription?.subscriptionId) && !stored.subscription?.cancelAtPeriodEnd }); }
+      if (settingsMatch && method === "GET") { const access = await guildAccess(req, settingsMatch[1], true); if (access.error) return json(res, access.status, { error: access.error }); const stored = getGuildSettings(settingsMatch[1]); const current = withOwnerPlus(stored, access.session.user.id); if (current !== stored && current.subscription?.provider === "owner") updateGuildSettings(settingsMatch[1], { subscription: current.subscription }); const plusEnabled = isPlusEnabled(); const billingManager = canManageBilling(access.guild, stored.subscription, access.session.user.id); return json(res, 200, { settings: getPublicGuildSettings(current, process.env.OPENROUTER_MODEL), trialAvailable: trialAvailable(stored), cluster: clusterManager.describeGuild(settingsMatch[1]), botProfile: getGuildBotProfile(client, settingsMatch[1]), models: getPublicModelCatalog(), channels: getGuildTextChannels(client, settingsMatch[1], access.member, access.isAdministrator), categories: getGuildCategories(client, settingsMatch[1]), roles: getGuildAssignableRoles(client, settingsMatch[1]), insights: getGuildInsights(access.botGuild), isAdministrator: access.isAdministrator, isDuckOwner: isDuckOwner(access.session.user.id), plusEnabled, billingConfigured: Boolean(plusEnabled && stripe && isStripeServerConfigured()), canManageSubscription: billingManager && stored.subscription?.provider === "stripe" && Boolean(stored.subscription?.customerId), canCancelSubscription: billingManager && stored.subscription?.provider === "stripe" && Boolean(stored.subscription?.customerId) && Boolean(stored.subscription?.subscriptionId) && !stored.subscription?.cancelAtPeriodEnd }); }
       if (settingsMatch && method === "PUT") {
         const access = await guildAccess(req, settingsMatch[1], true);
         if (access.error) return json(res, access.status, { error: access.error });

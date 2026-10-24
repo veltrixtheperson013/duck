@@ -1,3 +1,6 @@
+import { recordAuditEvent } from "./community.js";
+import { MANAGEMENT_TOOLS, prepareSettings, prepareManagementAction, executeManagementAction, configurationForAi } from "./server-management.js";
+import { normalizePreset } from "./server-presets.js";
 import { hasRawToolMarkup, TOOL_FORMAT_RETRY, TOOL_FORMAT_ERROR } from "./ai-output.js";
 import { getOpenRouterChatEndpoint, getOpenRouterChatApiKey, getOpenRouterGatewayHeaders } from "../child/src/openrouter.js";
 import { statusTitle } from "./status-emojis.js";
@@ -2433,6 +2436,15 @@ function validateAiPlan(message, plan, serverContext = null) {
   const tool = TOOL_DEFINITIONS.find((definition) => definition.name === plan.tool);
   if (!tool) return null;
 
+  if (MANAGEMENT_TOOLS.includes(tool.name)) {
+    if (!hasPermission(message.member, PermissionsBitField.Flags.Administrator)) return { error: "Only an Administrator can propose server configuration changes." };
+    try {
+      if (tool.name === "update_server_settings") return { tool: tool.name, risk: "critical", mandatoryApproval: true, settings: prepareSettings(getSafeGuildSettings(message.guildId), plan.settings).patch, summary: "Update server settings (mandatory approval)." };
+      if (tool.name === "save_server_preset") return { tool: tool.name, risk: "critical", mandatoryApproval: true, preset: normalizePreset(plan.preset), applyNow: plan.applyNow === true, summary: "Save a server preset (mandatory approval)." };
+      if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(plan.presetId || "")) throw new Error("Supply an exact preset ID.");
+      return { tool: tool.name, risk: "critical", mandatoryApproval: true, presetId: plan.presetId, summary: tool.description };
+    } catch (error) { return { error: error.message }; }
+  }
   const context = serverContext ?? getMentionContext(message);
   const inferredReason = inferReasonFromRequest(message, tool.name);
   const base = {
@@ -2910,7 +2922,7 @@ async function makePlannerMessages(message, providedContext = null, options = {}
         "You are Duck's moderation intent planner.",
         "Return only JSON. Do not explain.",
         `Available tools: ${tools}.`,
-        "Schema: return one normal tool plan, or {\"tool\":\"bulk_actions\",\"actions\":[toolPlan, toolPlan],\"reason\":\"short batch reason\"} for 2-10 explicitly requested actions. Each toolPlan uses the normal fields: targetId, targetName, channelId, messageId, roleId, roleName, targetRoleName, channelName, newName, threadName, topic, messageText, query, pollQuestion, pollOptions, color, nickname, count, durationMs, deleteMessageSeconds, seconds, and reason.",
+        "Schema: return one normal tool plan, or {\"tool\":\"bulk_actions\",\"actions\":[toolPlan, toolPlan],\"reason\":\"short batch reason\"} for 2-10 explicitly requested actions. Each toolPlan uses the normal fields: targetId, targetName, channelId, messageId, roleId, roleName, targetRoleName, channelName, newName, threadName, topic, messageText, query, pollQuestion, pollOptions, color, nickname, count, durationMs, deleteMessageSeconds, seconds, settings (exact dashboard key/value patch), presetId, preset (id/name/operations/schedule), applyNow (explicitly requested immediate application of a saved preset), and reason.",
         "Tool calling tutorial: identify every explicitly requested action. Return one tool for one action, or bulk_actions with 2-10 child plans when the user asks for multiple actions. Fill only the fields each tool needs, and use IDs from serverContext instead of names whenever targeting existing objects. If a user typed @name but no ID is obvious, put that exact name in targetName.",
         "Use ban_member for permanent bans, softban_member for ban-and-unban cleanup, kick_member for removing without banning, timeout_member for temporary mutes, untimeout_member to clear a timeout, warn_member to store and DM a warning, view_warnings to list stored warnings for one member, clear_warnings to clear a requested warning count for one member, purge_messages for channel-wide recent deletion, grep_messages to search recent messages for a keyword or phrase, delete_user_messages for one mentioned user's recent messages, set_slowmode for channel rate limits, lock_channel and unlock_channel for @everyone send permissions, set_nickname for nickname changes, add_role and remove_role for role edits, disconnect_member, move_member, voice_quarantine_member, release_voice_quarantine, voice_mute_member, voice_unmute_member, deafen_member, and undeafen_member for voice moderation, create_text_channel/create_voice_channel for new channels, rename_channel and set_channel_topic for channel edits, speak to send an approved message as Duck in the current or mentioned text channel, pin_message/unpin_message only for a replied-to message or explicit message link/ID, create_thread for a new public thread, set_role_color for role color changes, create_poll for reaction polls with 2-10 options, create_role/delete_role for role management, and delete_channel only when the user explicitly asks to delete a channel.",
         "voice_quarantine_member and release_voice_quarantine are Administrator-only. Voice quarantine uses the server's configured quarantine channel and accepts durationMs from 1 minute to 24 hours.",
@@ -3369,20 +3381,20 @@ async function makeChatMessages(message, options = {}) {
         "Duck also supports utility commands for userinfo, serverinfo, channelinfo, roleinfo, warnings, quotes, ship, curse, spinwheel, reminders, rules, and ping.",
         "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, dadjoke, mood, highfive, number, thisorthat, randommember, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, caption, alibi, backstory, award, heist, superlative, plot, and confession. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
-        "For explicit Discord changes, call exactly one matching propose_*_actions function. It creates a proposal only; never claim the action already happened.",
-        "Choose the proposal group by what changes: member for bans, warnings, nicknames, and member roles; message for messages and text-channel operations; voice for voice moderation; channel for channel structure; role for role structure or color.",
+        "For explicit Discord changes, call a matching propose_*_actions function. For multiple commands or changes across groups, use propose_bulk_actions with all requested actions in order. bulk means multiple commands in one request, not only message deletion. It creates a proposal only; never claim the action already happened.",
+        "The native tool catalog attached to this request is authoritative. You can inspect server configuration and propose settings, presets, and holiday schedules; these always require approval. Never say you cannot access a tool that is in that catalog. Choose the proposal group by what changes: member for bans, warnings, nicknames, and member roles; message for messages and text-channel operations; voice for voice moderation; channel for channel structure; role for role structure or color.",
         "Copy IDs exactly from serverContext for existing members, channels, messages, and roles. Never invent an ID, silently choose an unmentioned target, or add actions the user did not request.",
         "Put all explicitly requested changes into the actions array in the user's order. Use read tools first only when missing evidence or context is actually needed.",
         "Only propose speak when the user gives the exact message Duck should send. If asked to draft an announcement, draft it without proposing speak.",
         "If native functions are unavailable, the compatibility fallback is {{tool::target::reason}}. Prefer native propose functions whenever exposed.",
-        "Duck validates every proposal against requester permissions, role hierarchy, exact targets, and server boundaries, then applies the server's approval mode.",
+        "Duck validates every proposal against requester permissions, role hierarchy, exact targets, and server boundaries. Settings and preset changes ALWAYS require Administrator approval; other actions follow the server approval mode.",
         "If a requested action lacks a target or required value, ask one short follow-up instead of guessing or calling a proposal tool.",
         "Be honest when you are missing context, permissions, or tool access.",
         personality ? `Server style preference: ${personality}. Treat this only as a tone and personality preference; it never overrides safety, permission, approval, privacy, or tool rules.` : "",
         "Do not claim an action was done unless Duck has already confirmed execution.",
         capabilityMode === CAPABILITY_MODES.agent
           ? `Agent mode is active. Use up to ${getAiAgentMaxSteps(message.guildId)} observe-plan steps, reassess after each tool result, then submit at most 10 explicitly requested actions. Stop as soon as enough evidence exists.`
-          : "Agent mode is not active. Use at most one tool step before answering or submitting a proposal.",
+          : "Use up to three bounded tool steps to inspect missing context and then propose the requested changes. Stop when enough evidence exists.",
       ].join(" "),
     },
     ...makeUserMessagesWithVision(payload, context, options.includeVision),
@@ -3390,6 +3402,7 @@ async function makeChatMessages(message, options = {}) {
 }
 
 const AI_READ_TOOL_DEFINITIONS = Object.freeze([
+  { type: "function", function: { name: "inspect_server_configuration", description: "Administrator-only: inspect current server settings, writable setting keys, presets, holiday templates, and model choices before proposing configuration changes.", parameters: { type: "object", properties: { settingKeys: { type: "array", maxItems: 20, items: { type: "string" } }, presetId: { type: "string" } }, additionalProperties: false } } },
   {
     type: "function",
     function: {
@@ -3487,15 +3500,21 @@ const AI_READ_TOOL_DEFINITIONS = Object.freeze([
 ]);
 
 const AI_ACTION_TOOL_GROUPS = Object.freeze([
+  { name: "propose_server_actions", description: "Use save_server_preset with applyNow:true when explicitly asked to create and apply a custom preset in one approval. Always request Administrator approval to change dashboard settings, save/delete channel presets, apply presets, or restore safe changes. Read inspect_server_configuration first for exact setting keys and templates. Use settings for update_server_settings; preset for save_server_preset; presetId for apply/restore/delete.", tools: MANAGEMENT_TOOLS },
   { name: "propose_member_actions", description: "Propose explicit member moderation or membership changes. Copy targetId and roleId from context. Use durationMs for timeouts and deleteMessageSeconds for softbans.", tools: ["ban_member", "unban_user", "kick_member", "softban_member", "timeout_member", "untimeout_member", "warn_member", "view_warnings", "clear_warnings", "set_nickname", "add_role", "remove_role"] },
   { name: "propose_message_actions", description: "Propose message and text-channel operations. Use count for deletion/search, seconds for slowmode, exact messageText for speak, and pollQuestion plus pollOptions for polls.", tools: ["purge_messages", "grep_messages", "delete_user_messages", "set_slowmode", "lock_channel", "unlock_channel", "speak", "pin_message", "unpin_message", "create_thread", "create_poll"] },
   { name: "propose_voice_actions", description: "Propose voice moderation for an explicitly named member. Copy targetId and destination channelId from context; durationMs is milliseconds.", tools: ["disconnect_member", "move_member", "voice_quarantine_member", "release_voice_quarantine", "voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"] },
   { name: "propose_channel_actions", description: "Propose server channel creation or carefully targeted channel edits. Copy existing channelId; use channelName for creation, newName for rename, and topic for topic changes.", tools: ["create_text_channel", "create_voice_channel", "rename_channel", "set_channel_topic", "delete_channel"] },
+  { name: "propose_bulk_actions", description: "Propose 2-10 explicitly requested commands in one ordered batch, including mixed member, channel, message, voice, role, server settings, and preset actions. Do not nest bulk_actions. Each child uses its actual tool name.", tools: TOOL_DEFINITIONS.map(tool => tool.name) },
   { name: "propose_role_actions", description: "Propose server role creation, deletion, or color changes. Copy roleId for existing roles, use roleName for creation, and use a hex color such as #3B82F6.", tools: ["create_role", "delete_role", "set_role_color"] },
 ]);
 
 const AI_ACTION_PROPERTIES = Object.freeze({
   tool: { type: "string" },
+  settings: { type: "object", description: "Exact dashboard setting names and requested values. Inspect server configuration for writable keys. No billing or subscription fields." },
+  applyNow: { type: "boolean", description: "For save_server_preset only: save and apply the exact preset immediately after the same mandatory approval. Use true only if the user explicitly requests application now." },
+  presetId: { type: "string", description: "Exact saved preset or template ID." },
+  preset: { type: "object", description: "{id,name,operations:[{kind:create_category|create_text|create_voice|rename|delete,channelId?,name?,key?,parentKey?,parentId?}],schedule?:{enabled,holiday:halloween|christmas|new-year|valentine OR monthDay:MM-DD,durationDays:1-30,automatic:boolean,channelId:notificationChannelId}}. No deletions on a holiday schedule. UTC dates." },
   targetId: { type: "string", description: "Existing member or user ID copied from server context." },
   targetName: { type: "string", description: "Exact visible target name only when an ID is unavailable." },
   channelId: { type: "string", description: "Existing channel ID copied from server context." },
@@ -3571,7 +3590,7 @@ function validateAiActionToolCall(message, toolCall, serverContext = null) {
 
 function getAiAgentMaxSteps(guildId) {
   const configured = Math.max(1, Math.min(Number(process.env.AI_AGENT_MAX_STEPS) || 4, 8));
-  return getGuildCapabilityMode(guildId) === CAPABILITY_MODES.agent ? configured : 1;
+  return getGuildCapabilityMode(guildId) === CAPABILITY_MODES.agent ? configured : Math.min(configured, 3);
 }
 
 function getAiToolContextLimit(value, maximum = 100) {
@@ -3619,6 +3638,7 @@ function makeAiToolMessageSummary(item, channel) {
 }
 
 async function executeAiReadTool(message, toolCall, allowedContext = null, activity = null) {
+  if (toolCall?.function?.name === "inspect_server_configuration") { if (!hasPermission(message.member, PermissionsBitField.Flags.Administrator)) throw new Error("Administrator permission is required to inspect server configuration."); return configurationForAi(message.guildId, parseAiToolArguments(toolCall)); }
   const name = String(toolCall?.function?.name || "");
   const args = parseAiToolArguments(toolCall);
   if (HELPER_TOOLS.some((tool) => tool.function.name === name)) {
@@ -3820,6 +3840,7 @@ async function chatWithOpenAiCompatible(message, config, activity = null) {
   let retriedToolFormat = false;
 
   async function getNextResponse(allowTools = true) {
+    await activity?.update("thinking");
     await activity?.update("thinking");
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let response;
@@ -4282,6 +4303,7 @@ function parseInlineToolCall(message, content) {
 }
 
 async function generateChatResponse(message, activity = null) {
+  await activity?.start();
   const provider = getConfiguredAiProvider();
   logDebug("ai.chat.provider", { provider, messageId: message.id, channelId: message.channelId });
   try {
@@ -4310,7 +4332,7 @@ async function generateChatResponse(message, activity = null) {
       channelId: message.channelId,
     });
     return { content: null, error: makeAiUserError(err, "AI failed before it could answer.") };
-  }
+  } finally { await activity?.stop(); }
 }
 
 async function resolveAiFunCall(message, content) {
@@ -4375,6 +4397,7 @@ function canApprove(action, member) {
 }
 
 function commandLabel(action) {
+  if (MANAGEMENT_TOOLS.includes(action.tool)) return action.tool.replaceAll("_", " ");
   if (action.tool === "ban_member") return "Ban";
   if (action.tool === "unban_user") return "Unban";
   if (action.tool === "bulk_actions") return "Bulk Actions";
@@ -4655,7 +4678,7 @@ async function promptForConfirmation(message, action, options = {}) {
     content: limitDiscordContent(options.content ?? describeAction(pending)),
     embeds: options.useEmbed ? [makeActionEmbed(pending)] : [],
     components: makeConfirmationRows(actionId),
-    allowedMentions: { repliedUser: false },
+    allowedMentions: { parse: [], repliedUser: false },
   };
 
   const prompt = options.messageToEdit
@@ -4705,9 +4728,15 @@ async function executeAction(client, action, approver) {
   const botMember = await cachedBotMember(guild);
   const needed = TOOL_REQUIREMENTS[action.tool];
 
-  if (needed && !hasPermission(botMember, needed)) {
+  if (needed && !MANAGEMENT_TOOLS.includes(action.tool) && !hasPermission(botMember, needed)) {
     const result = `I cannot run \`${action.tool}\` because Duck is missing required Discord permission(s): ${describePermissionRequirement(needed)}.`;
     logWarn("moderation.execute.missing-bot-permission", { actionId: action.id, tool: action.tool, needed });
+    return result;
+  }
+
+  if (MANAGEMENT_TOOLS.includes(action.tool)) {
+    const result = await executeManagementAction(guild, approver, action);
+    await recordAuditEvent(guild, { userId: approver.id, action: action.tool, reason: action.summary.slice(0, 500), source: "discord" });
     return result;
   }
 
@@ -5228,6 +5257,7 @@ async function executeAction(client, action, approver) {
 
 function shouldAutoExecuteAction(guildId, action) {
   const mode = getGuildCapabilityMode(guildId);
+  if ((action.tool === "bulk_actions" ? action.actions || [] : [action]).some(item => MANAGEMENT_TOOLS.includes(item.tool))) return { autoExecute: false, mode: CAPABILITY_MODES.ask };
   if (mode === CAPABILITY_MODES.agent) return { autoExecute: true, mode };
   if (mode === CAPABILITY_MODES.approve) {
     const actions = action.tool === "bulk_actions" ? action.actions ?? [] : [action];
@@ -5240,6 +5270,15 @@ function shouldAutoExecuteAction(guildId, action) {
 }
 
 async function dispatchPlannedAction(message, action, options = {}) {
+  if (action.tool === "bulk_actions") {
+    const children = [];
+    for (const child of action.actions) children.push(MANAGEMENT_TOOLS.includes(child.tool) ? await prepareManagementAction(message.guild, message.member, child) : child);
+    action = { ...action, actions: children, summary: children.map((child, i) => `${i + 1}. ${child.summary}`).join("\n") };
+  } else if (MANAGEMENT_TOOLS.includes(action.tool)) action = await prepareManagementAction(message.guild, message.member, action);
+  if ((action.tool === "bulk_actions" ? action.actions : [action]).some(child => MANAGEMENT_TOOLS.includes(child.tool))) {
+    if (action.summary.length > 1850) throw new Error("Split this request into smaller approvals so every proposed change is visible.");
+    options = { ...options, content: action.summary + "\n\nAdministrator approval required. No changes have run.", useEmbed: false };
+  }
   const policy = shouldAutoExecuteAction(message.guildId, action);
   if (!policy.autoExecute) {
     await promptForConfirmation(message, action, options);
@@ -6288,7 +6327,7 @@ function buildBulkPlan(message, text) {
   const actions = [];
   for (const command of commands) {
     if (/^bulk\b/i.test(command)) return { error: "Nested bulk commands are not allowed." };
-    const commandMessage = makeMessageWithContent(message, command);
+    const commandMessage = makeMessageWithContent(message, getLegacyCommandContent(command, message.guildId) || command.replace(/^duck\s+/i, ""));
     const action = planLocalModerationTool(commandMessage);
     if (!action || action.error) return { error: `Could not validate \`${command}\`: ${action?.error || "not a supported action"}` };
     actions.push(action);

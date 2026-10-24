@@ -13,11 +13,27 @@ export function createChatActivity(userId, publish, now = Date.now) {
   const events = [];
   let lastUpdate = -Infinity;
   let finished = false;
+  let suspended = false;
+  let waitingForApproval = false;
+  let timer = null;
+  let currentName = "thinking";
+  let currentLabel = "Thinking";
+  let publishing = Promise.resolve();
+  const enqueueProgress = () => {
+    publishing = publishing.then(async () => {
+      if (finished || suspended || waitingForApproval) return;
+      await publish({ content: null, embeds: [{ title: statusTitle(currentLabel, currentName === "thinking" ? "thinking" : "loading"), description: [...events.slice(-3).map(line => `\u2713 ${line}`), `-# Working \u00b7 ${seconds()}s`].join("\n"), color: 0x718096 }], components: [], allowedMentions: { parse: [] } });
+    }).catch(() => {});
+    return publishing;
+  };
   const seconds = () => Math.max(1, Math.round((now() - started) / 1000));
   const activity = {
+    async start() { suspended = false; if (!timer && !finished) { timer = setInterval(enqueueProgress, 2500); timer.unref?.(); } await activity.update("thinking"); },
+    async stop() { suspended = true; clearInterval(timer); timer = null; await publishing; },
     async update(name, result) {
       if (finished) return;
       const label = name === "thinking" ? "Thinking" : name === "context" ? "Reading server context" : labels[name] || "Checking server information";
+      currentName = name; currentLabel = label;
       if (result !== undefined) {
         const completed = result?.error ? `${label} — unsuccessful` : name === "search_web" ? `Found ${result?.results?.length || 0} search results` : name === "read_web_page" ? "Read a webpage" : name === "reverse_image_search" ? "Prepared an image search link" : result?.accepted ? "Prepared an action proposal (not executed)" : `${label} — complete`;
         events.push(completed);
@@ -25,10 +41,11 @@ export function createChatActivity(userId, publish, now = Date.now) {
       }
       if (name !== "thinking" && now() - lastUpdate < 1200) return;
       lastUpdate = now();
-      await publish({ content: null, embeds: [{ title: statusTitle(label, name === "thinking" ? "thinking" : "loading"), description: [...events.slice(-3).map((line) => `✓ ${line}`), `-# Working · ${seconds()}s`].join("\n"), color: 0x718096 }], components: [], allowedMentions: { parse: [] } }).catch(() => {});
+      await enqueueProgress();
     },
     finish(payload) {
       finished = true;
+      clearInterval(timer); timer = null;
       const label = `Worked for ${seconds()}s`;
       for (const [key, value] of records) if (value.until < now()) records.delete(key);
       if (records.size >= 1000) records.delete(records.keys().next().value);
@@ -44,11 +61,12 @@ export function createChatActivity(userId, publish, now = Date.now) {
       timer.unref?.();
       pending.set(requestId, { userId, settle, timer });
       try {
+        waitingForApproval = true; await publishing;
         await publish({ content: null, embeds: [{ title: statusTitle("Approve web access", "loading"), description: `Duck wants to send a GET request to:\n${url}\n\nThe URL, including any search query, will be sent to this website. Approve this request? Expires in 60 seconds.`, color: 0xd6a648 }], components: [new ActionRowBuilder().addComponents(row(`duck_web:yes:${requestId}`, "Approve once", ButtonStyle.Success), row(`duck_web:no:${requestId}`, "Deny", ButtonStyle.Secondary))], allowedMentions: { parse: [] } });
         const approved = await decision;
         events.push(approved ? "Web request approved" : "Web request denied or expired");
         return approved;
-      } finally { clearTimeout(timer); pending.delete(requestId); }
+      } finally { waitingForApproval = false; clearTimeout(timer); pending.delete(requestId); }
     },
   };
   return activity;

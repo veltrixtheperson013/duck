@@ -259,7 +259,7 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     automodMentionLimit: Number.isInteger(settings.automodMentionLimit) ? settings.automodMentionLimit : 0,
     automodEmojiLimit: Number.isInteger(settings.automodEmojiLimit) ? settings.automodEmojiLimit : 0,
     automodLineLimit: Number.isInteger(settings.automodLineLimit) ? settings.automodLineLimit : 0,
-    automodCustomWords: plus && Array.isArray(settings.automodCustomWords) ? settings.automodCustomWords : [],
+    automodCustomWords: Array.isArray(settings.automodCustomWords) ? settings.automodCustomWords : [],
     automodViolationsBeforeWarn: Number.isInteger(settings.automodViolationsBeforeWarn) ? settings.automodViolationsBeforeWarn : 3,
     automodWarningsBeforeAction: Number.isInteger(settings.automodWarningsBeforeAction) ? settings.automodWarningsBeforeAction : 3,
     automodEscalation: ["kick", "softban"].includes(settings.automodEscalation) ? settings.automodEscalation : "kick",
@@ -314,7 +314,7 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
     subscription: {
       tier: plus ? "plus" : "free",
       status: plus ? subscription.status : "inactive",
-      source: plus && ["owner", "operator"].includes(subscription.provider) ? subscription.provider : plus ? "stripe" : null,
+      source: plus && ["owner", "operator", "trial"].includes(subscription.provider) ? subscription.provider : plus ? "stripe" : null,
       expiresAt: plus ? subscription.expiresAt ?? null : null,
       cancelAtPeriodEnd: plus ? Boolean(subscription.cancelAtPeriodEnd) : false,
       brandingEligible: hasMaturePlusEntitlement(settings, now),
@@ -323,9 +323,11 @@ function getPublicGuildSettings(settings = {}, configuredModel = "", now = Date.
   };
 }
 
+const WRITABLE_SETTINGS = new Set(["aiPersonalityPreset", "aiWebEnabled", "aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleMode", "reactionRoleLimit", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ticketTranscriptsEnabled", "autorolesEnabled", "autoroleRoleIds", "levelsEnabled", "levelAnnouncementChannelId", "levelIgnoredChannelIds", "levelRewards", "suggestionsEnabled", "suggestionChannelId", "suggestionAnonymousEnabled", "starboardEnabled", "starboardChannelId", "starboardThreshold", "starboardEmoji", "starboardColor", "starboardAllowNsfw", "scheduledPosts", "colorRolesEnabled", "colorRoleChannelId", "colorRoleRequiredRoleId", "colorRoleTitle", "colorRoleDescription", "colorRoleAccent", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "colorRoleOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodLinkFilter", "automodRepeatedTextFilter", "automodDangerousFileFilter", "automodZalgoFilter", "automodMentionLimit", "automodEmojiLimit", "automodLineLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+
 function makeSettingsPatch(current, input, configuredModel = "", now = Date.now()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Settings must be a JSON object.");
-  const allowed = new Set(["aiPersonalityPreset", "aiWebEnabled", "aiChatEnabled", "aiModel", "aiVisionEnabled", "aiContextMode", "aiResponseStyle", "aiChannelMode", "aiPersonality", "aiScanEnabled", "aiScanChannelIds", "aiScanFlagChannelId", "aiScanRulesChannelId", "aiScanSensitivity", "reactionRolesEnabled", "reactionRoleChannelId", "reactionRoleTitle", "reactionRoleMode", "reactionRoleLimit", "reactionRoleOptions", "ticketsEnabled", "ticketPanelChannelId", "ticketCategoryId", "ticketSupportRoleId", "ticketAdminRoleId", "ticketPanelTitle", "ticketOptions", "ticketTranscriptsEnabled", "autorolesEnabled", "autoroleRoleIds", "levelsEnabled", "levelAnnouncementChannelId", "levelIgnoredChannelIds", "levelRewards", "suggestionsEnabled", "suggestionChannelId", "suggestionAnonymousEnabled", "starboardEnabled", "starboardChannelId", "starboardThreshold", "starboardEmoji", "starboardColor", "starboardAllowNsfw", "scheduledPosts", "colorRolesEnabled", "colorRoleChannelId", "colorRoleRequiredRoleId", "colorRoleTitle", "colorRoleDescription", "colorRoleAccent", "colorRoleAllowRemove", "colorRoleRandomOnJoin", "colorRoleOptions", "ttsEnabled", "ttsModel", "ttsAnnounceNames", "capabilityMode", "commandPrefix", "modChannelId", "welcomeChannelId", "welcomeMessage", "farewellMessage", "logChannelId", "funCommandsEnabled", "automodEnabled", "automodHoneypotEnabled", "automodHoneypotChannelId", "automodSwearFilter", "automodNsfwFilter", "automodInviteFilter", "automodCapsFilter", "automodLinkFilter", "automodRepeatedTextFilter", "automodDangerousFileFilter", "automodZalgoFilter", "automodMentionLimit", "automodEmojiLimit", "automodLineLimit", "automodCustomWords", "automodViolationsBeforeWarn", "automodWarningsBeforeAction", "automodEscalation", "automodGlobalSlowmodeSeconds", "automodChannelSlowmodes", "customActions", ...FUN_COMMANDS.map(({ key }) => key)]);
+  const allowed = WRITABLE_SETTINGS;
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Unknown setting.");
   const patch = {};
   const plus = hasPlusEntitlement(current, now);
@@ -371,7 +373,6 @@ function makeSettingsPatch(current, input, configuredModel = "", now = Date.now(
   if ("automodCustomWords" in input) {
     if (!Array.isArray(input.automodCustomWords) || input.automodCustomWords.length > 100) throw new TypeError("Custom words must be a list of up to 100 entries.");
     if (input.automodCustomWords.some((value) => typeof value !== "string")) throw new TypeError("Every custom word must be text.");
-    if (!hasPlusEntitlement(current, now) && input.automodCustomWords.length) { const error = new Error("Custom AutoMod words require Duck Plus."); error.code = "plus_required"; throw error; }
     const words = [...new Set(input.automodCustomWords.map((value) => value.trim().toLocaleLowerCase("en-US")).filter(Boolean))];
     if (words.some((value) => value.length > 40)) throw new TypeError("Each custom word must be 40 characters or fewer.");
     patch.automodCustomWords = words;
@@ -519,4 +520,5 @@ export {
   hasMaturePlusEntitlement,
   hasPlusEntitlement,
   makeSettingsPatch,
+  WRITABLE_SETTINGS,
 };

@@ -74,6 +74,7 @@ function createMessageFixture({ readable = true } = {}) {
 test("AI Tools - Schema Definitions & Bounds", async (t) => {
   await t.test("exposes bounded read-tool definitions", () => {
     const expectedReadTools = [
+      "inspect_server_configuration",
       "request_channel_context",
       "search_channel_context",
       "inspect_message_context",
@@ -98,7 +99,7 @@ test("AI Tools - Schema Definitions & Bounds", async (t) => {
   });
 
   await t.test("exposes action tool groups without duplicate definitions", () => {
-    const groupedActions = AI_ACTION_TOOL_GROUPS.flatMap((group) => group.tools);
+    const groupedActions = AI_ACTION_TOOL_GROUPS.filter(group => group.name !== "propose_bulk_actions").flatMap((group) => group.tools);
     
     // Ensure uniqueness
     assert.equal(new Set(groupedActions).size, groupedActions.length);
@@ -107,7 +108,8 @@ test("AI Tools - Schema Definitions & Bounds", async (t) => {
       TOOL_DEFINITIONS.map((tool) => tool.name).sort()
     );
 
-    assert.equal(AI_ACTION_TOOL_DEFINITIONS.length, 5);
+    assert.equal(AI_ACTION_TOOL_DEFINITIONS.length, 7);
+    assert.deepEqual(AI_ACTION_TOOL_GROUPS.find(group => group.name === "propose_bulk_actions").tools, TOOL_DEFINITIONS.map(tool => tool.name));
     assert.equal(
       AI_TOOL_DEFINITIONS.length,
       AI_READ_TOOL_DEFINITIONS.length + AI_ACTION_TOOL_DEFINITIONS.length + HELPER_TOOLS.length

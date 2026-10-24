@@ -1,3 +1,4 @@
+import { startPresetScheduler } from "./server-presets.js";
 import { createChatActivity, handleChatActivity } from "./chat-activity.js";
 import { statusPayload } from "./status-emojis.js";
 import { handleLanguageAutocomplete, handlePersonalCommand } from "./personal-app.js";
@@ -122,6 +123,11 @@ client.once(Events.ClientReady, async () => {
   logInfo("pending-actions.ready", { count: pendingActions.size });
   startInviteCleanupLoop();
   startCommunityStudio(client);
+  startPresetScheduler(client, async (guild, member, prepared) => {
+    const channel = await guild.channels.fetch(prepared.preset.schedule.channelId);
+    const message = { guild, guildId: guild.id, channel, channelId: channel.id, author: { id: member.id }, member, reply: payload => channel.send(payload) };
+    await dispatchPlannedAction(message, { tool: "apply_server_preset", presetId: prepared.preset.id });
+  });
   restoreVoiceQuarantineTimers();
   try {
     await registerCommands(client);
@@ -568,7 +574,8 @@ client.on(Events.MessageCreate, async (message) => {
     const planningMessage = invocation.invoked
       ? makeMessageWithContent(message, invocation.content)
       : message;
-    const wantsToolPlan = isLikelyModerationRequest(planningMessage.content);
+    const isHelpQuestion = /(how do i|how can i|what is|explain|teach me|tutorial|help me|create self roles|reaction roles|self roles|setup|guide)/i.test(planningMessage.content);
+    const wantsToolPlan = isLikelyModerationRequest(planningMessage.content) && !isHelpQuestion;
 
     const utilityResponse = await makeUtilityResponse(planningMessage, planningMessage.content);
     if (utilityResponse) {

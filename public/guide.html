@@ -6,8 +6,8 @@
   <meta name="description" content="Learn how to invite, configure, and use the Duck Discord moderation bot.">
   <title>Guide — Duck</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <script src="/theme-init.js?v=20260841"></script><link rel="preload" href="/styles.css?v=20261006" as="style"><link rel="stylesheet" href="/styles.css?v=20261006">
-  <script src="/site.js?v=20261006" defer></script>
+  <script src="/theme-init.js?v=20260841"></script><link rel="preload" href="/styles.css?v=20261024" as="style"><link rel="stylesheet" href="/styles.css?v=20261024">
+  <script src="/site.js?v=20261024" defer></script>
 </head>
 <body class="public-site page-guide">
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -31,6 +31,7 @@
         <a href="#use"><span>06</span> Commands and tools</a>
         <a href="#helpers"><span>07</span> Chat and web access</a>
         <a href="#languages"><span>08</span> Languages</a>
+        <a href="#server-presets"><span>09</span> Presets and holidays</a>
       </nav>
     </aside>
 
@@ -134,6 +135,7 @@
         <p>Use <code>/helper translate text:Hello language:French</code> to translate up to 1,000 characters. Search by language name, native name, or code. Translation uses Duck's AI provider, and quality varies by model and language. These options remain locked until the release date.</p>
         <p>The <strong>Language</strong> button in the website footer lets you search the language list. After release, it opens Google's translated copy of a public page. Use your browser's page-translation option for signed-in dashboards. Fixed bot controls remain in English in this first release.</p>
       </div></section>
+      <section id="server-presets" class="guide-step"><div class="step-number">09</div><div><h2>Server presets and approved AI settings</h2><p>Open <strong>Server presets</strong> in your server dashboard. Start from a template or add operations to create, rename, or delete channels and empty categories. Review the preview and approve it before anything changes. Saving a preset does not apply it; preview its application when ready.</p><p>Holiday schedules use UTC dates and last 1-30 days. Choose a fresh Discord approval each holiday, or explicitly approve the same exact plan to run annually. Changing the plan requires another approval. Duck checks that the authorizing Administrator still has permission before scheduled work.</p><p>Restoration preserves populated, occupied, renamed, or moved channels. Deleted messages cannot be recovered, so scheduled holiday presets cannot delete existing channels. An interrupted run keeps a journal for safe restoration.</p><p>You can also ask Duck in chat: &quot;Create and apply a Halloween preset&quot; or &quot;Enable AutoMod and set the mention limit to 5.&quot; Duck can inspect configuration and propose dashboard setting changes, but always asks an Administrator to approve them. Mixed requests use one ordered bulk proposal of up to 10 actions. Tutorials and help questions are treated as questions.</p><p>Presets, approval controls, moderation, and custom blocked words are free. Administrators can claim one seven-day Plus trial from <strong>View plan</strong>. After seven days, paid Plus is required to keep its extras; free features continue. Trials do not grant paid loyalty milestones or automatically charge a card.</p></div></section>
       <section class="guide-finish"><span aria-hidden="true">🦆</span><div><p class="eyebrow">Setup complete</p><h2>The pond is operational.</h2><p>Duck is ready for moderation, server utilities, voice, and a responsible amount of chaos.</p></div></section>
     </article>
   </main>

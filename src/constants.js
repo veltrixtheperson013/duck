@@ -8,6 +8,7 @@ const warningsPath = path.join(dataDir, "warnings.json");
 const quotesPath = path.join(dataDir, "quotes.json");
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const TOOL_DEFINITIONS = [
+  ...["update_server_settings", "save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"].map(name => ({ name, risk: "critical", description: name.replaceAll("_", " ") + ". Always requires fresh Administrator approval." })),
   {
     name: "ban_member",
     risk: "high",
@@ -267,6 +268,11 @@ const EIGHT_BALL_ANSWERS = [
   "Very doubtful.",
 ];
 const TOOL_REQUIREMENTS = {
+  update_server_settings: PermissionsBitField.Flags.Administrator,
+  save_server_preset: PermissionsBitField.Flags.Administrator,
+  apply_server_preset: PermissionsBitField.Flags.Administrator,
+  restore_server_preset: PermissionsBitField.Flags.Administrator,
+  delete_server_preset: PermissionsBitField.Flags.Administrator,
   ban_member: PermissionsBitField.Flags.BanMembers,
   unban_user: PermissionsBitField.Flags.BanMembers,
   kick_member: PermissionsBitField.Flags.KickMembers,
