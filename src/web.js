@@ -33,6 +33,9 @@ const operatorAssets = new Map([
 ]);
 const operatorAssetCache = new Map([...new Set(["index.html", "unlock.html", ...[...operatorAssets.values()].map(({ file }) => file)])].map((file) => [file, fs.readFileSync(path.join(adminDirectory, file))]));
 const pages = new Map([
+  ["/modern.css", { file: "modern.css", type: "text/css; charset=utf-8" }],
+  ["/InterVariable.woff2", { file: "InterVariable.woff2", type: "font/woff2" }],
+  ["/Inter-LICENSE.txt", { file: "Inter-LICENSE.txt", type: "text/plain; charset=utf-8" }],
   ["/presets.js", { file: "presets.js", type: "text/javascript; charset=utf-8" }],
   ["/icons.svg", { file: "icons.svg", type: "image/svg+xml" }],
   ["/languages.svg", { file: "languages.svg", type: "image/svg+xml" }],
@@ -69,7 +72,7 @@ const MANAGE_GUILD = 1n << 5n;
 const ADMINISTRATOR = 1n << 3n;
 const DUCK_OWNER_USER_ID = "1138897388694687834";
 
-function securityHeaders(contentType) { return { "Content-Type": contentType, "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data: https://cdn.discordapp.com; frame-src https://discord.com/widget; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin", "Origin-Agent-Cluster": "?1", "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()", "Referrer-Policy": "no-referrer", "Strict-Transport-Security": "max-age=31536000; includeSubDomains", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "X-Permitted-Cross-Domain-Policies": "none" }; }
+function securityHeaders(contentType) { return { "Content-Type": contentType, "Content-Security-Policy": "default-src 'none'; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data: https://cdn.discordapp.com; frame-src https://discord.com/widget; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin", "Origin-Agent-Cluster": "?1", "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()", "Referrer-Policy": "no-referrer", "Strict-Transport-Security": "max-age=31536000; includeSubDomains", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "X-Permitted-Cross-Domain-Policies": "none" }; }
 function sendBuffer(res, status, contentType, payload, method = "GET", extraHeaders = {}) { if (!Buffer.isBuffer(payload)) throw new TypeError("Buffered responses require a Buffer payload."); res.writeHead(status, { ...securityHeaders(contentType), "Cache-Control": "no-store", "Content-Length": payload.length, ...extraHeaders }); res.end(method === "HEAD" ? undefined : payload); }
 function text(res, status, body, method = "GET", headers = {}) { sendBuffer(res, status, "text/plain; charset=utf-8", Buffer.from(String(body)), method, headers); }
 function safeJson(body) { return JSON.stringify(body).replace(/[<>&\u2028\u2029]/g, (character) => ({ "<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029" })[character]); }

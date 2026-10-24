@@ -4,7 +4,7 @@ import { statusTitle } from "./status-emojis.js";
 
 const records = new Map();
 const pending = new Map();
-const labels = { search_web: "Searching the web", read_web_page: "Reading a webpage", calculate: "Calculating", file_metadata: "Checking file metadata", reverse_image_search: "Preparing an image search link" };
+const labels = { read_channel_history: "Reading channel history", request_channel_context: "Reading recent messages", search_channel_context: "Searching channel messages", search_web: "Searching the web", read_web_page: "Reading a webpage", calculate: "Calculating", file_metadata: "Checking file metadata", reverse_image_search: "Preparing an image search link" };
 const row = (id, label, style = ButtonStyle.Secondary) => new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style);
 
 export function createChatActivity(userId, publish, now = Date.now) {

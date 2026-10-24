@@ -8,6 +8,7 @@ const warningsPath = path.join(dataDir, "warnings.json");
 const quotesPath = path.join(dataDir, "quotes.json");
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const TOOL_DEFINITIONS = [
+  { name: "flag_message_for_review", risk: "medium", description: "Flag one evidenced message for human review without punishing its author. Requires an exact message ID, channel ID, and neutral evidence-based reason." },
   ...["update_server_settings", "save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"].map(name => ({ name, risk: "critical", description: name.replaceAll("_", " ") + ". Always requires fresh Administrator approval." })),
   {
     name: "ban_member",
@@ -268,6 +269,7 @@ const EIGHT_BALL_ANSWERS = [
   "Very doubtful.",
 ];
 const TOOL_REQUIREMENTS = {
+  flag_message_for_review: PermissionsBitField.Flags.ManageMessages,
   update_server_settings: PermissionsBitField.Flags.Administrator,
   save_server_preset: PermissionsBitField.Flags.Administrator,
   apply_server_preset: PermissionsBitField.Flags.Administrator,

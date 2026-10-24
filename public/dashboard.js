@@ -55,6 +55,7 @@ function renderGuilds(search = $("[data-server-search]")?.value || "") {
 }
 
 function selectTab(name) {
+  $(".settings-content")?.scrollTo({ top: 0, behavior: "instant" });
   $$("[data-settings-tab]").forEach((button) => { const active = button.dataset.settingsTab === name; button.classList.toggle("is-active", active); button.setAttribute("aria-selected", String(active)); });
   $$("[data-settings-panel]").forEach((panel) => { const active = panel.dataset.settingsPanel === name; panel.classList.toggle("is-active", active); panel.hidden = !active; });
 }

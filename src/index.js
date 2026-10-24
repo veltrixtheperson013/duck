@@ -603,7 +603,7 @@ client.on(Events.MessageCreate, async (message) => {
       });
     }
 
-    if (wantsRecentHistory(planningMessage, planningMessage.content)) {
+    if (!hasConfiguredAi() && wantsRecentHistory(planningMessage, planningMessage.content)) {
       const content = await makeRecentHistoryResponse(message);
       logInfo("message.history-response", {
         messageId: message.id,

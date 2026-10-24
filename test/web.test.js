@@ -82,6 +82,12 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.status, 200);
     assert.match(css.headers.get("content-type"), /^text\/css/);
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
+    const modern = await fetch(`${origin}/modern.css?v=20261024design`);
+    assert.equal(modern.status, 200); assert.match(await modern.text(), /@font-face/);
+    const font = await fetch(`${origin}/InterVariable.woff2`);
+    assert.equal(font.status, 200); assert.equal(font.headers.get("content-type"), "font/woff2");
+    assert.equal(Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString(), "wOF2");
+    assert.match(homepage.headers.get("content-security-policy"), /font-src 'self'/);
     const cssText = await css.text(); assert.match(cssText, /Dark palettes must also neutralize older light-only module surfaces/); assert.match(cssText, /html\[data-theme="dark"\].*\.settings-group/); assert.match(cssText, /\.public-site \.cta h2 \{ color:#fff; \}/); assert.match(cssText, /\.public-site \.cta \.eyebrow \{ color:#9be1bd; \}/);
 
     const versionedCss = await fetch(`${origin}/styles.css?v=20261024`, { headers: { "Accept-Encoding": "identity" } });
@@ -122,7 +128,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20260841/);
     assert.match(dashboardText, /styles\.css\?v=20261024/);
-    assert.match(dashboardText, /dashboard\.js\?v=20261024/);
+    assert.match(dashboardText, /dashboard\.js\?v=20261024design/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
     assert.match(dashboardText, /data-color-panel/);
@@ -150,7 +156,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     const serverDashboard = await fetch(`${origin}/dashboard/servers/123456789012345678`);
     assert.equal(serverDashboard.status, 200);
     assert.equal(serverDashboard.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
-    assert.match(await serverDashboard.text(), /Server control panel/);
+    assert.match(await serverDashboard.text(), /Server workspace/);
     assert.equal((await fetch(`${origin}/dashboard/account`)).status, 200);
     assert.equal((await fetch(`${origin}/dashboard/servers/123456789012345678/plan`)).status, 200);
     assert.equal((await fetch(`${origin}/favicon.svg`)).status, 200);
