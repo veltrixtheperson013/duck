@@ -13,6 +13,18 @@ async function withOperator(run) {
   finally { clearInterval(server.operatorMaintenanceTimer); server.close(); await once(server, "close"); }
 }
 
+test("operator page 404s render HTML while API misses retain JSON semantics", async () => {
+  await withOperator(async (origin, token) => {
+    const missing = await fetch(`${origin}/missing/deep/page`);
+    assert.equal(missing.status, 404); assert.match(missing.headers.get("content-type"), /text\/html/);
+    assert.match(await missing.text(), /404|Page not found/);
+    const head = await fetch(`${origin}/missing`, { method: "HEAD" });
+    assert.equal(head.status, 404); assert.equal(await head.text(), "");
+    const api = await fetch(`${origin}/api/missing`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.match(api.headers.get("content-type"), /application\/json/);
+  });
+});
+
 test("operator deck requires a strong token and protects every API", async () => {
   assert.throws(() => createDuckOperatorServer({ token: "too-short" }), /32 characters/);
   await withOperator(async (origin, token) => {

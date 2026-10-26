@@ -74,6 +74,7 @@ function createMessageFixture({ readable = true } = {}) {
 test("AI Tools - Schema Definitions & Bounds", async (t) => {
   await t.test("exposes bounded read-tool definitions", () => {
     const expectedReadTools = [
+      "discover_setting_actions",
       "read_channel_history",
       "inspect_server_configuration",
       "request_channel_context",

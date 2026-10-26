@@ -21,6 +21,7 @@ const assets = new Map([
   ["/admin-guard.css", ["admin-guard.css", "text/css; charset=utf-8"]],
   ["/admin.js", ["admin.js", "text/javascript; charset=utf-8"]],
 ]);
+const notFoundPage = fs.readFileSync(path.join(adminDirectory, "404.html"));
 const assetCache = new Map([...assets.values()].map(([file]) => [file, fs.readFileSync(path.join(adminDirectory, file))]));
 
 function headers(type) {
@@ -194,7 +195,7 @@ function createDuckOperatorServer(options = {}) {
     if (!LOOPBACKS.has(remote) || !/^(?:127\.0\.0\.1|localhost)(?::\d{1,5})?$/.test(host)) return send(res, 403, "text/plain; charset=utf-8", "Loopback access only.", method);
     let pathname; try { pathname = new URL(req.url || "/", `http://${host}`).pathname; } catch { return send(res, 400, "text/plain; charset=utf-8", "Bad request.", method); }
     if (assets.has(pathname) && ["GET", "HEAD"].includes(method)) { const [file, type] = assets.get(pathname); return send(res, 200, type, assetCache.get(file), method); }
-    if (!pathname.startsWith("/api/")) return json(res, 404, { error: "Not found." }, method);
+    if (!pathname.startsWith("/api/")) return ["GET", "HEAD"].includes(method) ? send(res, 404, "text/html; charset=utf-8", notFoundPage, method) : json(res, 404, { error: "Not found." }, method);
     if (!authorized(req, token)) return json(res, 401, { error: "Enter your operator token." }, method);
     if (!["GET", "HEAD"].includes(method)) {
       const origin = String(req.headers.origin || ""); if (origin && origin !== `http://${host}`) return json(res, 403, { error: "Cross-origin operator requests are blocked." }, method);

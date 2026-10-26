@@ -212,7 +212,7 @@ test("Community Studio keeps useful Free modules and gates advanced controls to 
   assert.throws(() => makeSettingsPatch({}, { autoroleRoleIds: [roleId, "323456789012345678"] }), /up to 1/);
   assert.throws(() => makeSettingsPatch({}, { suggestionAnonymousEnabled: true }), /requires Duck Plus/);
   assert.throws(() => makeSettingsPatch({}, { starboardEmoji: "🦆" }), /requires Duck Plus/);
-  assert.throws(() => makeSettingsPatch({}, { levelRewards: [{ level: 5, roleId }] }), /require Duck Plus/);
+  assert.deepEqual(makeSettingsPatch({}, { levelRewards: [{ level: 5, roleId }] }).patch.levelRewards, [{ level: 5, roleId }]);
 
   const plus = { subscription: { provider: "stripe", tier: "plus", status: "active" } };
   const advanced = makeSettingsPatch(plus, {

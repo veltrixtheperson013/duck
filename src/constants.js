@@ -1,3 +1,4 @@
+import { SETTING_ACTIONS } from "./setting-actions.js";
 import path from "node:path";
 import { PermissionsBitField } from "discord.js";
 
@@ -8,8 +9,9 @@ const warningsPath = path.join(dataDir, "warnings.json");
 const quotesPath = path.join(dataDir, "quotes.json");
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const TOOL_DEFINITIONS = [
+  ...SETTING_ACTIONS.map(action => ({ name: action.name, risk: "critical", description: `Set ${action.key}. ${action.howTo} Always requires Administrator approval.` })),
   { name: "flag_message_for_review", risk: "medium", description: "Flag one evidenced message for human review without punishing its author. Requires an exact message ID, channel ID, and neutral evidence-based reason." },
-  ...["update_server_settings", "save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"].map(name => ({ name, risk: "critical", description: name.replaceAll("_", " ") + ". Always requires fresh Administrator approval." })),
+  ...["create_level_reward", "update_server_settings", "save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"].map(name => ({ name, risk: "critical", description: name.replaceAll("_", " ") + ". Always requires fresh Administrator approval." })),
   {
     name: "ban_member",
     risk: "high",
@@ -269,6 +271,8 @@ const EIGHT_BALL_ANSWERS = [
   "Very doubtful.",
 ];
 const TOOL_REQUIREMENTS = {
+  ...Object.fromEntries(SETTING_ACTIONS.map(action => [action.name, PermissionsBitField.Flags.Administrator])),
+  create_level_reward: PermissionsBitField.Flags.Administrator,
   flag_message_for_review: PermissionsBitField.Flags.ManageMessages,
   update_server_settings: PermissionsBitField.Flags.Administrator,
   save_server_preset: PermissionsBitField.Flags.Administrator,

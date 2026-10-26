@@ -1,3 +1,4 @@
+import { runLevelRewardBackfills } from "./level-rewards.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, PermissionsBitField } from "discord.js";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { getPublicGuildSettings, hasPlusEntitlement } from "./dashboard-config.js";
@@ -51,7 +52,7 @@ async function awardMessageXp(message, now = Date.now()) {
   dirtyLevelGuilds.add(message.guildId);
   const newLevel = levelForXp(next.xp);
   if (newLevel <= oldLevel) return next;
-  if (hasPlusEntitlement(raw) && message.member?.roles?.cache) {
+  if (message.member?.roles?.cache) {
     for (const reward of settings.levelRewards.filter((item) => item.level <= newLevel)) {
       const role = message.guild.roles.cache.get(reward.roleId);
       if (isSafeSelfAssignableRole(role) && !message.member.roles.cache.has(role.id)) await message.member.roles.add(role, `Duck level ${reward.level} reward`).catch(() => null);
@@ -169,7 +170,7 @@ async function runScheduledPosts(client, now = Date.now()) {
 
 function startCommunityStudio(client) {
   if (communityTimer) return;
-  communityTimer = setInterval(() => { flushLevelProfiles(); runScheduledPosts(client).catch(() => null); }, 30_000);
+  communityTimer = setInterval(() => { flushLevelProfiles(); runScheduledPosts(client).catch(() => null); runLevelRewardBackfills(client).catch(() => null); }, 30_000);
   communityTimer.unref?.();
 }
 

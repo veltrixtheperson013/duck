@@ -1,7 +1,7 @@
 @font-face { font-family:"Inter Variable"; src:url("/InterVariable.woff2") format("woff2"); font-weight:100 900; font-style:normal; font-display:swap; }
 :root { --sans:"Inter Variable",Inter,"Segoe UI",sans-serif; --display:var(--sans); --action-ink:#fff; }
 html:is([data-theme="dark"],[data-theme="galaxy"],[data-theme="matrix"],[data-theme="nebula"],[data-theme="black-hole"],[data-theme="gradient"]) { --action-ink:#06291f; }
-html[data-theme="classic"],html:not([data-theme]) { --ink:#182823; --muted:#63736c; --paper:#fff; --cream:#f5f8f6; --green:#087f5b; --green-dark:#066447; --mint:#eaf6ef; --line:#e1e9e4; --theme-bg:#f5f8f6; --theme-bg-2:#f8faf9; --theme-surface:#fff; --theme-surface-strong:#fff; --theme-line:#e1e9e4; --theme-muted:#63736c; --theme-accent:#087f5b; --theme-accent-2:#c3e8d5; }
+html[data-theme="classic"],html:not([data-theme]) { --ink:#182823; --muted:#52645a; --paper:#fff; --cream:#f5f8f6; --green:#076e4f; --green-dark:#05583e; --mint:#eaf6ef; --line:#e1e9e4; --theme-bg:#f5f8f6; --theme-bg-2:#f8faf9; --theme-surface:#fff; --theme-surface-strong:#fff; --theme-line:#e1e9e4; --theme-muted:#52645a; --theme-accent:#076e4f; --theme-accent-2:#c3e8d5; }
 body { font-family:var(--sans); -webkit-font-smoothing:antialiased; }
 .dashboard-site::after { display:none; }
 html:not([data-theme="windows-xp"]) :is(.public-site,.dashboard-site) { --ui-panel:var(--theme-surface-strong,var(--paper)); --ui-canvas:var(--theme-bg-2,var(--cream)); --ui-line:var(--theme-line,var(--line)); --ui-muted:var(--theme-muted,var(--muted)); --ui-soft:color-mix(in srgb,var(--green) 7%,var(--ui-panel)); background:var(--ui-canvas); }
@@ -197,3 +197,71 @@ html:not([data-theme="windows-xp"]) .dashboard-site .dashboard-stats strong { fo
   html[data-theme] body.dashboard-site.settings-page-open .settings-dialog > form[data-settings-form] { grid-template-rows:minmax(0,1fr) 62px; }
 }
 @media (prefers-reduced-motion:reduce) { .home-preview { transform:none; } }
+
+/* Appearance controls intentionally support only the standard design and XP. */
+.appearance-switch { position:fixed; z-index:45; right:18px; bottom:18px; padding:9px 13px; min-height:38px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:9px; box-shadow:0 3px 12px #0000000d; font:550 .72rem/1.3 var(--sans); cursor:pointer; }
+.settings-page-open .appearance-switch { bottom:78px; }
+html[data-theme="windows-xp"] .appearance-switch { color:#111; background:#ece9d8; border:1px solid #003c74; border-radius:3px; font-family:Tahoma,"Segoe UI",sans-serif; }
+
+/* Surfaces carry their own text palette; light cards must not inherit dark-card copy. */
+html[data-theme="classic"] .public-site .price-card.featured { color:#f5faf7; background:#103e2d; border-color:#103e2d; }
+html[data-theme="classic"] .public-site .price-card.featured :is(h2,h3,li,strong,.price) { color:#f5faf7; }
+html[data-theme="classic"] .public-site .price-card.featured :is(p,small) { color:#d7e9df; }
+html[data-theme="classic"] .public-site .price-card.featured .plan-name { color:#a5e6bf; }
+html[data-theme="classic"] .public-site .price-card.featured [data-plus-unavailable] { color:#f6f4de; background:#244f3b; border-color:#6b8367; }
+html[data-theme="classic"] .dashboard-site .dashboard-profile :is(p,small) { color:var(--muted); }
+html[data-theme="classic"] .dashboard-site .dashboard-profile strong { color:var(--ink); }
+html[data-theme="classic"] .dashboard-site .dashboard-profile button { display:block; min-height:40px; color:var(--ink); background:#f3f7f5; border:1px solid var(--line); font:550 .8rem/1.3 var(--sans); }
+html[data-theme="classic"] .dashboard-site .plan-overview-page :is(p,small) { color:var(--muted); }
+html[data-theme="classic"] .dashboard-site .plan-overview-page :is(h2,strong) { color:var(--ink); }
+html[data-theme="classic"] .dashboard-site .plan-overview-page .button.secondary { color:var(--ink); background:var(--paper); border-color:var(--line); }
+html[data-theme="classic"] .dashboard-site .account-identity-card { color:var(--ink); background:var(--paper); border-color:var(--line); }
+html[data-theme="classic"] .dashboard-site .account-identity-card :is(p,small,code) { color:var(--muted); }
+html[data-theme="classic"] .dashboard-site .account-identity-card h2 { color:var(--ink); }
+html[data-theme="classic"] .dashboard-site .session-badge { color:#14613f; background:#e8f5ed; }
+
+/* Contrast corrections verified across public pages and all settings modules. */
+.preview-person-avatar { color:#6a5597; }
+.approval-preview p,.guide-nav a span,.policy-document .updated { color:var(--muted); }
+.guide-step em { color:#736037; }
+html[data-theme="classic"] .dashboard-cluster-heading h2 { color:var(--ink); }
+html[data-theme="classic"] .dashboard-cluster-heading :is(p,.eyebrow) { color:var(--muted); }
+html[data-theme="classic"] .dashboard-cluster-heading .button { color:var(--ink); background:#f3f7f5; border-color:var(--line); }
+html[data-theme="classic"] .server-card :is(.server-id-badge,.server-badges span) { color:#4b5e52; }
+html[data-theme] .settings-page-open .privacy-note p { color:#4c6255; }
+.ai-scan-flow.is-disabled { opacity:1; }
+html[data-theme] .settings-page-open .ai-scan-flow.is-disabled :is(small,i,.ai-scan-readiness) { color:#4b6054; }
+html[data-theme="classic"] .fun-toolbar :is(small,span) { color:#4b6054; }
+
+/* XP retains its blue chrome, with solid readable surfaces inside each window. */
+html[data-theme="windows-xp"] { --green:#226818; --theme-accent:#226818; --muted:#34475b; --theme-muted:#34475b; }
+html[data-theme="windows-xp"] .dashboard-site.settings-page-open > .site-header { background:linear-gradient(#2581e8,#0757c5); }
+html[data-theme="windows-xp"] :is(.home-preview,.preview-plan,.workspace-welcome,.workspace-section-title,.panel-heading,.fun-section-heading,.branding-actions,.duck-language-footer,.cluster-legend) { color:#172231; background:#ece9d8; }
+html[data-theme="windows-xp"] .preview-plan-heading span { color:#205e16; }
+html[data-theme="windows-xp"] .preview-plan :is(p,small),html[data-theme="windows-xp"] .duck-language-selection { color:#34475b; }
+html[data-theme="windows-xp"] .preview-review { color:white; background:#226818; }
+html[data-theme="windows-xp"] .guide-step em { color:#69552d; }
+html[data-theme="windows-xp"] :is(.dashboard-profile,.account-identity-card,.plan-overview-page,.loyalty-card,.feature-module) :is(p,small,code,li,span) { color:#34475b; }
+html[data-theme="windows-xp"] :is(.dashboard-profile,.account-identity-card,.plan-overview-page,.loyalty-card) :is(h2,strong) { color:#172231; }
+html[data-theme="windows-xp"] .dashboard-profile button { display:block; min-height:40px; color:#172231; background:#f5f3e9; border:1px solid #7f9db9; }
+html[data-theme="windows-xp"] .session-badge { color:#205e16; background:#e0ead6; }
+html[data-theme="windows-xp"] .server-fallback { color:white; background:#226818; }
+html[data-theme="windows-xp"] .settings-page-open :is(.panel-heading,.workspace-welcome) :is(p,.eyebrow) { color:#34475b; }
+html[data-theme="windows-xp"] .settings-page-open .feature-module small { color:#34475b; }
+html[data-theme="windows-xp"] .settings-page-open .ai-scan-flow.is-disabled :is(small,i,.ai-scan-readiness) { color:#172231; }
+html[data-theme="windows-xp"] .fun-section-heading p,html[data-theme="windows-xp"] [data-branding-state] { color:#34475b; }
+html[data-theme] .dashboard-site .overview-safety p { color:#4c6255; }
+html[data-theme="windows-xp"] .dashboard-site .server-card .server-fallback { color:white; }
+html[data-theme="windows-xp"] body.dashboard-site.settings-page-open :is(.workspace-welcome,.command-tier-heading) { background:#ece9d8; }
+html[data-theme="windows-xp"] body.dashboard-site.settings-page-open .fun-toolbar span { color:#34475b; }
+html[data-theme="windows-xp"] .dashboard-site > .site-header { background:linear-gradient(#2581e8,#0757c5); }
+html[data-theme="windows-xp"] :is(.public-site,.dashboard-site) .main-nav a[aria-current="page"] { color:#fff; background:#064698; }
+html[data-theme="windows-xp"] .dashboard-site .dashboard-hero { background:#ece9d8; color:#172231; border:1px solid #7f9db9; }
+html[data-theme="windows-xp"] .dashboard-site .dashboard-hero .dashboard-heading :is(h1,p) { color:#172231; }
+html[data-theme="windows-xp"] .dashboard-site .dashboard-cluster-heading .eyebrow { color:#a5e6bf; }
+html[data-theme="windows-xp"] { --cream:#b3d9fa; --theme-bg:#b3d9fa; --theme-bg-2:#e4f2ff; }
+html[data-theme="windows-xp"] :is(.public-site,.dashboard-site) .button.primary,
+html[data-theme="windows-xp"] :is(.donation-grid button,.nav-invite) { color:#fff; background:#226818; border-color:#164c0e; text-shadow:none; }
+html[data-theme="windows-xp"] .button.discord { color:#fff; background:#354bb2; text-shadow:none; }
+html[data-theme="windows-xp"] :is(.product-window-bar,.product-sidebar b.is-active) { color:#fff; background:#064698; }
+html[data-theme="windows-xp"] .product-window-bar :is(strong,small) { color:#fff; }

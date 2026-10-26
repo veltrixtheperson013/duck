@@ -4,7 +4,7 @@ import { statusTitle } from "./status-emojis.js";
 
 const records = new Map();
 const pending = new Map();
-const labels = { read_channel_history: "Reading channel history", request_channel_context: "Reading recent messages", search_channel_context: "Searching channel messages", search_web: "Searching the web", read_web_page: "Reading a webpage", calculate: "Calculating", file_metadata: "Checking file metadata", reverse_image_search: "Preparing an image search link" };
+const labels = { discover_setting_actions: "Finding setting controls", inspect_server_configuration: "Reading server settings", propose_server_actions: "Preparing server changes", propose_bulk_actions: "Preparing an action plan", read_channel_history: "Reading channel history", request_channel_context: "Reading recent messages", search_channel_context: "Searching channel messages", search_web: "Searching the web", read_web_page: "Reading a webpage", calculate: "Calculating", file_metadata: "Checking file metadata", reverse_image_search: "Preparing an image search link" };
 const row = (id, label, style = ButtonStyle.Secondary) => new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style);
 
 export function createChatActivity(userId, publish, now = Date.now) {
@@ -32,7 +32,7 @@ export function createChatActivity(userId, publish, now = Date.now) {
     async stop() { suspended = true; clearInterval(timer); timer = null; await publishing; },
     async update(name, result) {
       if (finished) return;
-      const label = name === "thinking" ? "Thinking" : name === "context" ? "Reading server context" : labels[name] || "Checking server information";
+      const label = name === "thinking" ? "Thinking" : name === "context" ? "Reading server context" : /^propose_set_/.test(name) ? "Preparing a settings change" : labels[name] || "Checking server information";
       currentName = name; currentLabel = label;
       if (result !== undefined) {
         const completed = result?.error ? `${label} — unsuccessful` : name === "search_web" ? `Found ${result?.results?.length || 0} search results` : name === "read_web_page" ? "Read a webpage" : name === "reverse_image_search" ? "Prepared an image search link" : result?.accepted ? "Prepared an action proposal (not executed)" : `${label} — complete`;

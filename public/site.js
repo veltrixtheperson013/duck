@@ -63,51 +63,14 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 else installLanguagePicker();
 const reducedMotion = motionPreference.matches;
 const runWhenIdle = (task, timeout = 1_200) => "requestIdleCallback" in window ? window.requestIdleCallback(task, { timeout }) : window.setTimeout(task, 1);
-const duckThemes = [
-  { id: "classic", name: "Classic Duck", icon: "🦆", copy: "Warm paper and pond green." },
-  { id: "dark", name: "Midnight", icon: "🌙", copy: "Low-glare charcoal and mint." },
-  { id: "galaxy", name: "Milky Way", icon: "🌌", copy: "Vivid starlight, cosmic dust, and a living galactic band." },
-  { id: "matrix", name: "Matrix Rain", icon: "⌨️", copy: "Terminal glass and falling code." },
-  { id: "nebula", name: "Nebula", icon: "🔮", copy: "Slow violet and cyan gas clouds." },
-  { id: "black-hole", name: "Black Hole", icon: "🕳️", copy: "A cinematic event horizon with a bright accretion disc." },
-  { id: "gradient", name: "Aurora", icon: "🌈", copy: "A living, luminous gradient." },
-  { id: "windows-xp", name: "Windows XP", icon: "🖥️", copy: "Blue chrome, green hills, pure nostalgia." },
-];
-const darkThemes = new Set(["dark", "galaxy", "matrix", "nebula", "black-hole", "gradient"]);
-
-function currentTheme() { return duckThemes.some(({ id }) => id === document.documentElement.dataset.theme) ? document.documentElement.dataset.theme : "classic"; }
-function saveTheme(theme) { try { localStorage.setItem("duck-theme", theme); } catch { /* Cosmetic preference storage may be unavailable. */ } }
-function buildAtmosphere(theme) {
-  document.querySelector("[data-theme-atmosphere]")?.remove();
-  if (reducedMotion) return;
-  if (!["galaxy", "matrix", "nebula", "black-hole", "gradient", "windows-xp"].includes(theme)) return;
-  const atmosphere = document.createElement("div"); atmosphere.className = `theme-atmosphere theme-${theme}`; atmosphere.dataset.themeAtmosphere = ""; atmosphere.setAttribute("aria-hidden", "true"); const fragment = document.createDocumentFragment();
-  const appendParticles = (count, className, content = "") => { for (let index = 0; index < count; index += 1) { const particle = document.createElement("i"); particle.className = className; particle.textContent = content; fragment.append(particle); } };
-  if (theme === "galaxy") appendParticles(28, "theme-star");
-  if (theme === "matrix") { const glyphs = "01DUCKｱｲｳｴｵｶｷｸｹｺ"; for (let index = 0; index < 12; index += 1) { const column = document.createElement("i"); column.className = "matrix-column"; column.textContent = Array.from({ length: 14 }, (_, row) => glyphs[(index * 7 + row * 3) % glyphs.length]).join("\n"); fragment.append(column); } }
-  if (theme === "nebula") appendParticles(5, "nebula-cloud");
-  if (theme === "black-hole") { const core = document.createElement("i"); core.className = "black-hole-core"; fragment.append(core); appendParticles(14, "space-dust"); }
-  if (theme === "gradient") appendParticles(4, "aurora-orb");
-  if (theme === "windows-xp") appendParticles(6, "xp-cloud");
-  atmosphere.append(fragment); document.body.prepend(atmosphere);
+function currentTheme() { return document.documentElement.dataset.theme === "windows-xp" ? "windows-xp" : "classic"; }
+function installAppearanceSwitch() {
+  const button = document.createElement("button"); button.type = "button"; button.className = "appearance-switch"; button.dataset.appearanceSwitch = "";
+  const refresh = () => { const xp = currentTheme() === "windows-xp"; button.textContent = xp ? "Standard view" : "Windows XP"; button.setAttribute("aria-pressed", String(xp)); button.title = xp ? "Switch to the standard design" : "Switch to Windows XP appearance"; };
+  button.addEventListener("click", () => { const theme = currentTheme() === "windows-xp" ? "classic" : "windows-xp"; document.documentElement.dataset.theme = theme; try { localStorage.setItem("duck-theme", theme); } catch { /* Appearance remains usable without storage. */ } refresh(); });
+  document.body.append(button); refresh();
 }
-
-function installThemeControls() {
-  const dock = document.createElement("div"); const mode = document.createElement("button"); const picker = document.createElement("button"); const panel = document.createElement("aside"); const heading = document.createElement("div"); const title = document.createElement("strong"); const copy = document.createElement("small"); const grid = document.createElement("div");
-  dock.className = "theme-dock"; dock.dataset.themeDock = ""; mode.type = "button"; mode.className = "theme-mode-toggle"; mode.setAttribute("aria-label", "Toggle light or dark mode"); picker.type = "button"; picker.className = "theme-picker-toggle"; picker.setAttribute("aria-label", "Choose website theme"); picker.setAttribute("aria-expanded", "false"); picker.setAttribute("aria-controls", "duck-theme-panel"); picker.textContent = "✦ Themes"; panel.id = "duck-theme-panel"; panel.className = "theme-panel"; panel.hidden = true; panel.setAttribute("role", "dialog"); panel.setAttribute("aria-modal", "false"); panel.setAttribute("aria-labelledby", "duck-theme-title"); title.id = "duck-theme-title"; title.textContent = "Choose your pond"; copy.textContent = "Theme changes stay on this device."; heading.append(title, copy); grid.className = "theme-grid";
-  const buttons = new Map();
-  for (const theme of duckThemes) { const button = document.createElement("button"); const preview = document.createElement("i"); const text = document.createElement("span"); const name = document.createElement("strong"); const description = document.createElement("small"); button.type = "button"; button.className = "theme-option"; button.dataset.themeChoice = theme.id; preview.className = `theme-swatch swatch-${theme.id}`; preview.textContent = theme.icon; preview.setAttribute("aria-hidden", "true"); name.textContent = theme.name; description.textContent = theme.copy; text.append(name, description); button.append(preview, text); grid.append(button); buttons.set(theme.id, button); }
-  panel.append(heading, grid); dock.append(mode, picker, panel); document.body.append(dock);
-  const refresh = () => { const theme = currentTheme(); const dark = darkThemes.has(theme); mode.textContent = dark ? "☀️" : "🌙"; mode.title = dark ? "Use light mode" : "Use dark mode"; mode.setAttribute("aria-label", mode.title); for (const [id, button] of buttons) { const active = id === theme; button.classList.toggle("is-active", active); button.setAttribute("aria-pressed", String(active)); } };
-  const apply = (theme) => { if (!buttons.has(theme)) return; document.documentElement.dataset.theme = theme; saveTheme(theme); buildAtmosphere(theme); refresh(); };
-  let closeTimer;
-  const close = (restoreFocus = false) => { if (panel.hidden) return; window.clearTimeout(closeTimer); panel.classList.add("is-closing"); picker.setAttribute("aria-expanded", "false"); closeTimer = window.setTimeout(() => { panel.hidden = true; panel.classList.remove("is-closing"); if (restoreFocus) picker.focus(); }, reducedMotion ? 0 : 160); };
-  const open = () => { window.clearTimeout(closeTimer); panel.hidden = false; panel.classList.remove("is-closing"); picker.setAttribute("aria-expanded", "true"); (buttons.get(currentTheme()) || buttons.values().next().value)?.focus(); };
-  mode.addEventListener("click", () => apply(darkThemes.has(currentTheme()) ? "classic" : "dark")); picker.addEventListener("click", (event) => { event.stopPropagation(); if (panel.hidden || panel.classList.contains("is-closing")) open(); else close(); }); panel.addEventListener("click", (event) => event.stopPropagation()); document.addEventListener("click", () => close()); document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(true); }); for (const [theme, button] of buttons) button.addEventListener("click", () => { apply(theme); close(true); });
-  runWhenIdle(() => buildAtmosphere(currentTheme())); refresh();
-}
-
-installThemeControls();
+installAppearanceSwitch();
 
 // Header and announcement heights vary with viewport, theme, and translated text.
 // Keep fixed dashboard panels below the actual visible chrome, not a 70px guess.

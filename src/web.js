@@ -1,3 +1,4 @@
+import { makeGuildProfilePatch } from "./bot-profile.js";
 import { claimTrial, trialAvailable } from "./plus-trial.js";
 import { listPresets, PRESET_TEMPLATES } from "./server-presets.js";
 import { prepareManagementAction, executeManagementAction } from "./server-management.js";
@@ -126,31 +127,6 @@ function getGuildTextChannels(client, guildId, requester, requesterIsAdministrat
 function getGuildCategories(client, guildId) { const guild = client?.guilds?.cache?.get(guildId); return guild?.channels?.cache ? [...guild.channels.cache.values()].filter((channel) => channel.type === ChannelType.GuildCategory).slice(0, 100).map((channel) => ({ id: channel.id, name: channel.name || "unnamed-category" })) : []; }
 function getGuildAssignableRoles(client, guildId) { const guild = client?.guilds?.cache?.get(guildId); return guild?.roles?.cache ? [...guild.roles.cache.values()].filter((role) => role.id !== guild.id && isSafeSelfAssignableRole(role)).sort((a, b) => b.position - a.position).slice(0, 250).map((role) => ({ id: role.id, name: role.name })) : []; }
 function getGuildBotProfile(client, guildId) { const member = client?.guilds?.cache?.get(guildId)?.members?.me; return { nickname: member?.nickname ?? null, bio: member?.bio ?? null, avatarUrl: member?.displayAvatarURL?.({ extension: "webp", size: 256 }) ?? null, bannerUrl: member?.bannerURL?.({ extension: "webp", size: 512 }) ?? null }; }
-function parseProfileImage(value, field) {
-  if (value === null) return null;
-  if (typeof value !== "string") throw new TypeError(`${field} must be an image or null.`);
-  const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
-  if (!match || match[2].length % 4 !== 0) throw new TypeError(`${field} must be a PNG, JPEG, WebP, or GIF image.`);
-  const bytes = Buffer.from(match[2], "base64");
-  if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new TypeError(`${field} must be 5 MB or smaller.`);
-  const magic = match[1] === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
-    : match[1] === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
-      : match[1] === "image/webp" ? bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP"
-        : ["GIF87a", "GIF89a"].includes(bytes.subarray(0, 6).toString());
-  if (!magic) throw new TypeError(`${field} contents do not match its image type.`);
-  return value;
-}
-function makeGuildProfilePatch(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Profile must be a JSON object.");
-  const allowed = new Set(["nickname", "bio", "avatar", "banner"]); const keys = Object.keys(input);
-  if (!keys.length || keys.some((key) => !allowed.has(key))) throw new TypeError("Unknown or missing profile field.");
-  const patch = {};
-  if ("nickname" in input) { if (input.nickname === null) patch.nick = null; else { if (typeof input.nickname !== "string") throw new TypeError("Server nickname must be text or null."); const value = input.nickname.trim(); if (!value || value.length > 32) throw new TypeError("Server nickname must be 1-32 characters or null."); patch.nick = value; } }
-  if ("bio" in input) { if (input.bio === null) patch.bio = null; else { if (typeof input.bio !== "string") throw new TypeError("Server bio must be text or null."); const value = input.bio.trim(); if (value.length > 190) throw new TypeError("Server bio must be 190 characters or fewer."); patch.bio = value || null; } }
-  if ("avatar" in input) patch.avatar = parseProfileImage(input.avatar, "Avatar");
-  if ("banner" in input) patch.banner = parseProfileImage(input.banner, "Banner");
-  return patch;
-}
 async function readBody(req, maxBytes = 16 * 1024) { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > maxBytes) { const error = new Error("Request body is too large."); error.status = 413; throw error; } chunks.push(chunk); } return Buffer.concat(chunks, total); }
 
 function validateJsonShape(value) {
@@ -329,9 +305,12 @@ function createDuckWebsiteServer(options = {}) {
   }
 
   async function handleRemoteOperator(req, res, pathname, method) {
-    const discordAuth = operatorDiscordAuth(req);
-    if (!discordAuth) { send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method); return; }
     const subpath = pathname.slice(remoteOperatorPath.length) || "/";
+    const notFound = () => ["GET", "HEAD"].includes(method) && !subpath.startsWith("/api/") && !/\.(?:js|css|json|png|jpe?g|svg|ico|woff2?)$/i.test(subpath)
+      ? sendAsset(req, res, pages.get("/404"), method)
+      : send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
+    const discordAuth = operatorDiscordAuth(req);
+    if (!discordAuth) return notFound();
     const operatorAuth = getOperatorSession(req, discordAuth);
     if (subpath === "" || subpath === "/") {
       if (pathname !== `${remoteOperatorPath}/`) { redirect(res, `${remoteOperatorPath}/`, { "X-Robots-Tag": "noindex, nofollow, noarchive" }); return; }
@@ -341,7 +320,7 @@ function createDuckWebsiteServer(options = {}) {
     const isUnlockAsset = subpath === "/unlock.js" || subpath === "/admin.css";
     if (asset && ["GET", "HEAD"].includes(method) && (operatorAuth || isUnlockAsset)) return send(res, 200, asset.type, operatorAssetCache.get(asset.file), method, { "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Robots-Tag": "noindex, nofollow, noarchive" });
     if (asset && !operatorAuth) return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
-    if (!subpath.startsWith("/api/")) return send(res, 404, "text/plain; charset=utf-8", "Duck wandered off. Page not found.", method);
+    if (!subpath.startsWith("/api/")) return notFound();
 
     if (subpath === "/api/session" && method === "GET") return json(res, 200, { authenticated: Boolean(operatorAuth), csrf: operatorAuth?.session.csrf || null, loginCsrf: operatorAuth ? null : discordAuth.session.csrf, expiresAt: operatorAuth ? new Date(operatorAuth.session.expiresAt).toISOString() : null, user: discordAuth.session.user }, method);
     if (subpath === "/api/session" && method === "POST") {

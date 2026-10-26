@@ -1,3 +1,6 @@
+import { SETTING_ACTION_BY_NAME, SETTING_ACTION_BY_NATIVE, discoverSettingActions } from "./setting-actions.js";
+import { profileRequest } from "./bot-profile.js";
+import { normalizeLevelReward } from "./level-rewards.js";
 import { readChannelHistory } from "./history-context.js";
 import { recordAiFlag, recordAuditEvent } from "./community.js";
 import { MANAGEMENT_TOOLS, prepareSettings, prepareManagementAction, executeManagementAction, configurationForAi } from "./server-management.js";
@@ -831,6 +834,13 @@ function planModerationToolFromText(message, rawText) {
   const normalized = normalizeText(text);
   const member = findMentionedMemberForPlan(message, text);
 
+  if (/\b(create|make|new)\b.*\brole\b/.test(normalized) && /\b(?:when|reach|reward|earn|give|automatically)\b/.test(normalized) && /\b(?:level|lvl)\b/.test(normalized)) {
+    const level = Number(text.match(/\b(?:level|lvl)\s*(\d{1,3})\b/i)?.[1]);
+    const named = text.match(/\brole\s+(?:named|called)\s+(?:["\u201c]([^"\u201d]+)["\u201d]|(.+?)(?=\s+(?:and|then|when|for|to)\b|[.!?]|$))/i);
+    const roleName = (named?.[1] || named?.[2] || extractQuotedName(text) || "").trim();
+    try { const reward = normalizeLevelReward({ roleName, level, includeExisting: /\b(?:give|grant|assign)\b.*\b(?:people|members|already|everyone)\b/i.test(text) }); return { tool: "create_level_reward", risk: "critical", mandatoryApproval: true, ...reward, summary: `Create @${reward.roleName} and award it at level ${reward.level}.` }; }
+    catch (error) { return { error: error.message }; }
+  }
   if (/^unban\b/.test(normalized)) {
     const targetId = extractExactUserId(text);
     if (!targetId) return { error: "Give me the exact Discord user ID to unban." };
@@ -2440,12 +2450,19 @@ function validateAiPlan(message, plan, serverContext = null) {
   if (MANAGEMENT_TOOLS.includes(tool.name)) {
     if (!hasPermission(message.member, PermissionsBitField.Flags.Administrator)) return { error: "Only an Administrator can propose server configuration changes." };
     try {
-      if (tool.name === "update_server_settings") return { tool: tool.name, risk: "critical", mandatoryApproval: true, settings: prepareSettings(getSafeGuildSettings(message.guildId), plan.settings).patch, summary: "Update server settings (mandatory approval)." };
+      if (SETTING_ACTION_BY_NAME.has(tool.name)) {
+        const spec = SETTING_ACTION_BY_NAME.get(tool.name);
+        if (spec.profileField) return { tool: tool.name, risk: "critical", mandatoryApproval: true, ...profileRequest(message, spec, plan.value), summary: `Change Duck's server ${spec.profileField} (mandatory approval).` };
+        const prepared = prepareSettings(getSafeGuildSettings(message.guildId), { [spec.key]: plan.value }); return { tool: tool.name, risk: "critical", mandatoryApproval: true, value: plan.value, summary: prepared.summary };
+      }
+      if (tool.name === "create_level_reward") return { tool: tool.name, risk: "critical", mandatoryApproval: true, ...normalizeLevelReward(plan), summary: "Configure a role awarded at a level threshold (mandatory approval)." };
+      if (tool.name === "update_server_settings") return { tool: tool.name, risk: "critical", mandatoryApproval: true, settings: prepareSettings(getSafeGuildSettings(message.guildId), plan.settings).input, summary: "Update server settings (mandatory approval)." };
       if (tool.name === "save_server_preset") return { tool: tool.name, risk: "critical", mandatoryApproval: true, preset: normalizePreset(plan.preset), applyNow: plan.applyNow === true, summary: "Save a server preset (mandatory approval)." };
       if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(plan.presetId || "")) throw new Error("Supply an exact preset ID.");
       return { tool: tool.name, risk: "critical", mandatoryApproval: true, presetId: plan.presetId, summary: tool.description };
     } catch (error) { return { error: error.message }; }
   }
+  if (tool.name === "create_role" && /\b(?:when|reach|reward|earn|automatically)\b/i.test(message.content) && /\b(?:level|lvl)\b/i.test(message.content)) return { error: "This is a level-reward workflow. Use create_level_reward with an exact roleName and level, not a plain create_role action." };
   const context = serverContext ?? getMentionContext(message);
   const inferredReason = inferReasonFromRequest(message, tool.name);
   const base = {
@@ -2975,6 +2992,13 @@ function makePlannerResponseFormat(kind) {
       },
       color: { type: "string" },
       nickname: { type: "string" },
+      value: { description: "Typed value for a dedicated set_* action; use its discovery schema." },
+      level: { type: "integer", minimum: 1, maximum: 100 },
+      includeExisting: { type: "boolean" },
+      settings: AI_ACTION_PROPERTIES.settings,
+      preset: AI_ACTION_PROPERTIES.preset,
+      presetId: { type: "string" },
+      applyNow: { type: "boolean" },
       count: { type: "number" },
       durationMs: { type: "number" },
       deleteMessageSeconds: { type: "number" },
@@ -3391,7 +3415,7 @@ async function makeChatMessages(message, options = {}) {
         "You may use one enabled fun tool when it naturally improves the reply. Put exactly one hidden marker at the end using {{fun::command::arguments}}. Supported commands: quack, duckfact, coinflip, truth, dare, truthordare, rps, fortune, topic, joke, dadjoke, mood, highfive, number, thisorthat, randommember, eightball, roll, choose, rate, compliment, roast, wouldyourather, neverhaveiever, hotseat, vibecheck, ship, curse, spinwheel, battle, dramatic, conspiracy, challenge, caption, alibi, backstory, award, heist, superlative, plot, and confession. Duck validates the server's plan and command toggle before running it.",
         "Keep replies short, casual, and useful. Do not dump tool instructions unless asked.",
         "For explicit Discord changes, call a matching propose_*_actions function. For multiple commands or changes across groups, use propose_bulk_actions with all requested actions in order. bulk means multiple commands in one request, not only message deletion. It creates a proposal only; never claim the action already happened.",
-        "The native tool catalog attached to this request is authoritative. You can inspect server configuration and propose settings, presets, and holiday schedules; these always require approval. Never say you cannot access a tool that is in that catalog. Choose the proposal group by what changes: member for bans, warnings, nicknames, and member roles; message for messages and text-channel operations; voice for voice moderation; channel for channel structure; role for role structure or color.",
+        "Every server setting has a dedicated typed set_* action. Use discover_setting_actions to find exact keys, value types, instructions, and current values; then call the returned propose_set_* function. All setting changes ALWAYS require fresh Administrator approval, even in Agent mode. For conditional requests such as a role at level 5, use create_level_reward with the exact name and level, never create a role named after the instruction. The native tool catalog attached to this request is authoritative. You can inspect server configuration and propose settings, presets, and holiday schedules; these always require approval. Never say you cannot access a tool that is in that catalog. Choose the proposal group by what changes: member for bans, warnings, nicknames, and member roles; message for messages and text-channel operations; voice for voice moderation; channel for channel structure; role for role structure or color.",
         "Copy IDs exactly from serverContext for existing members, channels, messages, and roles. Never invent an ID, silently choose an unmentioned target, or add actions the user did not request.",
         "Put all explicitly requested changes into the actions array in the user's order. Use read tools first only when missing evidence or context is actually needed.",
         "Only propose speak when the user gives the exact message Duck should send. If asked to draft an announcement, draft it without proposing speak.",
@@ -3411,6 +3435,7 @@ async function makeChatMessages(message, options = {}) {
 }
 
 const AI_READ_TOOL_DEFINITIONS = Object.freeze([
+  { type: "function", function: { name: "discover_setting_actions", description: "Get dedicated typed proposal functions for EVERY dashboard setting. Supply exact setting keys or a query, optionally include the complete catalog. Returns up to eight actions with exact value schemas, instructions, current values, and mandatory approval requirements. Returned functions become callable on the next step.", parameters: { type: "object", properties: { keys: { type: "array", maxItems: 8, items: { type: "string" } }, query: { type: "string", maxLength: 100 }, includeCatalog: { type: "boolean" } }, additionalProperties: false } } },
   { type: "function", function: { name: "read_channel_history", description: "Read older or recent messages in one visible channel, optionally within an ISO time range or containing a literal phrase. Returns evidence links, timestamps, sample limits, and a pagination cursor. Use this for activity reviews and date-specific investigations; continue with before_message_id when has_more is true.", parameters: { type: "object", properties: { channel_id: { type: "string" }, after_iso: { type: "string", description: "Inclusive lower ISO time bound with timezone." }, before_iso: { type: "string", description: "Exclusive upper ISO time bound with timezone." }, before_message_id: { type: "string", description: "Older-page cursor returned by this tool." }, query: { type: "string", maxLength: 120 }, limit: { type: "integer", minimum: 1, maximum: 100 }, pages: { type: "integer", minimum: 1, maximum: 3 } }, required: ["channel_id"], additionalProperties: false } } },
   { type: "function", function: { name: "inspect_server_configuration", description: "Administrator-only: inspect current server settings, writable setting keys, presets, holiday templates, and model choices before proposing configuration changes.", parameters: { type: "object", properties: { settingKeys: { type: "array", maxItems: 20, items: { type: "string" } }, presetId: { type: "string" } }, additionalProperties: false } } },
   {
@@ -3510,7 +3535,7 @@ const AI_READ_TOOL_DEFINITIONS = Object.freeze([
 ]);
 
 const AI_ACTION_TOOL_GROUPS = Object.freeze([
-  { name: "propose_server_actions", description: "Use save_server_preset with applyNow:true when explicitly asked to create and apply a custom preset in one approval. Always request Administrator approval to change dashboard settings, save/delete channel presets, apply presets, or restore safe changes. Read inspect_server_configuration first for exact setting keys and templates. Use settings for update_server_settings; preset for save_server_preset; presetId for apply/restore/delete.", tools: MANAGEMENT_TOOLS },
+  { name: "propose_server_actions", description: "For a role awarded at a level threshold, use create_level_reward with roleName, level, and includeExisting; never put an entire conditional instruction into roleName or use plain create_role. Use save_server_preset with applyNow:true when explicitly asked to create and apply a custom preset in one approval. Always request Administrator approval to change dashboard settings, save/delete channel presets, apply presets, or restore safe changes. Read inspect_server_configuration first for exact setting keys and templates. Use settings for update_server_settings; preset for save_server_preset; presetId for apply/restore/delete.", tools: MANAGEMENT_TOOLS },
   { name: "propose_member_actions", description: "Propose explicit member moderation or membership changes. Copy targetId and roleId from context. Use durationMs for timeouts and deleteMessageSeconds for softbans.", tools: ["ban_member", "unban_user", "kick_member", "softban_member", "timeout_member", "untimeout_member", "warn_member", "view_warnings", "clear_warnings", "set_nickname", "add_role", "remove_role"] },
   { name: "propose_message_actions", description: "Propose message and text-channel operations. Use count for deletion/search, seconds for slowmode, exact messageText for speak, and pollQuestion plus pollOptions for polls.", tools: ["flag_message_for_review", "purge_messages", "grep_messages", "delete_user_messages", "set_slowmode", "lock_channel", "unlock_channel", "speak", "pin_message", "unpin_message", "create_thread", "create_poll"] },
   { name: "propose_voice_actions", description: "Propose voice moderation for an explicitly named member. Copy targetId and destination channelId from context; durationMs is milliseconds.", tools: ["disconnect_member", "move_member", "voice_quarantine_member", "release_voice_quarantine", "voice_mute_member", "voice_unmute_member", "deafen_member", "undeafen_member"] },
@@ -3522,6 +3547,9 @@ const AI_ACTION_TOOL_GROUPS = Object.freeze([
 const AI_ACTION_PROPERTIES = Object.freeze({
   tool: { type: "string" },
   settings: { type: "object", description: "Exact dashboard setting names and requested values. Inspect server configuration for writable keys. No billing or subscription fields." },
+  level: { type: "integer", minimum: 1, maximum: 100, description: "Level threshold for create_level_reward." },
+  includeExisting: { type: "boolean", description: "Only true when explicitly asked to give the reward to existing eligible members too." },
+  value: { description: "Typed value for a dedicated set_* action. Discover its exact value schema and instructions first; null clears supported nullable settings." },
   applyNow: { type: "boolean", description: "For save_server_preset only: save and apply the exact preset immediately after the same mandatory approval. Use true only if the user explicitly requests application now." },
   presetId: { type: "string", description: "Exact saved preset or template ID." },
   preset: { type: "object", description: "{id,name,operations:[{kind:create_category|create_text|create_voice|rename|delete,channelId?,name?,key?,parentKey?,parentId?}],schedule?:{enabled,holiday:halloween|christmas|new-year|valentine OR monthDay:MM-DD,durationDays:1-30,automatic:boolean,channelId:notificationChannelId}}. No deletions on a holiday schedule. UTC dates." },
@@ -3612,8 +3640,9 @@ function getAiToolContextLimit(value, maximum = 100) {
 function parseAiToolArguments(toolCall) {
   const raw = toolCall?.function?.arguments;
   if (!raw) return {};
-  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
-  if (typeof raw !== "string" || raw.length > 4_000) throw new Error("Tool arguments were missing or too large.");
+  const maxBytes = SETTING_ACTION_BY_NATIVE.has(toolCall?.function?.name) || AI_ACTION_GROUP_NAMES.has(toolCall?.function?.name) ? 128 * 1024 : 4_000;
+  if (typeof raw === "object" && !Array.isArray(raw)) { if (Buffer.byteLength(JSON.stringify(raw)) > maxBytes) throw new Error("Tool arguments were too large."); return raw; }
+  if (typeof raw !== "string" || Buffer.byteLength(raw) > maxBytes) throw new Error("Tool arguments were missing or too large.");
   const parsed = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Tool arguments must be an object.");
   return parsed;
@@ -3648,7 +3677,12 @@ function makeAiToolMessageSummary(item, channel) {
 }
 
 async function executeAiReadTool(message, toolCall, allowedContext = null, activity = null) {
-  if (toolCall?.function?.name === "inspect_server_configuration") { if (!hasPermission(message.member, PermissionsBitField.Flags.Administrator)) throw new Error("Administrator permission is required to inspect server configuration."); return configurationForAi(message.guildId, parseAiToolArguments(toolCall)); }
+  if (toolCall?.function?.name === "discover_setting_actions") { if (!hasPermission(message.member, PermissionsBitField.Flags.Administrator)) throw new Error("Administrator permission is required to discover server setting actions."); return discoverSettingActions(parseAiToolArguments(toolCall), getSafeGuildSettings(message.guildId)); }
+  if (toolCall?.function?.name === "inspect_server_configuration") {
+    if (!hasPermission(message.member, PermissionsBitField.Flags.Administrator)) throw new Error("Administrator permission is required to inspect server configuration.");
+    const profile = await message.guild.members.fetchMe({ force: true });
+    return { ...configurationForAi(message.guildId, parseAiToolArguments(toolCall)), profile: { nickname: profile.nickname ?? null, bio: profile.bio ?? null, avatarUrl: profile.avatarURL?.() ?? null, bannerUrl: profile.bannerURL?.() ?? null } };
+  }
   const name = String(toolCall?.function?.name || "");
   const args = parseAiToolArguments(toolCall);
   if (HELPER_TOOLS.some((tool) => tool.function.name === name)) {
@@ -3765,7 +3799,7 @@ async function executeAiReadTool(message, toolCall, allowedContext = null, activ
 }
 
 function serializeAiToolResult(value) {
-  const maxChars = Math.max(1_000, Math.min(Number(process.env.AI_TOOL_RESULT_MAX_CHARS) || 12_000, 40_000));
+  const maxChars = value?.totalSettings && Array.isArray(value.actions) ? 128 * 1024 : Math.max(1_000, Math.min(Number(process.env.AI_TOOL_RESULT_MAX_CHARS) || 12_000, 40_000));
   const serialized = JSON.stringify(value);
   if (serialized.length <= maxChars) return serialized;
   return JSON.stringify({ truncated: true, preview: serialized.slice(0, maxChars - 40) });
@@ -3801,6 +3835,7 @@ async function chatWithOpenAiCompatible(message, config, activity = null) {
     channelId: message.channelId,
   });
 
+  const enabledSettingActions = new Set();
   const requestBody = {
     model: config.model,
     temperature: responseStyle === "concise" ? 0.25 : responseStyle === "detailed" ? 0.55 : 0.4,
@@ -3818,6 +3853,7 @@ async function chatWithOpenAiCompatible(message, config, activity = null) {
   }
 
   const requestChat = (attempt, activeMessages = requestBody.messages, allowTools = true) => {
+    requestBody.tools = [...AI_TOOL_DEFINITIONS.filter(tool => guildSettings.aiWebEnabled || !["search_web", "read_web_page"].includes(tool.function.name)), ...[...enabledSettingActions].map(name => SETTING_ACTION_BY_NATIVE.get(name).nativeDefinition)];
     const attemptBody = attempt > 1 && isOpenRouterProvider(config.providerName)
       ? {
           ...requestBody,
@@ -3951,7 +3987,14 @@ async function chatWithOpenAiCompatible(message, config, activity = null) {
         if (toolIndex >= 4) throw new Error("At most four tools may run in one step.");
         if (seenToolCalls.has(signature)) throw new Error("Duplicate tool request refused.");
         seenToolCalls.add(signature);
-        if (AI_ACTION_GROUP_NAMES.has(toolCall.function?.name)) {
+        if (SETTING_ACTION_BY_NATIVE.has(toolCall.function?.name)) {
+          if (!enabledSettingActions.has(toolCall.function.name)) throw new Error("Discover that setting action before calling its proposal function.");
+          const spec = SETTING_ACTION_BY_NATIVE.get(toolCall.function.name); const args = parseAiToolArguments(toolCall);
+          const action = validateAiPlan(message, { tool: spec.name, value: args.value, reason: args.reason }, context);
+          if (!action || action.error) throw new Error(action?.error || "Invalid setting value.");
+          if (proposedActions.length >= 10) throw new Error("At most 10 changes may be proposed per request.");
+          proposedActions.push(action); result = { accepted: true, action: spec.name, summary: action.summary, instruction: "This only prepared a proposal. Fresh Administrator approval is always required before execution." };
+        } else if (AI_ACTION_GROUP_NAMES.has(toolCall.function?.name)) {
           const proposal = validateAiActionToolCall(message, toolCall, context);
           if (!proposal || proposal.error) throw new Error(proposal?.error || "Action proposal was invalid.");
           if (proposedActions.length + proposal.actions.length > 10) throw new Error("At most 10 actions may be proposed for one request.");
@@ -3981,6 +4024,7 @@ async function chatWithOpenAiCompatible(message, config, activity = null) {
           error: result.error,
         });
       }
+      if (toolCall.function?.name === "discover_setting_actions" && Array.isArray(result?.actions)) for (const action of result.actions) { if (SETTING_ACTION_BY_NATIVE.has(action.function)) { if (!enabledSettingActions.has(action.function) && enabledSettingActions.size >= 32) enabledSettingActions.delete(enabledSettingActions.values().next().value); enabledSettingActions.add(action.function); } }
       await activity?.update(toolCall.function?.name, result);
       activeMessages.push({ role: "tool", tool_call_id: toolCall.id, content: serializeAiToolResult(result) });
     }
@@ -4699,6 +4743,7 @@ async function promptForConfirmation(message, action, options = {}) {
     embeds: options.useEmbed ? [makeActionEmbed(pending)] : [],
     components: makeConfirmationRows(actionId),
     allowedMentions: { parse: [], repliedUser: false },
+    ...(options.files?.length ? { files: options.files } : {}),
   };
 
   const prompt = options.messageToEdit
@@ -5314,8 +5359,11 @@ async function dispatchPlannedAction(message, action, options = {}) {
     action = { ...action, actions: children, summary: children.map((child, i) => `${i + 1}. ${child.summary}`).join("\n") };
   } else if (MANAGEMENT_TOOLS.includes(action.tool)) action = await prepareManagementAction(message.guild, message.member, action);
   if ((action.tool === "bulk_actions" ? action.actions : [action]).some(child => MANAGEMENT_TOOLS.includes(child.tool))) {
-    if (action.summary.length > 1850) throw new Error("Split this request into smaller approvals so every proposed change is visible.");
-    options = { ...options, content: action.summary + "\n\nAdministrator approval required. No changes have run.", useEmbed: false };
+    if (action.summary.length > 1850) {
+      const preview = Buffer.from(JSON.stringify(action.tool === "bulk_actions" ? action.actions : [action], (key, value) => key === "profilePatch" ? Object.fromEntries(Object.entries(value).map(([field, item]) => [field, typeof item === "string" && item.startsWith("data:image/") ? "Exact attached image snapshot; see image filename, size, source, and SHA-256 above." : item])) : value, 2));
+      if (preview.length > 128 * 1024) throw new Error("Split this request into smaller approvals; the complete preview exceeds 128 KB.");
+      options = { ...options, content: "Administrator approval required. Review the attached complete proposal before approving. No changes have run.", useEmbed: false, files: [{ attachment: preview, name: "duck-proposal.json" }] };
+    } else options = { ...options, content: action.summary + "\n\nAdministrator approval required. No changes have run.", useEmbed: false };
   }
   const policy = shouldAutoExecuteAction(message.guildId, action);
   if (!policy.autoExecute) {

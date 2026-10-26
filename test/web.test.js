@@ -82,7 +82,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(css.status, 200);
     assert.match(css.headers.get("content-type"), /^text\/css/);
     assert.equal(css.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
-    const modern = await fetch(`${origin}/modern.css?v=20261024design`);
+    const modern = await fetch(`${origin}/modern.css?v=20261025`);
     assert.equal(modern.status, 200); assert.match(await modern.text(), /@font-face/);
     const font = await fetch(`${origin}/InterVariable.woff2`);
     assert.equal(font.status, 200); assert.equal(font.headers.get("content-type"), "font/woff2");
@@ -102,7 +102,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.equal(script.status, 200);
     assert.match(script.headers.get("content-type"), /^text\/javascript/);
     const scriptText = await script.text();
-    assert.match(scriptText, /Classic Duck/);
+    assert.match(scriptText, /Windows XP/);
     assert.doesNotMatch(scriptText, /Daylight|id: "light"/);
     const themeInit = await fetch(`${origin}/theme-init.js`);
     assert.equal(themeInit.status, 200);
@@ -126,9 +126,9 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.match(dashboardText, /Welcome message/);
     assert.match(dashboardText, /Context range/);
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
-    assert.match(dashboardText, /theme-init\.js\?v=20260841/);
+    assert.match(dashboardText, /theme-init\.js\?v=20261025/);
     assert.match(dashboardText, /styles\.css\?v=20261024/);
-    assert.match(dashboardText, /dashboard\.js\?v=20261024design/);
+    assert.match(dashboardText, /dashboard\.js\?v=20261025/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
     assert.match(dashboardText, /data-color-panel/);
@@ -217,7 +217,10 @@ test("remote Operator Deck requires Discord owner, token, origin, and CSRF", asy
   const signIn = async (origin, code) => { const begin = await fetch(`${origin}/auth/discord`, { redirect: "manual" }); const oauthUrl = new URL(begin.headers.get("location")); const stateCookie = begin.headers.get("set-cookie").match(/duck_oauth_state=([^;]+)/)[1]; const callback = await fetch(`${origin}/auth/discord/callback?code=${code}&state=${encodeURIComponent(oauthUrl.searchParams.get("state"))}`, { redirect: "manual", headers: { Cookie: `duck_oauth_state=${stateCookie}` } }); return `duck_session=${callback.headers.get("set-cookie").match(/duck_session=([^;,]+)/)[1]}`; };
   try {
     await withWebsite(async (origin) => {
-      assert.equal((await fetch(`${origin}${operatorPath}/`)).status, 404);
+      const missingOperator = await fetch(`${origin}${operatorPath}/`);
+      assert.equal(missingOperator.status, 404); assert.match(missingOperator.headers.get("content-type"), /text\/html/);
+      assert.match(await missingOperator.text(), /404/);
+      const missingHead = await fetch(`${origin}${operatorPath}/missing`, { method: "HEAD" }); assert.equal(missingHead.status, 404); assert.equal(await missingHead.text(), "");
       assert.equal((await fetch(`${origin}${operatorPath}/api/session`)).status, 404);
       assert.equal((await fetch(`${origin}${operatorPath}/api/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 404);
       const strangerCookie = await signIn(origin, "stranger"); assert.equal((await fetch(`${origin}${operatorPath}/`, { headers: { Cookie: strangerCookie } })).status, 404);

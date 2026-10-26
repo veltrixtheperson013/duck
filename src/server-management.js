@@ -1,23 +1,29 @@
+import { SETTING_ACTIONS, SETTING_ACTION_BY_NAME } from "./setting-actions.js";
+import { prepareLevelReward, executeLevelReward } from "./level-rewards.js";
+import { prepareProfileAction, executeProfileAction } from "./bot-profile.js";
+import { isSafeSelfAssignableRole } from "./community.js";
 import { PermissionsBitField } from "discord.js";
 import { getPublicGuildSettings, getPublicModelCatalog, makeSettingsPatch, WRITABLE_SETTINGS } from "./dashboard-config.js";
 import { getGuildSettings, updateGuildSettings } from "./config.js";
 import { assertPresetAdmin, listPresets, preparePreset, presetDigest, runPreset, restorePreset, PRESET_TEMPLATES } from "./server-presets.js";
 
-export const MANAGEMENT_TOOLS = ["update_server_settings", "save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"];
+export const MANAGEMENT_TOOLS = [...SETTING_ACTIONS.map(action => action.name), "create_level_reward", "update_server_settings", "save_server_preset", "apply_server_preset", "restore_server_preset", "delete_server_preset"];
 const channelKeys = ["modChannelId", "welcomeChannelId", "logChannelId", "automodHoneypotChannelId", "aiScanFlagChannelId", "aiScanRulesChannelId", "reactionRoleChannelId", "ticketPanelChannelId", "levelAnnouncementChannelId", "suggestionChannelId", "starboardChannelId", "colorRoleChannelId"];
 async function validateTargets(guild, member, patch) {
   const bot = await guild.members.fetchMe({ force: true }); const channels = await guild.channels.fetch(); const roles = await guild.roles.fetch();
-  const channelIds = [...channelKeys.map(key => patch[key]), ...(patch.aiScanChannelIds || []), ...(patch.levelIgnoredChannelIds || []), ...(patch.automodChannelSlowmodes || []).map(item => item.channelId), ...(patch.scheduledPosts || []).map(item => item.channelId), ...(patch.customActions || []).map(item => item.channelId)].filter(Boolean);
+  const channelIds = [...channelKeys.map(key => patch[key]), patch.entryChannels?.logChannelId, ...(patch.aiScanChannelIds || []), ...(patch.levelIgnoredChannelIds || []), ...(patch.automodChannelSlowmodes || []).map(item => item.channelId), ...(patch.scheduledPosts || []).map(item => item.channelId), ...(patch.customActions || []).map(item => item.channelId)].filter(Boolean);
   for (const id of channelIds) { const c = channels.get(id); if (!c || c.guildId !== guild.id || !c.isTextBased() || !c.permissionsFor(member)?.has(PermissionsBitField.Flags.ViewChannel) || !c.permissionsFor(bot)?.has(PermissionsBitField.Flags.ViewChannel)) throw new TypeError("Every channel must be visible to you and Duck in this server."); }
   if (patch.ticketCategoryId) { const c = channels.get(patch.ticketCategoryId); if (!c || c.guildId !== guild.id || c.type !== 4) throw new TypeError("Ticket category must belong to this server."); }
   const roleIds = [patch.ticketSupportRoleId, patch.ticketAdminRoleId, patch.colorRoleRequiredRoleId, ...(patch.autoroleRoleIds || []), ...(patch.reactionRoleOptions || []).map(item => item.roleId), ...(patch.levelRewards || []).map(item => item.roleId), ...(patch.colorRoleOptions || []).map(item => item.roleId), ...(patch.customActions || []).map(item => item.roleId)].filter(Boolean);
   for (const id of roleIds) { const role = roles.get(id); if (!role || role.guild.id !== guild.id || role.id === guild.id || role.managed || role.position >= bot.roles.highest.position || role.permissions.has(PermissionsBitField.Flags.Administrator)) throw new TypeError("Every role must be a safe, manageable role in this server."); }
+  const assignable = [...(patch.autoroleRoleIds || []), ...(patch.reactionRoleOptions || []).map(item => item.roleId), ...(patch.levelRewards || []).map(item => item.roleId), ...(patch.colorRoleOptions || []).map(item => item.roleId), ...(patch.customActions || []).filter(item => ["add_role", "remove_role"].includes(item.actionType)).map(item => item.roleId)].filter(Boolean);
+  if (assignable.some(id => !isSafeSelfAssignableRole(roles.get(id)))) throw new TypeError("Automatic and self-service role assignments cannot expose sensitive permissions.");
 }
 function settingsDigest(current, patch) { const publicSettings = getPublicGuildSettings(current); return presetDigest(Object.fromEntries(Object.keys(patch).sort().map(key => [key, publicSettings[key]]))); }
 export function prepareSettings(current, input) {
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length < 1 || Object.keys(input).length > 20 || JSON.stringify(input).length > 1800) throw new TypeError("Propose 1-20 settings at a time, with at most 1,800 characters of values for a readable approval.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length < 1 || Object.keys(input).length > 20 || JSON.stringify(input).length > 64 * 1024) throw new TypeError("Propose 1-20 settings at a time, with at most 64 KB of values; large proposals include a complete JSON attachment for approval.");
   const { patch } = makeSettingsPatch(current, input, process.env.OPENROUTER_MODEL);
-  return { patch, beforeDigest: settingsDigest(current, patch), summary: `Change server settings (approval required):\n${JSON.stringify(patch, null, 2)}` };
+  return { input: structuredClone(input), patch, beforeDigest: settingsDigest(current, input), summary: `Change server settings (approval required):\n${JSON.stringify(input, null, 2)}` };
 }
 export function configurationForAi(guildId, options = {}) {
   const current = getPublicGuildSettings(getGuildSettings(guildId));
@@ -31,7 +37,10 @@ export async function prepareManagementAction(guild, member, raw, store = { read
   if (!MANAGEMENT_TOOLS.includes(raw.tool)) throw new TypeError("Unsupported server-management action.");
   const base = { tool: raw.tool, risk: "critical", mandatoryApproval: true };
   const current = store.read(guild.id);
-  if (raw.tool === "update_server_settings") { const prepared = prepareSettings(current, raw.settings); await validateTargets(guild, member, prepared.patch); return { ...base, settings: prepared.patch, beforeDigest: prepared.beforeDigest, summary: prepared.summary }; }
+  const spec = SETTING_ACTION_BY_NAME.get(raw.tool);
+  if (spec?.profileField) return { ...base, ...await prepareProfileAction(guild, spec, raw, current) };
+  if (raw.tool === "create_level_reward") return { ...base, ...await prepareLevelReward(guild, member, raw, store) };
+  if (raw.tool === "update_server_settings" || SETTING_ACTION_BY_NAME.has(raw.tool)) { const spec = SETTING_ACTION_BY_NAME.get(raw.tool); const prepared = prepareSettings(current, spec ? { [spec.key]: raw.value } : raw.settings); await validateTargets(guild, member, prepared.patch); return { ...base, settings: prepared.input, beforeDigest: prepared.beforeDigest, summary: prepared.summary }; }
   const id = String(raw.presetId || raw.preset?.id || "");
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(id)) throw new TypeError("Choose an exact preset ID.");
   const saved = listPresets(guild.id, store.read).find(p => p.id === id);
@@ -51,11 +60,15 @@ export async function executeManagementAction(guild, member, action, store = { r
   assertPresetAdmin(member);
   if (member.guild?.id !== guild.id) throw new Error("Administrator membership must belong to this server.");
   const current = store.read(guild.id);
-  if (action.tool === "update_server_settings") {
+  if (SETTING_ACTION_BY_NAME.get(action.tool)?.profileField) return executeProfileAction(guild, member, action, current);
+  if (action.tool === "create_level_reward") return executeLevelReward(guild, member, action, store);
+  if (action.tool === "update_server_settings" || SETTING_ACTION_BY_NAME.has(action.tool)) {
     if (settingsDigest(current, action.settings) !== action.beforeDigest) throw new Error("These settings changed since the preview. Ask for a fresh proposal.");
     const prepared = prepareSettings(current, action.settings); await validateTargets(guild, member, prepared.patch);
-    if (settingsDigest(store.read(guild.id), action.settings) !== action.beforeDigest) throw new Error("These settings changed while the proposal was being checked. Ask for a fresh proposal.");
-    store.write(guild.id, prepared.patch); return `Updated ${Object.keys(prepared.patch).join(", ")}.`;
+    const latest = store.read(guild.id);
+    if (settingsDigest(latest, action.settings) !== action.beforeDigest) throw new Error("These settings changed while the proposal was being checked. Ask for a fresh proposal.");
+    const final = prepareSettings(latest, action.settings);
+    await store.write(guild.id, final.patch); return `Updated ${Object.keys(action.settings).join(", ")}.`;
   }
   if (action.tool === "restore_server_preset") return restorePreset(guild, member, action.presetId, { store });
   const presets = listPresets(guild.id, store.read); const existing = presets.find(p => p.id === action.presetId);
