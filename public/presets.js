@@ -1,5 +1,7 @@
 window.installPresetEditor = async function ({ api, guildId, isAdministrator }) {
   const host = document.querySelector("[data-preset-editor]");
+  const generation = {}; host.duckPresetGeneration = generation;
+  const isCurrent = () => host.duckPresetGeneration === generation;
   host.replaceChildren();
   const node = (tag, text, className) => { const e = document.createElement(tag); if (text) e.textContent = text; if (className) e.className = className; return e; };
   if (!isAdministrator) { host.append(node("p", "An Administrator can configure presets and holiday schedules.")); return; }
@@ -9,9 +11,9 @@ window.installPresetEditor = async function ({ api, guildId, isAdministrator }) 
   const label = (text, control) => { const e = node("label", "", "preset-field"); e.append(node("span", text), control); return e; };
   const button = (text, callback, className = "button secondary compact") => { const e = node("button", text, className); e.type = "button"; e.addEventListener("click", callback); return e; };
   let data; let channelData;
-  try { [data, channelData] = await Promise.all([api(`/api/guilds/${guildId}/presets`), api(`/api/guilds/${guildId}/settings`)]); } catch (error) { output.textContent = error.message; host.append(button("Retry loading presets", () => window.installPresetEditor({ api, guildId, isAdministrator }))); return; }
+  try { [data, channelData] = await Promise.all([api(`/api/guilds/${guildId}/presets`), api(`/api/guilds/${guildId}/settings`)]); } catch (error) { if (!isCurrent()) return; output.textContent = error.message; host.append(button("Retry loading presets", () => window.installPresetEditor({ api, guildId, isAdministrator }))); return; }
   // A late response from a previous server must never replace the current editor.
-  if (location.pathname.includes("/servers/") && !location.pathname.includes(guildId)) return;
+  if (!isCurrent()) return;
   const choose = makeSelect([["", "New custom preset"], ...data.templates.map(p => [`template:${p.id}`, `Template: ${p.name}`]), ...data.presets.map(p => [`saved:${p.id}`, `Saved: ${p.name}`])]);
   const id = makeInput("text"); id.maxLength = 40; id.placeholder = "community-layout";
   const name = makeInput("text"); name.maxLength = 100; name.placeholder = "My community layout";

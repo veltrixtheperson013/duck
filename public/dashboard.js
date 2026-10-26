@@ -6,11 +6,13 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const requestedGuildId = location.pathname.match(/^\/dashboard\/servers\/(\d{10,})\/?$/)?.[1] ?? new URLSearchParams(location.search).get("guild");
 const requestedPlanGuildId = location.pathname.match(/^\/dashboard\/servers\/(\d{10,})\/plan\/?$/)?.[1] ?? null;
 const accountPageRequested = /^\/dashboard\/account\/?$/.test(location.pathname);
+let settingsNavigationId = 0;
+let dashboardRoute = location.pathname + location.search;
 if (requestedGuildId) document.body.classList.add("settings-page-loading");
 const funSettingNames = ["funCommandsEnabled", "funQuackEnabled", "funDuckFactEnabled", "funCoinflipEnabled", "funTruthEnabled", "funDareEnabled", "funTruthOrDareEnabled", "funRpsEnabled", "funFortuneEnabled", "funTopicEnabled", "funJokeEnabled", "funNumberEnabled", "funThisOrThatEnabled", "funRandomMemberEnabled", "funDadJokeEnabled", "funMoodEnabled", "funHighFiveEnabled", "funShipEnabled", "funCurseEnabled", "funSpinwheelEnabled", "funRollEnabled", "funEightballEnabled", "funQuoteEnabled", "funRoastEnabled", "funComplimentEnabled", "funChooseEnabled", "funRateEnabled", "funWouldYouRatherEnabled", "funNeverHaveIEverEnabled", "funHotseatEnabled", "funVibeCheckEnabled", "funBattleEnabled", "funDramaticEnabled", "funConspiracyEnabled", "funChallengeEnabled", "funCaptionEnabled", "funAlibiEnabled", "funBackstoryEnabled", "funAwardEnabled", "funHeistEnabled", "funSuperlativeEnabled", "funPlotEnabled", "funConfessionEnabled"];
 
-function notice(message, error = false) { const element = $("[data-notice]"); element.textContent = message;
-  if (error && message) { const retry = document.createElement("button"); retry.type = "button"; retry.className = "button secondary compact"; retry.textContent = "Retry loading"; retry.addEventListener("click", () => location.reload()); element.append(retry); }
+function notice(message, error = false, retryLoading = () => location.reload(), retryLabel = "Retry loading") { const element = $("[data-notice]"); element.textContent = message;
+  if (error && message) { const retry = document.createElement("button"); retry.type = "button"; retry.className = "button secondary compact"; retry.textContent = retryLabel; retry.addEventListener("click", retryLoading); element.append(retry); }
   element.classList.toggle("is-error", error); element.hidden = !message; }
 function setLoading(active) { state.loading = Math.max(0, state.loading + (active ? 1 : -1)); $("[data-route-progress]")?.classList.toggle("is-active", state.loading > 0); document.body.classList.toggle("is-busy", state.loading > 0); }
 async function api(url, options = {}) {
@@ -23,7 +25,7 @@ async function api(url, options = {}) {
     if (state.me?.csrf && !["GET", "HEAD"].includes(method)) headers["X-Duck-CSRF"] = state.me.csrf;
     const response = await fetch(url.startsWith("/") ? url : `/${url}`, { cache: "no-store", ...options, headers, signal: controller.signal });
     if (response.status === 401) throw new Error("Your session expired. Sign in again to continue.");
-    if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Duck received an unexpected response. Please try again shortly.");
+    if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Duck's website is temporarily unavailable. Please try again shortly.");
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `Request failed (${response.status}).`);
     return body;
@@ -47,7 +49,7 @@ function renderGuilds(search = $("[data-server-search]")?.value || "") {
     const card = document.createElement("article"); const details = document.createElement("div"); const heading = document.createElement("h3"); const copy = document.createElement("p"); const badges = document.createElement("div"); const button = document.createElement("button");
     card.className = `server-card is-entering${guild.botPresent ? " has-duck" : ""}`; card.style.setProperty("--card-delay", `${Math.min(index, 6) * 18}ms`); heading.textContent = guild.name; copy.textContent = guild.botPresent ? (guild.canManage ? "Ready for server-specific configuration" : "Ask an admin for Manage Server permission") : "Invite Duck before configuring this server";
     badges.className = "server-badges"; const role = document.createElement("span"); role.textContent = guild.owner ? "Owner" : guild.isAdministrator ? "Administrator" : guild.canManage ? "Manager" : "Member"; const presence = document.createElement("span"); presence.className = guild.botPresent ? "is-present" : "is-absent"; presence.textContent = guild.botPresent ? "Duck online" : "Duck absent"; const serverId = document.createElement("span"); serverId.className = "server-id-badge"; serverId.textContent = `ID ${guild.id}`; badges.append(role, presence, serverId); if (guild.cluster) { const cluster = document.createElement("span"); cluster.className = `cluster-badge is-${guild.cluster.status}`; cluster.textContent = guild.cluster.id; badges.append(cluster); }
-    button.className = `button ${guild.botPresent ? "secondary" : "primary"}`; button.textContent = guild.botPresent ? "Configure server" : "Invite Duck"; button.disabled = guild.botPresent && !guild.canManage; const destination = guild.botPresent ? `/dashboard/servers/${encodeURIComponent(guild.id)}` : guild.inviteUrl; button.addEventListener("pointerenter", () => { if (!guild.botPresent || !guild.canManage || document.head.querySelector(`link[href="${destination}"]`)) return; const prefetch = document.createElement("link"); prefetch.rel = "prefetch"; prefetch.href = destination; document.head.append(prefetch); }, { once: true }); button.addEventListener("click", () => { setLoading(true); location.assign(destination); });
+    button.className = `button ${guild.botPresent ? "secondary" : "primary"}`; button.textContent = guild.botPresent ? "Configure server" : "Invite Duck"; button.disabled = guild.botPresent && !guild.canManage; button.addEventListener("click", () => { if (guild.botPresent) navigateDashboard(`/dashboard/servers/${encodeURIComponent(guild.id)}`); else location.assign(guild.inviteUrl); });
     details.append(heading, copy, badges); card.append(guildIcon(guild), details, button); fragment.append(card);
   }
   list.append(fragment);
@@ -226,9 +228,13 @@ function configureBranding(data, form, subscription) {
 }
 
 async function openSettings(guild) {
+  const navigationId = ++settingsNavigationId;
+  $("[data-settings-page]").inert = true;
   notice("");
   try {
-    const data = await api(`api/guilds/${guild.id}/settings`); state.activeGuild = guild;
+    const data = await api(`api/guilds/${guild.id}/settings`);
+    if (navigationId !== settingsNavigationId) return false;
+    state.activeGuild = guild;
     const form = $("[data-settings-form]"); const settings = data.settings ?? {}; const subscription = settings.subscription ?? { tier: "free", status: "inactive", source: null, expiresAt: null, cancelAtPeriodEnd: false, brandingEligible: false, brandingEligibleAt: null }; const plus = subscription.tier === "plus"; state.activePlus = plus; state.isAdministrator = Boolean(data.isAdministrator);
     window.installPresetEditor?.({ api, guildId: guild.id, isAdministrator: state.isAdministrator });
     state.catalog = normalizeCatalog(data.models, settings); state.channels = data.channels ?? []; state.categories = data.categories ?? []; state.roles = data.roles ?? []; configurePlan(data, settings, subscription, plus, guild);
@@ -244,8 +250,61 @@ async function openSettings(guild) {
     for (const input of $$('[data-plus-fun]')) { input.disabled = !plus; input.closest(".command-toggle").classList.toggle("is-locked", !plus); }
     setModuleStatus("safety", settings.capabilityMode === "agent" ? "Agent mode" : settings.capabilityMode === "approve" ? "Low-risk auto" : "Approval gated"); setModuleStatus("automod", settings.automodEnabled ? "Active" : "Off", settings.automodEnabled); setModuleStatus("ai", settings.aiChatEnabled ? "Enabled" : "Off", settings.aiChatEnabled); setModuleStatus("voice", settings.ttsEnabled ? "Enabled" : "Off", settings.ttsEnabled); setModuleStatus("community", settings.welcomeChannelId || settings.logChannelId ? "Configured" : "Setup needed", Boolean(settings.welcomeChannelId || settings.logChannelId)); setModuleStatus("studio", settings.levelsEnabled || settings.suggestionsEnabled || settings.starboardEnabled || settings.autorolesEnabled ? "Active" : "Off", settings.levelsEnabled || settings.suggestionsEnabled || settings.starboardEnabled || settings.autorolesEnabled); setModuleStatus("roles", settings.reactionRolesEnabled ? `${settings.reactionRoleOptions.length} roles` : "Off", settings.reactionRolesEnabled); setModuleStatus("colors", settings.colorRolesEnabled ? `${settings.colorRoleOptions.length} colors` : "Off", settings.colorRolesEnabled); setModuleStatus("tickets", settings.ticketsEnabled ? `${settings.ticketOptions.length} options` : "Off", settings.ticketsEnabled); configureBranding(data, form, subscription); setModuleStatus("fun", settings.funCommandsEnabled ? (plus ? "Plus library" : "Free classics") : "Off", settings.funCommandsEnabled); setModuleStatus("plan", plus ? "Plus" : "Free", plus);
     savedSettingsSnapshot = settingsSnapshot(); const saveState = $("[data-save-state]"); saveState.textContent = "Changes apply only when you save."; saveState.classList.remove("is-error"); enhanceSelects(); updateDisclaimers(); updateAiScanReadiness(); selectTab("overview"); document.title = `${guild.name} — Duck Dashboard`; document.body.classList.remove("settings-page-loading"); document.body.classList.add("settings-page-open"); const settingsPage = $("[data-settings-page]"); settingsPage.hidden = false; settingsPage.classList.remove("is-opening"); requestAnimationFrame(() => settingsPage.classList.add("is-opening"));
-  } catch (error) { document.body.classList.remove("settings-page-loading"); notice(error.message, true); }
+    return true;
+  } catch (error) {
+    if (navigationId !== settingsNavigationId) return false;
+    document.body.classList.remove("settings-page-loading");
+    if (error.message === "Your session expired. Sign in again to continue.") notice(error.message, true, () => location.assign("/auth/discord"), "Sign in with Discord");
+    else notice(error.message, true, () => navigateDashboard(`/dashboard/servers/${guild.id}`));
+    return false;
+  } finally { if (navigationId === settingsNavigationId) $("[data-settings-page]").inert = false; }
 }
+
+// Keep server navigation in the loaded dashboard, including during a host outage.
+async function navigateDashboard(path, historyMode = "push") {
+  const url = new URL(path, location.origin);
+  if (url.origin !== location.origin) return false;
+  const isServerList = /^\/dashboard(?:\.html)?\/?$/.test(url.pathname);
+  const guildId = url.pathname.match(/^\/dashboard\/servers\/(\d{10,})\/?$/)?.[1] ?? (isServerList ? url.searchParams.get("guild") : null);
+  if (!guildId && !isServerList) return false;
+  const previousRoute = dashboardRoute;
+  const restoreRoute = () => { if (historyMode === "none") history.replaceState(null, "", previousRoute); };
+  if (!canLeaveSettings(false)) { restoreRoute(); return false; }
+  if (guildId) {
+    const guild = state.guilds.find(item => item.id === guildId);
+    if (!guild?.botPresent || !guild.canManage) {
+      notice("That server is unavailable or you do not have permission to configure it.", true, () => refreshGuilds(true));
+      restoreRoute(); return false;
+    }
+    const navigationId = settingsNavigationId + 1;
+    const opened = await openSettings(guild);
+    if (navigationId !== settingsNavigationId) return false;
+    if (!opened) { restoreRoute(); return false; }
+  } else {
+    ++settingsNavigationId;
+    document.body.classList.remove("settings-page-open", "settings-page-loading");
+    $("[data-settings-page]").hidden = true;
+    $("[data-settings-page]").inert = false;
+    const presetEditor = $("[data-preset-editor]"); if (presetEditor) presetEditor.duckPresetGeneration = null;
+    $("[data-dashboard]").hidden = false;
+    state.activeGuild = null;
+    savedSettingsSnapshot = null;
+    document.title = "Dashboard — Duck";
+    notice("");
+  }
+  document.body.classList.remove("account-page-open", "plan-page-open");
+  $("[data-account-page]").hidden = true;
+  $("[data-plan-page]").hidden = true;
+  dashboardRoute = guildId ? `/dashboard/servers/${guildId}` : "/dashboard";
+  if (historyMode !== "none" && location.pathname + location.search !== dashboardRoute) history[historyMode === "replace" ? "replaceState" : "pushState"](null, "", dashboardRoute);
+  return true;
+}
+window.addEventListener("popstate", () => {
+  if (!state.me) return;
+  const path = location.pathname + location.search;
+  if (/^\/dashboard(?:\.html)?\/?$/.test(location.pathname) || /^\/dashboard\/servers\/\d{10,}\/?$/.test(location.pathname)) return navigateDashboard(path, "none");
+  else location.reload();
+});
 
 async function startCheckout(period) { try { const data = await api(`api/guilds/${state.activeGuild.id}/billing/checkout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ period }) }); location.assign(data.url); } catch (error) { notice(error.message, true); } }
 async function manageBilling() { try { const data = await api(`api/guilds/${state.activeGuild.id}/billing/portal`, { method: "POST" }); location.assign(data.url); } catch (error) { notice(error.message, true); } }
@@ -286,7 +345,7 @@ $('[data-refresh-guilds]')?.addEventListener("click", () => refreshGuilds(true).
 updateGuildRefreshButton();
 for (const button of $$("[data-server-filter]")) button.addEventListener("click", () => { state.serverFilter = button.dataset.serverFilter; $$("[data-server-filter]").forEach((item) => item.classList.toggle("is-active", item === button)); renderGuilds(); });
 for (const button of $$("[data-settings-tab]")) button.addEventListener("click", () => selectTab(button.dataset.settingsTab));
-for (const button of $$('[data-cancel], [data-back]')) button.addEventListener("click", () => { if (canLeaveSettings()) location.assign("/dashboard"); }); $("[data-settings-form]").aiModel.addEventListener("change", updateDisclaimers); $("[data-settings-form]").ttsModel.addEventListener("change", updateDisclaimers);
+for (const button of $$('[data-cancel], [data-back]')) button.addEventListener("click", () => navigateDashboard("/dashboard")); $("[data-settings-form]").aiModel.addEventListener("change", updateDisclaimers); $("[data-settings-form]").ttsModel.addEventListener("change", updateDisclaimers);
 for (const button of $$('[data-jump-tab]')) button.addEventListener("click", () => selectTab(button.dataset.jumpTab));
 const settingsForm = $("[data-settings-form]");
 let savedSettingsSnapshot = null;
@@ -294,10 +353,10 @@ function settingsSnapshot() {
   return JSON.stringify([...settingsForm.querySelectorAll("input:not([type=file]), select, textarea")].filter(input => !input.closest("[data-preset-editor]")).map(input => [input.name, input.type, input.value, input.type === "checkbox" ? input.checked : null]));
 }
 function settingsDirty() { return savedSettingsSnapshot !== null && settingsSnapshot() !== savedSettingsSnapshot; }
-function canLeaveSettings() {
+function canLeaveSettings(discard = true) {
   if (!settingsDirty()) return true;
   if (!window.confirm("You have unsaved server settings. Leave without saving?")) return false;
-  savedSettingsSnapshot = settingsSnapshot();
+  if (discard) savedSettingsSnapshot = settingsSnapshot();
   return true;
 }
 function updateSaveStatus() {
@@ -308,7 +367,15 @@ settingsForm.addEventListener("input", updateSaveStatus);
 settingsForm.addEventListener("change", updateSaveStatus);
 settingsForm.addEventListener("click", () => setTimeout(updateSaveStatus, 0));
 window.addEventListener("beforeunload", event => { if (settingsDirty()) { event.preventDefault(); event.returnValue = ""; } });
-document.addEventListener("click", event => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button) return; const anchor = event.target.closest("a[href]"); if (anchor && !anchor.target && new URL(anchor.href).pathname !== location.pathname && !canLeaveSettings()) event.preventDefault(); });
+document.addEventListener("click", event => {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button) return;
+  const anchor = event.target.closest("a[href]"); if (!anchor || anchor.target || anchor.hasAttribute("download")) return;
+  const url = new URL(anchor.href);
+  if (state.me && url.origin === location.origin && (/^\/dashboard(?:\.html)?\/?$/.test(url.pathname) || /^\/dashboard\/servers\/\d{10,}\/?$/.test(url.pathname))) {
+    event.preventDefault(); navigateDashboard(url.pathname + url.search); return;
+  }
+  if (url.pathname !== location.pathname && !canLeaveSettings()) event.preventDefault();
+});
 document.addEventListener("keydown", event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && document.body.classList.contains("settings-page-open")) { event.preventDefault(); if (!settingsForm.querySelector('[type="submit"]').disabled) settingsForm.requestSubmit(); } });
 settingsForm.addEventListener("change", (event) => { if (event.target.name?.startsWith("aiScan") || event.target.closest?.("[data-ai-scan-channels]")) updateAiScanReadiness(); });
 
@@ -334,7 +401,7 @@ const accountTrigger = $("[data-account-trigger]"); const accountMenu = $("[data
 function openAccountMenu() { clearTimeout(accountMenuCloseTimer); accountMenu.classList.remove("is-closing"); accountMenu.hidden = false; accountTrigger.setAttribute("aria-expanded", "true"); }
 function closeAccountMenu() { if (accountMenu.hidden || accountMenu.classList.contains("is-closing")) return; accountTrigger.setAttribute("aria-expanded", "false"); accountMenu.classList.add("is-closing"); accountMenuCloseTimer = setTimeout(() => { if (!accountMenu.classList.contains("is-closing")) return; accountMenu.hidden = true; accountMenu.classList.remove("is-closing"); }, 160); }
 accountTrigger.addEventListener("click", (event) => { event.stopPropagation(); if (accountMenu.hidden || accountMenu.classList.contains("is-closing")) openAccountMenu(); else closeAccountMenu(); }); accountMenu.addEventListener("click", (event) => event.stopPropagation()); document.addEventListener("click", (event) => { closeAccountMenu(); if (!event.target.closest?.(".color-picker-cell")) closeColorPickers(); }); document.addEventListener("keydown", (event) => { if (event.key === "Escape") { closeAccountMenu(); closeColorPickers(); } });
-$("[data-account-settings]").addEventListener("click", () => location.assign("/dashboard/account")); $("[data-account-dashboard]").addEventListener("click", () => location.assign("/dashboard")); $("[data-account-plan]").addEventListener("click", () => location.assign(state.activeGuild ? `/dashboard/servers/${encodeURIComponent(state.activeGuild.id)}/plan` : "/pricing")); const logout = async () => { await api("auth/logout", { method: "POST" }); location.assign("/"); }; $("[data-account-logout]").addEventListener("click", logout); $("[data-account-page-logout]").addEventListener("click", logout);
+$("[data-account-settings]").addEventListener("click", () => location.assign("/dashboard/account")); $("[data-account-dashboard]").addEventListener("click", () => navigateDashboard("/dashboard")); $("[data-account-plan]").addEventListener("click", () => location.assign(state.activeGuild ? `/dashboard/servers/${encodeURIComponent(state.activeGuild.id)}/plan` : "/pricing")); const logout = async () => { await api("auth/logout", { method: "POST" }); location.assign("/"); }; $("[data-account-logout]").addEventListener("click", logout); $("[data-account-page-logout]").addEventListener("click", logout);
 for (const button of $$('[data-open-plan]')) button.addEventListener("click", () => { if (state.activeGuild) location.assign(`/dashboard/servers/${encodeURIComponent(state.activeGuild.id)}/plan`); });
 settingsForm.brandingNickname.addEventListener("input", () => { $("[data-profile-preview-name]").textContent = settingsForm.brandingNickname.value.trim() || "Duck"; markBrandingQueued(); });
 settingsForm.brandingBio.addEventListener("input", () => { $("[data-profile-preview-bio]").textContent = settingsForm.brandingBio.value.trim() || "Your server-specific pond assistant."; markBrandingQueued(); });

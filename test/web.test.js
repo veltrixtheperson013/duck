@@ -128,7 +128,7 @@ test("website serves the homepage, privacy policy, assets, and health route", as
     assert.doesNotMatch(dashboardText, /Activate owner Plus/);
     assert.match(dashboardText, /theme-init\.js\?v=20261025/);
     assert.match(dashboardText, /styles\.css\?v=20261024/);
-    assert.match(dashboardText, /dashboard\.js\?v=20261025/);
+    assert.match(dashboardText, /dashboard\.js\?v=20261025nav/);
     assert.match(dashboardText, /Message contains a link/);
     assert.match(dashboardText, /Send the member a DM/);
     assert.match(dashboardText, /data-color-panel/);
